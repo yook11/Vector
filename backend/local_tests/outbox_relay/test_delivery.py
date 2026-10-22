@@ -23,7 +23,6 @@ from app.lambda_handlers.sqs.received_message import ReceivedMessage
 from app.models.outbox_event import OutboxEvent
 from app.outbox.publishing.publisher import (
     BatchPublishResult,
-    EventEnvelope,
     PublishFailed,
     PublishFailure,
     PublishSucceeded,
@@ -378,23 +377,20 @@ async def test_invalid_publisher_result_keeps_all_events_claimed(
         }
 
 
-@pytest.mark.parametrize("stage", ["envelope", "publisher"])
 @pytest.mark.parametrize(
     "error",
     [ValueError("batch exceeds limit"), RuntimeError("failure"), KeyboardInterrupt()],
 )
 async def test_call_failure_keeps_claimed_event_and_propagates(
-    owner_sessions, relay_sessions, monkeypatch, stage, error
+    owner_sessions, relay_sessions, error
 ):
-    """送信準備や呼び出しの例外を配送失敗へ変換せず、確保を残す。"""
+    """publisherの呼び出しの例外を配送失敗へ変換せず、確保を残す。"""
     event = await seed_event(owner_sessions)
     publisher = Mock(publish_batch=Mock(side_effect=error))
-    if stage == "envelope":
-        monkeypatch.setattr(EventEnvelope, "from_claimed", Mock(side_effect=error))
     with pytest.raises(type(error)) as caught:
         await make_relay(relay_sessions, publisher).run_once()
     assert caught.value is error
-    assert publisher.publish_batch.call_count == (1 if stage == "publisher" else 0)
+    assert publisher.publish_batch.call_count == 1
     saved = await read_saved(owner_sessions, event)
     assert saved["lease_token"] is not None
     assert saved == {

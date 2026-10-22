@@ -18,7 +18,7 @@ from app.aws.sqs.outgoing_message import MessageBodyMismatchError
 from app.cloudwatch.emf import emit_metric
 from app.collection.article_acquisition.events import IncompleteArticleEventInvalidError
 from app.collection.events import AnalyzableEventInvalidError
-from app.outbox.delivery.repository import ClaimedOutboxEvent
+from app.outbox.delivery.repository import LeasedOutboxEvent
 from app.outbox.delivery.retry_policy import NonRetryableReason
 from app.outbox.publishing.publisher import PublishFailure
 
@@ -59,7 +59,7 @@ def _record_output_failure(exc: Exception) -> None:
 
 def record_publish_failure(
     *,
-    event: ClaimedOutboxEvent,
+    leased_event: LeasedOutboxEvent,
     error: PublishFailure,
     stop_reason: NonRetryableReason,
 ) -> None:
@@ -67,8 +67,8 @@ def record_publish_failure(
     requires_fix = requires_publish_configuration_fix(error)
     try:
         fields: dict[str, object] = {
-            "event_id": str(event.event_id),
-            "attempt_count": event.attempt_count,
+            "event_id": str(leased_event.envelope.event_id),
+            "attempt_count": leased_event.attempt_count,
             "stop_reason": stop_reason.value,
             "error_class": exception_fqn(error),
             "requires_configuration_fix": requires_fix,

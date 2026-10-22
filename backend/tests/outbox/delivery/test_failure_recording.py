@@ -61,9 +61,9 @@ from app.outbox.delivery.failure_handler import (
     DeliveryUpdateSkipped,
     OutboxDeliveryFailureHandler,
 )
-from app.outbox.delivery.repository import ClaimedOutboxEvent
+from app.outbox.delivery.repository import LeasedOutboxEvent
 from app.outbox.delivery.retry_policy import NonRetryableReason
-from app.outbox.publishing.publisher import PublishFailed
+from app.outbox.publishing.publisher import EventEnvelope, PublishFailed
 from app.outbox.publishing.route import EventRouteMismatchError
 from tests.cloudwatch.records import emf_records
 from tests.outbox.helpers import FUTURE, PAST, insert_event, read_event
@@ -83,16 +83,17 @@ def _sqs_rejection(reason):
 
 
 @pytest.fixture
-def claimed():
-    return ClaimedOutboxEvent(
-        event_id=uuid4(),
-        event_type=PRIVATE,
-        schema_version=1,
-        occurred_at=PAST,
-        payload={"secret": PRIVATE},
-        attempt_count=1,
+def leased_event():
+    return LeasedOutboxEvent(
+        envelope=EventEnvelope(
+            event_id=uuid4(),
+            event_type=PRIVATE,
+            schema_version=1,
+            occurred_at=PAST,
+            payload={"secret": PRIVATE},
+        ),
         lease_token=uuid4(),
-        leased_until=FUTURE,
+        attempt_count=1,
     )
 
 
@@ -325,21 +326,21 @@ def claimed():
     ],
 )
 def test_stop_log_fields_and_metric_by_failure(
-    error, requires_fix, fields, claimed, capsys
+    error, requires_fix, fields, leased_event, capsys
 ):
     """停止を失敗ごとに決まった項目で記録し、設定修復の6理由だけメトリクスを出し、SQSの生のコード・自由文・元例外は出さない。"""
     error.__cause__ = RuntimeError(PRIVATE)
     assert recording.requires_publish_configuration_fix(error) is requires_fix
     with capture_logs() as logs:
         recording.record_publish_failure(
-            event=claimed, error=error, stop_reason=STOP_REASON
+            leased_event=leased_event, error=error, stop_reason=STOP_REASON
         )
     records = emf_records(capsys.readouterr().out)
     assert logs == [
         {
             "event": "outbox_delivery_stopped",
             "log_level": "info",
-            "event_id": str(claimed.event_id),
+            "event_id": str(leased_event.envelope.event_id),
             "attempt_count": 1,
             "stop_reason": "non_retryable_failure",
             "requires_configuration_fix": requires_fix,
@@ -362,11 +363,11 @@ def test_stop_log_fields_and_metric_by_failure(
         assert set(record) == {"_aws", recording.CONFIGURATION_FAILURE_METRIC}
 
 
-def test_retry_exhaustion_alone_is_not_alarm_target(claimed, capsys):
+def test_retry_exhaustion_alone_is_not_alarm_target(leased_event, capsys):
     """再試行上限は人の設定修復が必要という根拠にしない。"""
     with capture_logs() as logs:
         recording.record_publish_failure(
-            event=claimed,
+            leased_event=leased_event,
             error=MessageSendTransportError(
                 failure=HttpTransportFailure(
                     HttpTransportStage.RECEIVE, HttpTransportFailureReason.TIMEOUT
@@ -382,7 +383,7 @@ def test_retry_exhaustion_alone_is_not_alarm_target(claimed, capsys):
 @pytest.mark.parametrize("failed_sink", ["log", "metric", "both"])
 def test_output_failures_do_not_propagate_or_block_other_sink(
     failed_sink,
-    claimed,
+    leased_event,
     monkeypatch,
 ):
     """出力障害とその記録障害でも再帰せず、独立した出力を試みる。"""
@@ -396,7 +397,7 @@ def test_output_failures_do_not_propagate_or_block_other_sink(
     monkeypatch.setattr(recording, "logger", logger)
     monkeypatch.setattr(recording, "emit_metric", metric)
     recording.record_publish_failure(
-        event=claimed, error=_missing_credentials(), stop_reason=STOP_REASON
+        leased_event=leased_event, error=_missing_credentials(), stop_reason=STOP_REASON
     )
     logger.info.assert_called_once()
     metric.assert_called_once()
@@ -405,7 +406,7 @@ def test_output_failures_do_not_propagate_or_block_other_sink(
 
 
 @pytest.mark.parametrize("sink", ["log", "metric"])
-def test_base_exception_is_not_swallowed(sink, claimed, monkeypatch):
+def test_base_exception_is_not_swallowed(sink, leased_event, monkeypatch):
     """プロセス終了を記録の通常障害として握りつぶさない。"""
     failure = KeyboardInterrupt()
     if sink == "log":
@@ -416,7 +417,9 @@ def test_base_exception_is_not_swallowed(sink, claimed, monkeypatch):
         monkeypatch.setattr(recording, "emit_metric", Mock(side_effect=failure))
     with pytest.raises(KeyboardInterrupt) as caught:
         recording.record_publish_failure(
-            event=claimed, error=_missing_credentials(), stop_reason=STOP_REASON
+            leased_event=leased_event,
+            error=_missing_credentials(),
+            stop_reason=STOP_REASON,
         )
     assert caught.value is failure
 
@@ -449,7 +452,7 @@ def test_alarm_watches_the_emitted_metric():
 )
 async def test_handler_composition_records_only_committed_stops(
     session_factory,
-    claimed,
+    leased_event,
     mode,
     failure_kind,
     capsys,
@@ -462,14 +465,16 @@ async def test_handler_composition_records_only_committed_stops(
         event_id = await insert_event(
             seed,
             next_attempt_at=PAST,
-            lease_token=claimed.lease_token,
+            lease_token=leased_event.lease_token,
             leased_until=FUTURE,
             attempt_count=1,
         )
         await seed.commit()
-    claimed = replace(claimed, event_id=event_id)
+    leased_event = replace(
+        leased_event, envelope=replace(leased_event.envelope, event_id=event_id)
+    )
     if mode == "skipped":
-        claimed = replace(claimed, lease_token=uuid4())
+        leased_event = replace(leased_event, lease_token=uuid4())
 
     def fail_commit(session):
         raise SQLAlchemyError("injected commit failure")
@@ -509,7 +514,8 @@ async def test_handler_composition_records_only_committed_stops(
         else:
             error = _missing_credentials()
         result = await OutboxDeliveryFailureHandler(factory, jitter=lambda: 0.5).handle(
-            event=claimed, failure=PublishFailed(claimed.event_id, error)
+            leased_event=leased_event,
+            failure=PublishFailed(leased_event.envelope.event_id, error),
         )
         async with session_factory() as reader:
             saved = await read_event(reader, event_id)
@@ -549,7 +555,7 @@ async def test_handler_composition_records_only_committed_stops(
 @pytest.mark.asyncio
 @pytest.mark.parametrize("failed_sink", ["log", "metric", "both"])
 async def test_handler_returns_committed_stop_despite_output_failure(
-    session_factory, claimed, failed_sink, monkeypatch
+    session_factory, leased_event, failed_sink, monkeypatch
 ):
     """記録先の障害でも停止の確定結果を維持し、再処理で記録を繰り返さない。"""
     from dataclasses import replace
@@ -558,12 +564,14 @@ async def test_handler_returns_committed_stop_despite_output_failure(
         event_id = await insert_event(
             seed,
             next_attempt_at=PAST,
-            lease_token=claimed.lease_token,
+            lease_token=leased_event.lease_token,
             leased_until=FUTURE,
             attempt_count=1,
         )
         await seed.commit()
-    claimed = replace(claimed, event_id=event_id)
+    leased_event = replace(
+        leased_event, envelope=replace(leased_event.envelope, event_id=event_id)
+    )
     logger = Mock()
     metric = Mock()
     logger.warning.side_effect = RuntimeError(PRIVATE)
@@ -575,16 +583,17 @@ async def test_handler_returns_committed_stop_despite_output_failure(
     monkeypatch.setattr(recording, "emit_metric", metric)
     handler = OutboxDeliveryFailureHandler(session_factory, jitter=lambda: 0.5)
     failure = PublishFailed(event_id, _missing_credentials())
-    assert await handler.handle(event=claimed, failure=failure) == DeliveryStopped(
-        STOP_REASON
-    )
+    assert await handler.handle(
+        leased_event=leased_event, failure=failure
+    ) == DeliveryStopped(STOP_REASON)
     async with session_factory() as reader:
         saved = await read_event(reader, event_id)
     assert saved["delivery_stop_reason"] == STOP_REASON.value
     assert saved["delivery_stopped_at"] is not None
     assert saved["lease_token"] is None
     assert (
-        await handler.handle(event=claimed, failure=failure) == DeliveryUpdateSkipped()
+        await handler.handle(leased_event=leased_event, failure=failure)
+        == DeliveryUpdateSkipped()
     )
     logger.info.assert_called_once()
     metric.assert_called_once()

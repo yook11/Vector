@@ -47,8 +47,8 @@ async def test_concurrent_claim_skips_rows_locked_by_another_session(
             limit=10,
             lease_duration=LeaseDuration(timedelta(minutes=5)),
         )
-        first_ids = {event.event_id for event in first_claim}
-        second_ids = {event.event_id for event in second_claim}
+        first_ids = {event.envelope.event_id for event in first_claim}
+        second_ids = {event.envelope.event_id for event in second_claim}
         assert len(first_claim) == len(first_ids) == 1
         assert len(second_claim) == len(second_ids) == 2
         assert first_ids.isdisjoint(second_ids)
@@ -237,7 +237,9 @@ async def test_oldest_locked_row_is_skipped(session_factory, operation):
             OutboxDeliveryRepository(worker), operation, event_type=EVENT_TYPE, limit=1
         )
         assert (
-            [event.event_id for event in result] if operation == "claim" else result
+            [event.envelope.event_id for event in result]
+            if operation == "claim"
+            else result
         ) == [newer]
         await worker.commit()
         await locker.rollback()
@@ -249,7 +251,9 @@ async def test_oldest_locked_row_is_skipped(session_factory, operation):
             limit=1,
         )
         assert (
-            [event.event_id for event in result] if operation == "claim" else result
+            [event.envelope.event_id for event in result]
+            if operation == "claim"
+            else result
         ) == [oldest]
 
 

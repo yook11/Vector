@@ -7,9 +7,10 @@ import pytest
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.outbox.delivery.repository import OutboxDeliveryRepository
+from app.outbox.delivery.repository import LeasedOutboxEvent, OutboxDeliveryRepository
 from app.outbox.delivery.retry_policy import MAX_PUBLISH_ATTEMPTS
 from app.outbox.delivery.values import LeaseDuration
+from app.outbox.publishing.publisher import EventEnvelope
 from tests.outbox.helpers import (
     FUTURE,
     PAST,
@@ -41,7 +42,7 @@ async def test_lease_events_to_publish_skips_published_event(
         limit=10,
         lease_duration=LeaseDuration(timedelta(minutes=5)),
     )
-    assert {item.event_id for item in claimed} == {ready_id}
+    assert {item.envelope.event_id for item in claimed} == {ready_id}
 
 
 async def test_lease_events_to_publish_skips_stopped_event(
@@ -63,7 +64,7 @@ async def test_lease_events_to_publish_skips_stopped_event(
         limit=10,
         lease_duration=LeaseDuration(timedelta(minutes=5)),
     )
-    assert {item.event_id for item in claimed} == {ready_id}
+    assert {item.envelope.event_id for item in claimed} == {ready_id}
 
 
 async def test_lease_events_to_publish_skips_event_waiting_for_retry(
@@ -83,7 +84,7 @@ async def test_lease_events_to_publish_skips_event_waiting_for_retry(
         limit=10,
         lease_duration=LeaseDuration(timedelta(minutes=5)),
     )
-    assert {item.event_id for item in claimed} == {ready_id}
+    assert {item.envelope.event_id for item in claimed} == {ready_id}
 
 
 async def test_lease_events_to_publish_skips_event_with_active_lease(
@@ -105,7 +106,7 @@ async def test_lease_events_to_publish_skips_event_with_active_lease(
         limit=10,
         lease_duration=LeaseDuration(timedelta(minutes=5)),
     )
-    assert {item.event_id for item in claimed} == {ready_id}
+    assert {item.envelope.event_id for item in claimed} == {ready_id}
 
 
 async def test_claim_respects_limit_without_selecting_specific_ids(
@@ -121,7 +122,7 @@ async def test_claim_respects_limit_without_selecting_specific_ids(
         lease_duration=LeaseDuration(timedelta(minutes=5)),
     )
 
-    claimed_ids = {item.event_id for item in claimed}
+    claimed_ids = {item.envelope.event_id for item in claimed}
     assert len(claimed) == len(claimed_ids) == 2
     assert claimed_ids <= ready_ids
 
@@ -144,7 +145,7 @@ async def test_claim_attempt_boundaries(db_session, attempt):
     if attempt < MAX_PUBLISH_ATTEMPTS:
         assert len(result) == 1
         assert result[0].attempt_count == attempt + 1
-        assert result[0].event_id == event_id
+        assert result[0].envelope.event_id == event_id
     else:
         assert result == []
         assert await read_event(db_session, event_id) == before
@@ -235,16 +236,19 @@ async def test_claim_returns_saved_values(
     )
     saved = await read_event(db_session, event_id)
 
-    assert len(claimed) == 1
-    event = claimed[0]
-    assert event.event_id == saved["event_id"]
-    assert event.event_type == saved["event_type"]
-    assert event.schema_version == saved["schema_version"]
-    assert event.payload == saved["payload"]
-    assert event.occurred_at == saved["occurred_at"]
-    assert event.attempt_count == saved["attempt_count"]
-    assert event.lease_token == saved["lease_token"]
-    assert event.leased_until == saved["leased_until"]
+    assert claimed == [
+        LeasedOutboxEvent(
+            envelope=EventEnvelope(
+                event_id=saved["event_id"],
+                event_type=saved["event_type"],
+                schema_version=saved["schema_version"],
+                occurred_at=saved["occurred_at"],
+                payload=saved["payload"],
+            ),
+            lease_token=saved["lease_token"],
+            attempt_count=saved["attempt_count"],
+        )
+    ]
 
 
 async def test_reclaim_replaces_expired_token_and_increments_attempt_count(
@@ -267,13 +271,12 @@ async def test_reclaim_replaces_expired_token_and_increments_attempt_count(
 
     assert len(claimed) == 1
     event = claimed[0]
-    assert event.event_id == event_id
+    assert event.envelope.event_id == event_id
     assert isinstance(event.lease_token, UUID)
     assert event.lease_token != old_token
     assert event.attempt_count == 5
     saved = await read_event(db_session, event_id)
     assert saved["lease_token"] == event.lease_token
-    assert saved["leased_until"] == event.leased_until
     assert saved["attempt_count"] == 5
 
 
@@ -287,7 +290,7 @@ async def test_claim_generates_a_different_token_for_each_event(
         limit=10,
         lease_duration=LeaseDuration(timedelta(minutes=5)),
     )
-    assert {event.event_id for event in claimed} == ready_ids
+    assert {event.envelope.event_id for event in claimed} == ready_ids
     assert len({event.lease_token for event in claimed}) == len(ready_ids)
 
 
@@ -322,7 +325,7 @@ async def test_claim_batches_select_and_return_events_by_occurrence_time(db_sess
         limit=2,
         lease_duration=LeaseDuration(LEASE),
     )
-    ids = [event.event_id for event in result]
+    ids = [event.envelope.event_id for event in result]
     assert ids == [events[0], events[1]]
 
 
@@ -344,7 +347,7 @@ async def test_claim_equal_occurrence_times_allow_any_event_order(db_session):
         limit=2,
         lease_duration=LeaseDuration(LEASE),
     )
-    ids = [event.event_id for event in result]
+    ids = [event.envelope.event_id for event in result]
     assert len(ids) == len(set(ids)) == 2
     assert set(ids) <= events
 
@@ -380,7 +383,7 @@ async def test_claim_event_type_is_exact_and_old_events_are_included(db_session)
         limit=10,
         lease_duration=LeaseDuration(LEASE),
     )
-    assert [event.event_id for event in result] == [target]
+    assert [event.envelope.event_id for event in result] == [target]
     assert await read_event(db_session, other) == before
 
 
@@ -395,7 +398,7 @@ async def test_claim_batch_limit_leaves_excess_events_unchanged(db_session, limi
         limit=limit,
         lease_duration=LeaseDuration(LEASE),
     )
-    claimed_ids = {event.event_id for event in result}
+    claimed_ids = {event.envelope.event_id for event in result}
     assert len(result) == len(claimed_ids) == limit
     assert claimed_ids <= before.keys()
     remaining = before.keys() - claimed_ids

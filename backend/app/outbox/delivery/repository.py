@@ -1,8 +1,6 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime
-from typing import Any
 from uuid import UUID
 
 from sqlalchemy import DateTime, Interval, Update, func, literal, or_, select, update
@@ -11,20 +9,16 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.outbox_event import OutboxEvent
 from app.outbox.delivery.retry_policy import MAX_PUBLISH_ATTEMPTS, NonRetryableReason
 from app.outbox.delivery.values import LeaseDuration, RetryDelay
+from app.outbox.publishing.publisher import EventEnvelope
 
 
 @dataclass(frozen=True, slots=True)
-class ClaimedOutboxEvent:
-    """確保後の値。session終了後も遅延ロードせず読める。"""
+class LeasedOutboxEvent:
+    """送信するイベントと結果の記録に使うleaseと試行回数で、session後も遅延ロードせず読める。"""
 
-    event_id: UUID
-    event_type: str
-    schema_version: int
-    payload: dict[str, Any]
-    occurred_at: datetime
-    attempt_count: int
+    envelope: EventEnvelope
     lease_token: UUID
-    leased_until: datetime
+    attempt_count: int
 
 
 class OutboxDeliveryRepository:
@@ -35,7 +29,7 @@ class OutboxDeliveryRepository:
 
     async def lease_events_to_publish(
         self, *, event_type: str, limit: int, lease_duration: LeaseDuration
-    ) -> list[ClaimedOutboxEvent]:
+    ) -> list[LeasedOutboxEvent]:
         """配信可能なイベントを確保し、更新後の値を返す。"""
         if limit <= 0:
             return []
@@ -73,12 +67,24 @@ class OutboxDeliveryRepository:
                 table.c.occurred_at,
                 table.c.attempt_count,
                 table.c.lease_token,
-                table.c.leased_until,
             )
         )
         result = await self._session.execute(statement)
         rows = sorted(result.mappings(), key=lambda row: row["occurred_at"])
-        return [ClaimedOutboxEvent(**row) for row in rows]
+        return [
+            LeasedOutboxEvent(
+                envelope=EventEnvelope(
+                    event_id=row["event_id"],
+                    event_type=row["event_type"],
+                    schema_version=row["schema_version"],
+                    occurred_at=row["occurred_at"],
+                    payload=row["payload"],
+                ),
+                lease_token=row["lease_token"],
+                attempt_count=row["attempt_count"],
+            )
+            for row in rows
+        ]
 
     async def stop_deliveries_at_attempt_limit(
         self, *, event_type: str, limit: int

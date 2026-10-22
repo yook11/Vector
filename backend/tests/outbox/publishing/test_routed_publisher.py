@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-from copy import deepcopy
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta, timezone
 from hashlib import md5
@@ -13,7 +12,6 @@ from uuid import UUID
 import pytest
 
 from app.analysis.assessment.events import AssessedEventInvalidError
-from app.outbox.delivery.repository import ClaimedOutboxEvent
 from app.outbox.publishing.publisher import (
     EventEnvelope,
 )
@@ -147,22 +145,14 @@ def test_all_invalid_events_do_not_send_an_empty_batch(envelope):
     factory.assert_not_called()
 
 
-def test_utc_precision_and_claimed_payload_copy(envelope):
-    """時刻の意味と小数秒を保ち、確保情報や本文の参照を送信へ持ち込まない。"""
-    claimed = ClaimedOutboxEvent(
-        event_id=envelope.event_id,
-        event_type=envelope.event_type,
-        schema_version=1,
+def test_occurred_at_is_sent_in_utc_with_microseconds(envelope):
+    """日本時間の発生日時を、小数秒を保ったままUTCで送る。"""
+    event = replace(
+        envelope,
         occurred_at=datetime(
             2026, 9, 7, 12, 0, 0, 123456, tzinfo=timezone(timedelta(hours=9))
         ),
-        payload=deepcopy(envelope.payload),
-        attempt_count=2,
-        lease_token=UUID(int=2),
-        leased_until=datetime(2026, 9, 7, 4, tzinfo=UTC),
     )
-    event = EventEnvelope.from_claimed(claimed)
-    claimed.payload["curation_id"] = 999
     sender, client, _ = _sender(response={"Successful": [_success(event)]})
     sender.publish_batch([event])
     body = json.loads(

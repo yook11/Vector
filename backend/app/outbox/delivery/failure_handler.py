@@ -9,7 +9,7 @@ from random import random
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.outbox.delivery.failure_recording import record_publish_failure
-from app.outbox.delivery.repository import ClaimedOutboxEvent, OutboxDeliveryRepository
+from app.outbox.delivery.repository import LeasedOutboxEvent, OutboxDeliveryRepository
 from app.outbox.delivery.retry_policy import (
     NonRetryableReason,
     Retryable,
@@ -52,31 +52,33 @@ class OutboxDeliveryFailureHandler:
     async def handle(
         self,
         *,
-        event: ClaimedOutboxEvent,
+        leased_event: LeasedOutboxEvent,
         failure: PublishFailed,
     ) -> RetryScheduled | DeliveryStopped | DeliveryUpdateSkipped:
         """確保済みイベントの再試行予約または停止を確定する。"""
         if not isinstance(failure, PublishFailed):
             raise TypeError("failure must be PublishFailed")
-        if failure.event_id != event.event_id:
-            raise ValueError("failure event_id must match the claimed event")
+        if failure.event_id != leased_event.envelope.event_id:
+            raise ValueError("failure event_id must match the leased event")
         decision = decide_publish_retry(
-            failure.error, attempt_count=event.attempt_count, jitter=self._jitter()
+            failure.error,
+            attempt_count=leased_event.attempt_count,
+            jitter=self._jitter(),
         )
         async with self._session_factory() as session:
             repository = OutboxDeliveryRepository(session)
             outcome: RetryScheduled | DeliveryStopped | DeliveryUpdateSkipped
             if isinstance(decision, Retryable):
                 updated = await repository.schedule_retry(
-                    event_id=event.event_id,
-                    lease_token=event.lease_token,
+                    event_id=leased_event.envelope.event_id,
+                    lease_token=leased_event.lease_token,
                     retry_delay=decision.delay,
                 )
                 outcome = RetryScheduled(delay=decision.delay.value)
             else:
                 updated = await repository.stop_delivery(
-                    event_id=event.event_id,
-                    lease_token=event.lease_token,
+                    event_id=leased_event.envelope.event_id,
+                    lease_token=leased_event.lease_token,
                     reason=decision.reason,
                 )
                 outcome = DeliveryStopped(reason=decision.reason)
@@ -87,6 +89,8 @@ class OutboxDeliveryFailureHandler:
                 outcome = DeliveryUpdateSkipped()
         if isinstance(outcome, DeliveryStopped):
             record_publish_failure(
-                event=event, error=failure.error, stop_reason=outcome.reason
+                leased_event=leased_event,
+                error=failure.error,
+                stop_reason=outcome.reason,
             )
         return outcome

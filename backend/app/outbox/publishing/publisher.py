@@ -1,10 +1,9 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
-from copy import deepcopy
 from dataclasses import dataclass
 from datetime import datetime
-from typing import TYPE_CHECKING, Any, Protocol
+from typing import Any, Protocol
 from uuid import UUID
 
 from app.analysis.assessment.events import AssessedEventInvalidError
@@ -13,9 +12,6 @@ from app.aws.sqs.errors import MessageSendError
 from app.collection.article_acquisition.events import IncompleteArticleEventInvalidError
 from app.collection.events import AnalyzableEventInvalidError
 from app.outbox.publishing.route import EventRouteMismatchError
-
-if TYPE_CHECKING:
-    from app.outbox.delivery.repository import ClaimedOutboxEvent
 
 # 型注釈とisinstanceの両方に使うため、TypeAliasやtype文ではなくUnionTypeの値として持つ。
 PublishFailure = (
@@ -37,17 +33,6 @@ class EventEnvelope:
     schema_version: int
     occurred_at: datetime
     payload: dict[str, Any]
-
-    @classmethod
-    def from_claimed(cls, event: ClaimedOutboxEvent) -> EventEnvelope:
-        """確保結果からイベント本体を取り出し、payloadの参照を分離する。"""
-        return cls(
-            event_id=event.event_id,
-            event_type=event.event_type,
-            schema_version=event.schema_version,
-            occurred_at=event.occurred_at,
-            payload=deepcopy(event.payload),
-        )
 
 
 @dataclass(frozen=True, slots=True)
