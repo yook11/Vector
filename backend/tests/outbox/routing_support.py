@@ -7,9 +7,7 @@ from app.outbox.sqs.publisher import SqsSender
 
 
 def make_embedding_publisher(*, embedding_queue_url, **kwargs):
-    route = EventDeliveryRoute(
-        "article.assessed_in_scope",
-        embedding_queue_url,
-        build_assessed_in_scope_message,
+    route = EventDeliveryRoute("article.assessed_in_scope", embedding_queue_url)
+    return RoutedEventPublisher(
+        route, build_assessed_in_scope_message, SqsSender(**kwargs)
     )
-    return RoutedEventPublisher(route, SqsSender(**kwargs))

@@ -1,20 +1,23 @@
-"""配送定義による本文生成と、送信結果のイベント対応を取りまとめる。"""
+"""配送先の確認と本文の生成と、送信結果のイベント対応を取りまとめる。"""
 
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from typing import Protocol
 
-from app.outbox.publishing.error_mapping import publish_preparation_error_from_exception
-from app.outbox.publishing.errors import (
-    PublishEventInvalidError,
-    PublishEventInvalidReason,
-)
+from app.analysis.assessment.events import AssessedEventInvalidError
+from app.analysis.curation.events import CuratedEventInvalidError
+from app.collection.article_acquisition.events import IncompleteArticleEventInvalidError
+from app.collection.events import AnalyzableEventInvalidError
 from app.outbox.publishing.event_batch import EventBatch
 from app.outbox.publishing.publisher import (
     BatchPublishResult,
     EventEnvelope,
     PublishFailed,
 )
-from app.outbox.publishing.route import EventDeliveryRoute, EventMessage
+from app.outbox.publishing.route import (
+    EventDeliveryRoute,
+    EventMessage,
+    EventRouteMismatchError,
+)
 
 
 class MessageSender(Protocol):
@@ -26,8 +29,16 @@ class MessageSender(Protocol):
 class RoutedEventPublisher:
     """生成に成功した本文だけを送り、全入力の結果を入力順で返す。"""
 
-    def __init__(self, route: EventDeliveryRoute, sender: MessageSender) -> None:
+    def __init__(
+        self,
+        route: EventDeliveryRoute,
+        build_message: Callable[[EventEnvelope], EventMessage],
+        sender: MessageSender,
+    ) -> None:
+        if not callable(build_message):
+            raise TypeError("publisher requires a message builder")
         self._route = route
+        self._build_message = build_message
         self._sender = sender
 
     def publish_batch(self, envelopes: Sequence[EventEnvelope]) -> BatchPublishResult:
@@ -36,21 +47,21 @@ class RoutedEventPublisher:
         results = {}
         for envelope in events.envelopes:
             try:
-                message = self._route.build_message(envelope)
-                if envelope.event_type != self._route.event_type:
-                    raise PublishEventInvalidError(
-                        reason=PublishEventInvalidReason.UNSUPPORTED_EVENT_TYPE
-                    )
+                self._route.ensure_matches(envelope)
+                message = self._build_message(envelope)
                 if (
                     not isinstance(message, EventMessage)
                     or message.event_id != envelope.event_id
                 ):
                     raise TypeError("message must preserve input event ID")
-            except Exception as exc:
-                results[envelope.event_id] = PublishFailed(
-                    envelope.event_id,
-                    publish_preparation_error_from_exception(exc),
-                )
+            except (
+                AnalyzableEventInvalidError,
+                IncompleteArticleEventInvalidError,
+                AssessedEventInvalidError,
+                CuratedEventInvalidError,
+                EventRouteMismatchError,
+            ) as exc:
+                results[envelope.event_id] = PublishFailed(envelope.event_id, exc)
             else:
                 messages.append(message)
         if messages:

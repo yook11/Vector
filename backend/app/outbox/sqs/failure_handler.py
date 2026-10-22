@@ -2,8 +2,8 @@ from uuid import UUID
 
 import structlog
 
+from app.audit.error_fields import exception_fqn
 from app.aws.sqs.outgoing_message import SqsResponseInvalidError
-from app.outbox.publishing.errors import PublishCleanupError
 
 logger = structlog.get_logger(__name__)
 
@@ -24,12 +24,10 @@ class SqsPublishFailureHandler:
         except Exception:  # noqa: S110 — 診断出力を再帰させず送信結果を維持する。
             pass
 
-    def handle_cleanup_failure(self, error: PublishCleanupError) -> None:
+    def handle_cleanup_failure(self, error: Exception) -> None:
         try:
             logger.warning(
-                "outbox_publish_cleanup_failed",
-                error_code=error.CODE,
-                original_exception_type=error.original_exception_type,
+                "outbox_publish_cleanup_failed", error_class=exception_fqn(error)
             )
         except Exception:  # noqa: S110 — 診断出力を再帰させず元の結果を維持する。
             pass

@@ -16,7 +16,10 @@ from local_tests.backfill.support import assert_connections_closed
 async def test_connections_live_until_scope_exit(system_database, lifecycle):
     """借用中は接続を維持し、スコープ終了後は実DBから消える。"""
     async with resources.open_backfill_resources(
-        lifecycle.settings, stage="curation", route=lifecycle.route
+        lifecycle.settings,
+        stage="curation",
+        route=lifecycle.route,
+        build_message=lifecycle.build_message,
     ) as opened:
         async with opened.session_factory() as session:
             pid = await session.scalar(text("SELECT pg_backend_pid()"))
@@ -37,7 +40,10 @@ async def test_connections_live_until_scope_exit(system_database, lifecycle):
 async def test_sessions_reuse_one_connection_within_invocation(lifecycle):
     """同じ呼び出し内のセッションは一つの実接続を再利用する。"""
     async with resources.open_backfill_resources(
-        lifecycle.settings, stage="curation", route=lifecycle.route
+        lifecycle.settings,
+        stage="curation",
+        route=lifecycle.route,
+        build_message=lifecycle.build_message,
     ) as opened:
         async with opened.session_factory() as session:
             first = await session.scalar(text("SELECT pg_backend_pid()"))
@@ -54,7 +60,10 @@ async def test_invocations_do_not_share_connections_or_loops(
 
     async def borrow():
         async with resources.open_backfill_resources(
-            lifecycle.settings, stage="curation", route=lifecycle.route
+            lifecycle.settings,
+            stage="curation",
+            route=lifecycle.route,
+            build_message=lifecycle.build_message,
         ) as opened:
             async with opened.session_factory() as session:
                 await session.execute(text("SELECT 1"))
@@ -76,7 +85,10 @@ async def test_borrower_failure_releases_connections(system_database, lifecycle)
     error = RuntimeError("borrower")
     with pytest.raises(RuntimeError) as caught:
         async with resources.open_backfill_resources(
-            lifecycle.settings, stage="curation", route=lifecycle.route
+            lifecycle.settings,
+            stage="curation",
+            route=lifecycle.route,
+            build_message=lifecycle.build_message,
         ) as opened:
             async with opened.session_factory() as session:
                 await session.execute(text("SELECT 1"))
@@ -90,7 +102,10 @@ async def test_sql_failure_releases_connections(system_database, lifecycle):
     """実SQL障害も正常終了に変換せず接続を解放する。"""
     with pytest.raises(DatabaseError):
         async with resources.open_backfill_resources(
-            lifecycle.settings, stage="curation", route=lifecycle.route
+            lifecycle.settings,
+            stage="curation",
+            route=lifecycle.route,
+            build_message=lifecycle.build_message,
         ) as opened:
             async with opened.session_factory() as session:
                 await session.execute(text("SELECT 1 / 0"))
@@ -104,7 +119,10 @@ async def test_external_cancellation_releases_connections(system_database, lifec
 
     async def borrow():
         async with resources.open_backfill_resources(
-            lifecycle.settings, stage="curation", route=lifecycle.route
+            lifecycle.settings,
+            stage="curation",
+            route=lifecycle.route,
+            build_message=lifecycle.build_message,
         ) as opened:
             async with opened.session_factory() as session:
                 await session.execute(text("SELECT 1"))
@@ -130,7 +148,10 @@ async def test_rds_initialization_failure_does_not_create_engine(
     monkeypatch.setattr(resources, "Session", Mock(side_effect=error))
     with pytest.raises(RuntimeError) as caught:
         async with resources.open_backfill_resources(
-            lifecycle.settings, stage="curation", route=lifecycle.route
+            lifecycle.settings,
+            stage="curation",
+            route=lifecycle.route,
+            build_message=lifecycle.build_message,
         ):
             pytest.fail("must not yield")
     assert caught.value is error
@@ -144,7 +165,10 @@ async def test_engine_initialization_failure_closes_rds(lifecycle, monkeypatch):
     monkeypatch.setattr(resources, "create_backfill_engine", Mock(side_effect=error))
     with pytest.raises(RuntimeError) as caught:
         async with resources.open_backfill_resources(
-            lifecycle.settings, stage="curation", route=lifecycle.route
+            lifecycle.settings,
+            stage="curation",
+            route=lifecycle.route,
+            build_message=lifecycle.build_message,
         ):
             pytest.fail("must not yield")
     assert caught.value is error
@@ -160,7 +184,10 @@ async def test_publisher_initialization_failure_disposes_engine(
     monkeypatch.setattr(resources.SqsSender, "from_session", Mock(side_effect=error))
     with pytest.raises(RuntimeError) as caught:
         async with resources.open_backfill_resources(
-            lifecycle.settings, stage="curation", route=lifecycle.route
+            lifecycle.settings,
+            stage="curation",
+            route=lifecycle.route,
+            build_message=lifecycle.build_message,
         ):
             pytest.fail("must not yield")
     assert caught.value is error
@@ -187,7 +214,10 @@ async def test_disposal_only_failure_is_propagated(
     """実dispose後の単独終了失敗を正常扱いせず、RDSも解放する。"""
     with pytest.raises(RuntimeError) as caught:
         async with resources.open_backfill_resources(
-            lifecycle.settings, stage="curation", route=lifecycle.route
+            lifecycle.settings,
+            stage="curation",
+            route=lifecycle.route,
+            build_message=lifecycle.build_message,
         ) as opened:
             async with opened.session_factory() as session:
                 await session.execute(text("SELECT 1"))
@@ -203,7 +233,10 @@ async def test_disposal_failure_preserves_borrower_error(
     error = ValueError("borrower")
     with pytest.raises(ValueError) as caught:
         async with resources.open_backfill_resources(
-            lifecycle.settings, stage="curation", route=lifecycle.route
+            lifecycle.settings,
+            stage="curation",
+            route=lifecycle.route,
+            build_message=lifecycle.build_message,
         ) as opened:
             async with opened.session_factory() as session:
                 await session.execute(text("SELECT 1"))
@@ -220,7 +253,10 @@ async def test_disposal_failure_preserves_cancellation(
     error = asyncio.CancelledError()
     with pytest.raises(asyncio.CancelledError) as caught:
         async with resources.open_backfill_resources(
-            lifecycle.settings, stage="curation", route=lifecycle.route
+            lifecycle.settings,
+            stage="curation",
+            route=lifecycle.route,
+            build_message=lifecycle.build_message,
         ) as opened:
             async with opened.session_factory() as session:
                 await session.execute(text("SELECT 1"))
@@ -235,7 +271,10 @@ async def test_rds_close_failure_is_propagated(system_database, lifecycle):
     error = RuntimeError("rds_close")
     with pytest.raises(RuntimeError) as caught:
         async with resources.open_backfill_resources(
-            lifecycle.settings, stage="curation", route=lifecycle.route
+            lifecycle.settings,
+            stage="curation",
+            route=lifecycle.route,
+            build_message=lifecycle.build_message,
         ) as opened:
             async with opened.session_factory() as session:
                 await session.execute(text("SELECT 1"))
@@ -266,7 +305,10 @@ async def test_cleanup_cancellation_propagates_after_releasing_rds(
     monkeypatch.setattr(AsyncEngine, "dispose", close_then_cancel)
     with pytest.raises(asyncio.CancelledError) as caught:
         async with resources.open_backfill_resources(
-            lifecycle.settings, stage="curation", route=lifecycle.route
+            lifecycle.settings,
+            stage="curation",
+            route=lifecycle.route,
+            build_message=lifecycle.build_message,
         ) as opened:
             async with opened.session_factory() as session:
                 await session.execute(text("SELECT 1"))

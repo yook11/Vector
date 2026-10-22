@@ -1,6 +1,6 @@
 """接続を借りて本体を一度実行し、続行不能な失敗を呼び出し元へ伝える。"""
 
-from collections.abc import Awaitable
+from collections.abc import Awaitable, Callable
 from datetime import datetime
 from typing import Protocol
 
@@ -9,8 +9,8 @@ from app.db.session import SessionFactory
 from app.lambda_handlers.backfill.failure_recorder import record_failure
 from app.lambda_handlers.backfill.resources import open_backfill_resources
 from app.lambda_handlers.backfill.settings import BackfillConnectionSettings
-from app.outbox.publishing.publisher import EventPublisher
-from app.outbox.publishing.route import EventDeliveryRoute
+from app.outbox.publishing.publisher import EventEnvelope, EventPublisher
+from app.outbox.publishing.route import EventDeliveryRoute, EventMessage
 
 
 class BackfillOperation(Protocol):
@@ -29,10 +29,13 @@ async def run_backfill(
     *,
     stage: BackfillStage,
     route: EventDeliveryRoute,
+    build_message: Callable[[EventEnvelope], EventMessage],
     operation: BackfillOperation,
     now: datetime,
 ) -> None:
-    async with open_backfill_resources(settings, stage=stage, route=route) as resources:
+    async with open_backfill_resources(
+        settings, stage=stage, route=route, build_message=build_message
+    ) as resources:
         try:
             await operation(
                 session_factory=resources.session_factory,

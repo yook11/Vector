@@ -2,6 +2,8 @@
 
 from copy import deepcopy
 from dataclasses import FrozenInstanceError
+from hashlib import md5
+from unittest.mock import Mock
 
 import pytest
 
@@ -62,6 +64,16 @@ def test_message_derives_md5_from_exact_body(body, expected_md5):
     assert OutgoingSqsMessage(body).body_md5 == expected_md5
     with pytest.raises(TypeError):
         OutgoingSqsMessage(body=body, body_md5=expected_md5)  # type: ignore[call-arg]
+
+
+def test_message_md5_is_not_declared_for_security(monkeypatch):
+    """照合用のMD5は、MD5を禁じる環境でも計算できるよう、セキュリティ用途でないと指定して計算する。"""
+    hash_call = Mock(wraps=md5)
+    monkeypatch.setattr("app.aws.sqs.outgoing_message.md5", hash_call)
+    OutgoingSqsMessage("{}")
+    assert [call.kwargs for call in hash_call.call_args_list] == [
+        {"usedforsecurity": False}
+    ]
 
 
 def test_message_cannot_be_changed():

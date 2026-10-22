@@ -5,12 +5,39 @@ from uuid import UUID
 
 import pytest
 
-from app.outbox.publishing.errors import PublishCleanupError, PublishError
+from app.analysis.assessment.events import (
+    AssessedEventInvalid,
+    AssessedEventInvalidError,
+    AssessedEventInvalidReason,
+)
+from app.analysis.curation.events import (
+    CuratedEventInvalid,
+    CuratedEventInvalidError,
+    CuratedEventInvalidReason,
+)
+from app.aws.sqs.errors import MessageSendUnexpectedError
+from app.aws.sqs.outgoing_message import MessageTooLargeError
+from app.collection.article_acquisition.events import (
+    IncompleteArticleEventInvalid,
+    IncompleteArticleEventInvalidError,
+    IncompleteArticleEventInvalidReason,
+)
+from app.collection.events import (
+    AnalyzableEventInvalid,
+    AnalyzableEventInvalidError,
+    AnalyzableEventInvalidReason,
+)
+from app.db.errors import DatabaseUnexpectedError
 from app.outbox.publishing.publisher import (
     BatchPublishResult,
     PublishFailed,
     PublishSucceeded,
 )
+from app.outbox.publishing.route import EventRouteMismatchError
+
+
+def _send_failure():
+    return MessageSendUnexpectedError(exception_type="RuntimeError")
 
 
 @pytest.mark.parametrize("event_id", [None, 1, True, "private-event-id"])
@@ -19,7 +46,7 @@ def test_individual_result_rejects_non_uuid(event_id, failed):
     """成功・失敗ともにIDの暗黙変換をせず、不正値を文面へ出さない。"""
     with pytest.raises(TypeError, match="event_id must be a UUID") as caught:
         if failed:
-            PublishFailed(event_id, PublishError())
+            PublishFailed(event_id, _send_failure())
         else:
             PublishSucceeded(event_id)
     assert str(event_id) not in str(caught.value)
@@ -28,14 +55,46 @@ def test_individual_result_rejects_non_uuid(event_id, failed):
 @pytest.mark.parametrize(
     "error",
     [
-        None,
-        RuntimeError("private-error"),
-        PublishCleanupError(original_exception=RuntimeError()),
+        MessageTooLargeError(),
+        AnalyzableEventInvalidError(
+            AnalyzableEventInvalid(
+                reason=AnalyzableEventInvalidReason.INVALID_PAYLOAD, issues=()
+            )
+        ),
+        IncompleteArticleEventInvalidError(
+            IncompleteArticleEventInvalid(
+                reason=IncompleteArticleEventInvalidReason.INVALID_PAYLOAD, issues=()
+            )
+        ),
+        AssessedEventInvalidError(
+            AssessedEventInvalid(
+                reason=AssessedEventInvalidReason.INVALID_PAYLOAD, issues=()
+            )
+        ),
+        CuratedEventInvalidError(
+            CuratedEventInvalid(
+                reason=CuratedEventInvalidReason.INVALID_PAYLOAD, issues=()
+            )
+        ),
+        EventRouteMismatchError(),
     ],
 )
-def test_failed_result_rejects_non_publish_error(error):
-    """終了処理の失敗や通常例外をイベントの送信失敗として構築できない。"""
-    with pytest.raises(TypeError, match="must contain PublishError") as caught:
+def test_failed_result_accepts_every_publish_failure(error):
+    """SQSへの送信の失敗、4つのイベントの構築失敗、outbox自身の種別の不一致を、イベントの送信失敗として持てる。"""
+    assert PublishFailed(UUID(int=1), error).error is error
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        None,
+        RuntimeError("private-error"),
+        DatabaseUnexpectedError(),
+    ],
+)
+def test_failed_result_rejects_non_publish_failure(error):
+    """通常の例外やDBの失敗を、イベントの送信失敗として構築できない。"""
+    with pytest.raises(TypeError, match="must be a PublishFailure") as caught:
         PublishFailed(UUID(int=1), error)
     assert "private-error" not in str(caught.value)
 
@@ -47,7 +106,7 @@ def test_batch_rejects_non_tuple(results):
         BatchPublishResult(results)
 
 
-@pytest.mark.parametrize("entry", [None, "private-body", PublishError()])
+@pytest.mark.parametrize("entry", [None, "private-body", _send_failure()])
 def test_batch_rejects_invalid_entry_after_valid_result(entry):
     """後半の不正要素も含めて、結果全体の構築を拒否する。"""
     with pytest.raises(TypeError, match="invalid publisher result type") as caught:
@@ -57,7 +116,7 @@ def test_batch_rejects_invalid_entry_after_valid_result(entry):
 
 def test_results_preserve_values():
     """送信結果の参照を維持し、結果のフィールドは変更できない。"""
-    error = PublishError()
+    error = _send_failure()
     success = PublishSucceeded(UUID(int=1))
     failure = PublishFailed(UUID(int=2), error)
     results = (success, failure)

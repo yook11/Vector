@@ -5,6 +5,7 @@ from enum import StrEnum
 
 from botocore.exceptions import (
     ClientError,
+    CredentialRetrievalError,
     NoCredentialsError,
     NoRegionError,
     PartialCredentialsError,
@@ -27,6 +28,15 @@ class SqsServiceErrorReason(StrEnum):
     REQUEST_EXPIRED = "request_expired"
     ENCRYPTION_ERROR = "encryption_error"
     UNKNOWN = "unknown"
+
+
+class MessageSendConfigurationReason(StrEnum):
+    """送信に必要な設定のうち、何がなかったか。"""
+
+    MISSING_CREDENTIALS = "missing_credentials"
+    INCOMPLETE_CREDENTIALS = "incomplete_credentials"
+    MISSING_REGION = "missing_region"
+    MISSING_QUEUE_URL = "missing_queue_url"
 
 
 class MessageSendError(ApplicationError):
@@ -67,13 +77,22 @@ class SqsServiceError(MessageSendError):
 class MessageSendConfigurationError(MessageSendError):
     """資格情報・リージョン・送信先のキューなど、送信に必要な設定がない。"""
 
-    def __init__(self, *, exception_type: str | None = None) -> None:
-        self.exception_type = exception_type
+    def __init__(self, *, reason: MessageSendConfigurationReason) -> None:
+        self.reason = reason
         super().__init__(
             "メッセージの送信に必要な設定がありません",
-            details=(
-                {"exception_type": self.exception_type} if self.exception_type else None
-            ),
+            details={"reason": self.reason.value},
+        )
+
+
+class MessageSendCredentialsError(MessageSendError):
+    """資格情報の取得先から、送信に使う資格情報を取得できなかった。"""
+
+    def __init__(self, *, exception_type: str) -> None:
+        self.exception_type = exception_type
+        super().__init__(
+            "メッセージの送信に使う資格情報を取得できませんでした",
+            details={"exception_type": self.exception_type},
         )
 
 
@@ -165,12 +184,34 @@ def to_message_send_error(exc: Exception) -> MessageSendError:
     if isinstance(exc, MessageSendError):
         return exc
     exception_type = type(exc).__name__
-    if isinstance(exc, (NoCredentialsError, PartialCredentialsError, NoRegionError)):
-        return MessageSendConfigurationError(exception_type=exception_type)
-    if isinstance(exc, ClientError) and exc.operation_name == "SendMessage":
+    if isinstance(exc, NoCredentialsError):
+        return MessageSendConfigurationError(
+            reason=MessageSendConfigurationReason.MISSING_CREDENTIALS
+        )
+    if isinstance(exc, PartialCredentialsError):
+        return MessageSendConfigurationError(
+            reason=MessageSendConfigurationReason.INCOMPLETE_CREDENTIALS
+        )
+    if isinstance(exc, NoRegionError):
+        return MessageSendConfigurationError(
+            reason=MessageSendConfigurationReason.MISSING_REGION
+        )
+    if isinstance(exc, CredentialRetrievalError):
+        return MessageSendCredentialsError(exception_type=exception_type)
+    if isinstance(exc, ClientError):
+        # SQSへの送信の中でSQS以外の操作を呼ぶのは、資格情報のproviderだけ。
+        if exc.operation_name not in ("SendMessage", "SendMessageBatch"):
+            return MessageSendCredentialsError(exception_type=exception_type)
         response = exc.response if isinstance(exc.response, dict) else {}
         error = response.get("Error")
-        code = error.get("Code") if isinstance(error, dict) else None
+        error = error if isinstance(error, dict) else {}
+        # SQSが互換用の別名のコードを返すと、SDKは元のコードをQueryErrorCodeへ移す。
+        query_code = error.get("QueryErrorCode")
+        code = (
+            query_code
+            if isinstance(query_code, str) and query_code
+            else error.get("Code")
+        )
         metadata = response.get("ResponseMetadata")
         status = metadata.get("HTTPStatusCode") if isinstance(metadata, dict) else None
         return to_sqs_service_error(

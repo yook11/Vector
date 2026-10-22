@@ -11,6 +11,11 @@ from sqlalchemy import event as sqlalchemy_event
 from sqlalchemy import func, select
 from sqlalchemy.exc import SQLAlchemyError
 
+from app.aws.sqs.errors import (
+    MessageSendConfigurationError,
+    MessageSendConfigurationReason,
+    MessageSendTransportError,
+)
 from app.db.errors import DatabaseError
 from app.db.session import caller_managed_session_factory
 from app.http.failure import (
@@ -27,13 +32,11 @@ from app.outbox.delivery.failure_handler import (
 )
 from app.outbox.delivery.repository import ClaimedOutboxEvent
 from app.outbox.delivery.retry_policy import NonRetryableReason
-from app.outbox.publishing.errors import (
-    PublishConfigurationError,
-    PublishConfigurationReason,
-    PublishError,
-    PublishTransportError,
+from app.outbox.publishing.publisher import (
+    PublishFailed,
+    PublishFailure,
+    PublishSucceeded,
 )
-from app.outbox.publishing.publisher import PublishFailed, PublishSucceeded
 from tests.outbox.helpers import FUTURE, PAST, insert_event, read_event
 
 pytestmark = pytest.mark.asyncio
@@ -47,16 +50,17 @@ def record_stop(monkeypatch):
 
 
 def _transport():
-    return PublishTransportError(
+    return MessageSendTransportError(
         failure=HttpTransportFailure(
             HttpTransportStage.RECEIVE, HttpTransportFailureReason.TIMEOUT
-        )
+        ),
+        exception_type="ReadTimeoutError",
     )
 
 
 def _configuration():
-    return PublishConfigurationError(
-        reason=PublishConfigurationReason.MISSING_CREDENTIALS
+    return MessageSendConfigurationError(
+        reason=MessageSendConfigurationReason.MISSING_CREDENTIALS
     )
 
 
@@ -255,7 +259,7 @@ async def test_database_failure_propagates_and_uncommitted_update_is_rolled_back
             event=claimed, failure=PublishFailed(claimed.event_id, error)
         )
     record_stop.assert_not_called()
-    assert not isinstance(caught.value, PublishError)
+    assert not isinstance(caught.value, PublishFailure)
     assert caught.value.__cause__ is original
     async with session_factory() as reader:
         assert await read_event(reader, claimed.event_id) == before

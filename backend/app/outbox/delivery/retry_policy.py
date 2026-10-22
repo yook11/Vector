@@ -7,19 +7,28 @@ from datetime import timedelta
 from enum import StrEnum
 from math import isfinite
 
-from app.http.failure import HttpTransportFailureReason
-from app.http.retry_prospect import is_resolvable_by_retry
-from app.outbox.delivery.values import RetryDelay
-from app.outbox.publishing.errors import (
-    PublishConfigurationError,
-    PublishError,
-    PublishEventInvalidError,
-    PublishIntegrityError,
-    PublishResponseInvalidError,
-    PublishServiceError,
-    PublishServiceReason,
-    PublishTransportError,
+from app.analysis.assessment.events import AssessedEventInvalidError
+from app.analysis.curation.events import CuratedEventInvalidError
+from app.aws.sqs.errors import (
+    MessageSendConfigurationError,
+    MessageSendCredentialsError,
+    MessageSendError,
+    MessageSendTransportError,
+    SqsServiceError,
+    SqsServiceErrorReason,
 )
+from app.aws.sqs.outgoing_message import (
+    MessageBodyMismatchError,
+    MessageTooLargeError,
+    SqsResponseInvalidError,
+)
+from app.aws.sqs.retry_prospect import is_resolvable_by_retry
+from app.collection.article_acquisition.events import IncompleteArticleEventInvalidError
+from app.collection.events import AnalyzableEventInvalidError
+from app.http.failure import HttpTransportFailureReason
+from app.outbox.delivery.values import RetryDelay
+from app.outbox.publishing.publisher import PublishFailure
+from app.outbox.publishing.route import EventRouteMismatchError
 
 
 class NonRetryableReason(StrEnum):
@@ -56,40 +65,36 @@ class NonRetryable:
 MAX_PUBLISH_ATTEMPTS = 5
 
 _RETRY_DELAYS = (30, 120, 600, 1800)
-_RETRY_SERVICE_REASONS = frozenset(
-    {
-        PublishServiceReason.THROTTLED,
-        PublishServiceReason.SERVICE_UNAVAILABLE,
-    }
-)
 
 
-def _is_retry_candidate(error: PublishError) -> bool:
+def _is_retry_candidate(error: PublishFailure) -> bool:
     """回数を見ず、失敗の性質として再試行対象かを返す。"""
-    if isinstance(error, PublishTransportError):
-        return is_resolvable_by_retry(error.failure)
-    if isinstance(error, PublishServiceError):
-        return error.reason in _RETRY_SERVICE_REASONS
-    return False
+    return isinstance(error, MessageSendError) and is_resolvable_by_retry(error)
 
 
-def _non_retryable_reason(error: PublishError) -> NonRetryableReason:
+def _non_retryable_reason(error: PublishFailure) -> NonRetryableReason:
     """再試行対象でない失敗の性質から、停止理由を決める。"""
-    if isinstance(error, PublishTransportError):
+    if isinstance(error, MessageSendTransportError):
         if error.failure.reason is HttpTransportFailureReason.UNKNOWN:
             return NonRetryableReason.UNCLASSIFIED_FAILURE
         return NonRetryableReason.NON_RETRYABLE_FAILURE
-    if isinstance(error, PublishServiceError):
-        if error.reason is PublishServiceReason.UNCLASSIFIED:
+    if isinstance(error, SqsServiceError):
+        if error.reason is SqsServiceErrorReason.UNKNOWN:
             return NonRetryableReason.UNCLASSIFIED_FAILURE
         return NonRetryableReason.NON_RETRYABLE_FAILURE
     if isinstance(
         error,
         (
-            PublishConfigurationError
-            | PublishEventInvalidError
-            | PublishIntegrityError
-            | PublishResponseInvalidError
+            MessageSendConfigurationError
+            | MessageSendCredentialsError
+            | MessageTooLargeError
+            | SqsResponseInvalidError
+            | MessageBodyMismatchError
+            | AnalyzableEventInvalidError
+            | IncompleteArticleEventInvalidError
+            | AssessedEventInvalidError
+            | CuratedEventInvalidError
+            | EventRouteMismatchError
         ),
     ):
         return NonRetryableReason.NON_RETRYABLE_FAILURE
@@ -102,14 +107,14 @@ def _retry_delay(*, attempt_count: int, jitter: float) -> timedelta:
 
 
 def decide_publish_retry(
-    error: PublishError,
+    error: PublishFailure,
     *,
     attempt_count: int,
     jitter: float,
 ) -> Retryable | NonRetryable:
     """確保後の試行回数と外部で生成したjitterから配信方針を決める。"""
-    if not isinstance(error, PublishError):
-        raise TypeError("error must be a PublishError")
+    if not isinstance(error, PublishFailure):
+        raise TypeError("error must be a PublishFailure")
     if type(attempt_count) is not int:
         raise TypeError("attempt_count must be an integer")
     if attempt_count < 1:

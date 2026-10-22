@@ -12,13 +12,12 @@ from uuid import UUID
 
 import pytest
 
+from app.analysis.assessment.events import AssessedEventInvalidError
 from app.outbox.delivery.repository import ClaimedOutboxEvent
-from app.outbox.publishing.errors import (
-    PublishEventInvalidReason,
-)
 from app.outbox.publishing.publisher import (
     EventEnvelope,
 )
+from app.outbox.publishing.route import EventRouteMismatchError
 from app.outbox.sqs.failure_handler import SqsPublishFailureHandler
 from tests.outbox.routing_support import (
     make_embedding_publisher,
@@ -138,10 +137,11 @@ def test_input_count_is_checked_before_excluding_invalid_events(envelope, monkey
 def test_all_invalid_events_do_not_send_an_empty_batch(envelope):
     """送信対象がなければAWS送信を呼ばず個別失敗を返す。"""
     sender, client, factory = _sender()
-    result = sender.publish_batch([replace(envelope, event_type="unsupported")])
-    assert (
-        result.results[0].error.reason
-        is PublishEventInvalidReason.UNSUPPORTED_EVENT_TYPE
+    result = sender.publish_batch([replace(envelope, schema_version=2)])
+    error = result.results[0].error
+    assert (type(error), error.invalid.reason) == (
+        AssessedEventInvalidError,
+        "unsupported_schema_version",
     )
     client.send_message_batch.assert_not_called()
     factory.assert_not_called()
@@ -187,22 +187,22 @@ def test_real_embedding_validation_excludes_only_rejected_event(
     from app.outbox.publishing.route import EventDeliveryRoute
     from app.outbox.publishing.routed_publisher import RoutedEventPublisher
 
-    invalid = replace(envelope, event_type="another.event")
+    invalid = replace(envelope, schema_version=2)
     good = replace(envelope, event_id=UUID(int=2))
     sender = Mock()
     sender.send_batch.return_value = BatchPublishResult(
         (PublishSucceeded(good.event_id),)
     )
     publisher = RoutedEventPublisher(
-        EventDeliveryRoute(
-            envelope.event_type, QUEUE_URL, build_assessed_in_scope_message
-        ),
+        EventDeliveryRoute(envelope.event_type, QUEUE_URL),
+        build_assessed_in_scope_message,
         sender,
     )
     result = publisher.publish_batch([invalid, good] if include_valid else [invalid])
-    assert (
-        result.results[0].error.reason
-        is PublishEventInvalidReason.UNSUPPORTED_EVENT_TYPE
+    error = result.results[0].error
+    assert (type(error), error.invalid.reason) == (
+        AssessedEventInvalidError,
+        "unsupported_schema_version",
     )
     if include_valid:
         sender.send_batch.assert_called_once_with(
@@ -214,8 +214,13 @@ def test_real_embedding_validation_excludes_only_rejected_event(
 
 
 def test_custom_route_combines_preparation_and_send_results_in_input_order(envelope):
-    """工程に依存しない配送定義で、生成失敗・送信失敗・成功を入力順に統合する。"""
-    from app.outbox.publishing.errors import PublishEventInvalidError, PublishPhase
+    """工程に依存しない配送定義で、構築失敗・送信失敗・成功を入力順に統合する。"""
+    from app.aws.sqs.outgoing_message import MessageTooLargeError
+    from app.collection.events import (
+        AnalyzableEventInvalid,
+        AnalyzableEventInvalidError,
+        AnalyzableEventInvalidReason,
+    )
     from app.outbox.publishing.publisher import (
         BatchPublishResult,
         PublishFailed,
@@ -228,12 +233,14 @@ def test_custom_route_combines_preparation_and_send_results_in_input_order(envel
         replace(envelope, event_id=UUID(int=i), event_type="test.event")
         for i in range(1, 4)
     ]
-    original = RuntimeError("PRIVATE")
+    original = AnalyzableEventInvalidError(
+        AnalyzableEventInvalid(
+            reason=AnalyzableEventInvalidReason.INVALID_PAYLOAD, issues=()
+        )
+    )
     prepared = [EventMessage(e.event_id, "test body") for e in events[1:]]
     builder = Mock(side_effect=[original, *prepared])
-    send_error = PublishEventInvalidError(
-        reason=PublishEventInvalidReason.MESSAGE_TOO_LARGE
-    )
+    send_error = MessageTooLargeError()
     outcomes = (
         PublishFailed(events[1].event_id, send_error),
         PublishSucceeded(events[2].event_id),
@@ -241,12 +248,11 @@ def test_custom_route_combines_preparation_and_send_results_in_input_order(envel
     sender = Mock()
     sender.send_batch.return_value = BatchPublishResult(outcomes)
     publisher = RoutedEventPublisher(
-        EventDeliveryRoute("test.event", "test-queue", builder), sender
+        EventDeliveryRoute("test.event", "test-queue"), builder, sender
     )
     result = publisher.publish_batch(events)
     assert [r.event_id for r in result.results] == [e.event_id for e in events]
-    assert result.results[0].error.__cause__ is original
-    assert result.results[0].error.phase is PublishPhase.PREPARE_EVENT
+    assert result.results[0].error is original
     assert result.results[1:] == outcomes
     assert [c.args[0] for c in builder.call_args_list] == events
     sender.send_batch.assert_called_once_with(
@@ -254,25 +260,55 @@ def test_custom_route_combines_preparation_and_send_results_in_input_order(envel
     )
 
 
-@pytest.mark.parametrize("case", ["wrong_type", "wrong_id", "wrong_event_type"])
-def test_builder_contract_violation_never_reaches_sender(envelope, case):
-    """生成成功でも本文型・イベントID・配送種別の不一致を送信前に拒否する。"""
+@pytest.mark.parametrize("case", ["wrong_type", "wrong_id"])
+def test_builder_contract_violation_propagates_before_send(envelope, case):
+    """本文作成の関数が本文型・イベントIDの約束を破ったら、値にせず送信前に送出する。"""
     from app.outbox.publishing.route import EventDeliveryRoute, EventMessage
     from app.outbox.publishing.routed_publisher import RoutedEventPublisher
 
     message = {
         "wrong_type": object(),
         "wrong_id": EventMessage(UUID(int=2), "body"),
-        "wrong_event_type": EventMessage(envelope.event_id, "body"),
     }[case]
-    route = EventDeliveryRoute(
-        "different" if case == "wrong_event_type" else envelope.event_type,
-        QUEUE_URL,
-        Mock(return_value=message),
-    )
+    route = EventDeliveryRoute(envelope.event_type, QUEUE_URL)
     sender = Mock()
-    result = RoutedEventPublisher(route, sender).publish_batch([envelope])
-    assert result.results[0].event_id == envelope.event_id
+    with pytest.raises(TypeError, match="message must preserve input event ID"):
+        RoutedEventPublisher(route, Mock(return_value=message), sender).publish_batch(
+            [envelope]
+        )
+    sender.send_batch.assert_not_called()
+
+
+def test_route_mismatch_is_local_failure_before_building(envelope):
+    """配送先の対応と種別が一致しないイベントは、本文を作らずに種別の不一致とし、送らない。"""
+    from app.outbox.publishing.route import EventDeliveryRoute, EventMessage
+    from app.outbox.publishing.routed_publisher import RoutedEventPublisher
+
+    route = EventDeliveryRoute("different", QUEUE_URL)
+    builder = Mock(return_value=EventMessage(envelope.event_id, "body"))
+    sender = Mock()
+    result = RoutedEventPublisher(route, builder, sender).publish_batch([envelope])
+    assert (result.results[0].event_id, type(result.results[0].error)) == (
+        envelope.event_id,
+        EventRouteMismatchError,
+    )
+    builder.assert_not_called()
+    sender.send_batch.assert_not_called()
+
+
+def test_unexpected_builder_exception_propagates_without_sending(envelope):
+    """本文作成の関数の想定外の例外は、値にせずそのまま送出し、同じバッチのどのイベントも送らない。"""
+    from app.outbox.publishing.route import EventDeliveryRoute, EventMessage
+    from app.outbox.publishing.routed_publisher import RoutedEventPublisher
+
+    second = replace(envelope, event_id=UUID(int=2))
+    original = ValueError("unexpected")
+    route = EventDeliveryRoute(envelope.event_type, QUEUE_URL)
+    builder = Mock(side_effect=[original, EventMessage(second.event_id, "body")])
+    sender = Mock()
+    with pytest.raises(ValueError) as caught:
+        RoutedEventPublisher(route, builder, sender).publish_batch([envelope, second])
+    assert caught.value is original
     sender.send_batch.assert_not_called()
 
 
@@ -287,13 +323,11 @@ def test_sender_result_correspondence_is_required(envelope, ids):
     sender.send_batch.return_value = BatchPublishResult(
         tuple(PublishSucceeded(UUID(int=i)) for i in ids)
     )
-    route = EventDeliveryRoute(
-        envelope.event_type, QUEUE_URL, lambda e: EventMessage(e.event_id, "body")
-    )
+    route = EventDeliveryRoute(envelope.event_type, QUEUE_URL)
     with pytest.raises(ValueError):
-        RoutedEventPublisher(route, sender).publish_batch(
-            [envelope, replace(envelope, event_id=UUID(int=2))]
-        )
+        RoutedEventPublisher(
+            route, lambda e: EventMessage(e.event_id, "body"), sender
+        ).publish_batch([envelope, replace(envelope, event_id=UUID(int=2))])
 
 
 @pytest.mark.parametrize(
@@ -303,18 +337,34 @@ def test_sender_result_correspondence_is_required(envelope, ids):
         ("queue_url", "\t", ValueError),
         ("event_type", None, TypeError),
         ("queue_url", None, TypeError),
-        ("build_message", None, TypeError),
     ],
 )
 def test_route_requires_explicit_nonblank_fields(envelope, field, value, error):
-    """配送先・種別・本文生成処理を必須とし、未設定を既定値で補わない。"""
-    from app.outbox.publishing.route import EventDeliveryRoute, EventMessage
+    """配送先と種別を必須とし、未設定を既定値で補わない。"""
+    from app.outbox.publishing.route import EventDeliveryRoute
 
-    args = dict(
-        event_type=envelope.event_type,
-        queue_url=QUEUE_URL,
-        build_message=lambda e: EventMessage(e.event_id, "body"),
-    )
+    args = dict(event_type=envelope.event_type, queue_url=QUEUE_URL)
     args[field] = value
     with pytest.raises(error):
         EventDeliveryRoute(**args)
+
+
+def test_route_rejects_event_of_another_type(envelope):
+    """配送先の対応は、自分の種別のイベントを通し、ほかの種別のイベントを種別の不一致として拒否する。"""
+    from app.outbox.publishing.route import EventDeliveryRoute
+
+    route = EventDeliveryRoute(envelope.event_type, QUEUE_URL)
+    route.ensure_matches(envelope)
+    with pytest.raises(EventRouteMismatchError):
+        route.ensure_matches(replace(envelope, event_type="another.event"))
+
+
+def test_publisher_requires_message_builder(envelope):
+    """本文を作る関数がない publisher は作れない。"""
+    from app.outbox.publishing.route import EventDeliveryRoute
+    from app.outbox.publishing.routed_publisher import RoutedEventPublisher
+
+    with pytest.raises(TypeError):
+        RoutedEventPublisher(
+            EventDeliveryRoute(envelope.event_type, QUEUE_URL), None, Mock()
+        )  # type: ignore[arg-type]

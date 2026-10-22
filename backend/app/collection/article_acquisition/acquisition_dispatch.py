@@ -9,9 +9,9 @@ from dataclasses import dataclass
 
 from app.aws.sqs.errors import MessageSendError
 from app.aws.sqs.message_sender import SqsMessageSender
+from app.aws.sqs.retry_prospect import is_resolvable_by_retry
 from app.collection.article_acquisition.acquisition_retry import (
     MAX_ACQUISITION_SEND_ATTEMPTS,
-    is_transient_send_failure,
     should_retry_acquisition_send,
 )
 from app.collection.sources.acquisition_request import (
@@ -94,7 +94,7 @@ class SourceAcquisitionDispatcher:
                 # 再試行してよい失敗を回数で諦めただけなら想定内として warning にする。
                 (
                     logger.warning
-                    if is_transient_send_failure(failure.error)
+                    if is_resolvable_by_retry(failure.error)
                     else logger.error
                 )(
                     "source_acquisition_send_failed",
@@ -107,7 +107,7 @@ class SourceAcquisitionDispatcher:
                 target_count=target_count,
                 failed_count=len(failures),
                 requires_investigation=any(
-                    not is_transient_send_failure(failure.error) for failure in failures
+                    not is_resolvable_by_retry(failure.error) for failure in failures
                 ),
             )
         return target_count

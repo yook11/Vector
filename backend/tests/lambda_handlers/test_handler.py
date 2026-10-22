@@ -61,7 +61,8 @@ def test_entry_passes_its_fixed_route(
 
     run.assert_awaited_once_with(
         settings,
-        EventDeliveryRoute(event_type, "https://sqs.invalid/selected-queue", builder),
+        EventDeliveryRoute(event_type, "https://sqs.invalid/selected-queue"),
+        builder,
     )
     assert response == {"status": "completed"}
 

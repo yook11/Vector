@@ -6,12 +6,12 @@ from datetime import timedelta
 from uuid import UUID
 
 from app.analysis.assessment.events import ArticleAssessedInScope
+from app.aws.sqs.errors import (
+    MessageSendConfigurationError,
+    MessageSendConfigurationReason,
+)
 from app.outbox.delivery.failure_handler import OutboxDeliveryFailureHandler
 from app.outbox.delivery.relay import OutboxRelay
-from app.outbox.publishing.errors import (
-    PublishConfigurationError,
-    PublishConfigurationReason,
-)
 from tests.outbox.helpers import PAST, insert_event, read_event
 
 EVENT_TYPE = ArticleAssessedInScope.EVENT_TYPE
@@ -36,8 +36,8 @@ class ClaimHold:
 
 
 def configuration_error():
-    return PublishConfigurationError(
-        reason=PublishConfigurationReason.MISSING_CREDENTIALS
+    return MessageSendConfigurationError(
+        reason=MessageSendConfigurationReason.MISSING_CREDENTIALS
     )
 
 

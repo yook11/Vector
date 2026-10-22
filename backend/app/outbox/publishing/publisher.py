@@ -7,10 +7,25 @@ from datetime import datetime
 from typing import TYPE_CHECKING, Any, Protocol
 from uuid import UUID
 
-from app.outbox.publishing.errors import PublishError
+from app.analysis.assessment.events import AssessedEventInvalidError
+from app.analysis.curation.events import CuratedEventInvalidError
+from app.aws.sqs.errors import MessageSendError
+from app.collection.article_acquisition.events import IncompleteArticleEventInvalidError
+from app.collection.events import AnalyzableEventInvalidError
+from app.outbox.publishing.route import EventRouteMismatchError
 
 if TYPE_CHECKING:
     from app.outbox.delivery.repository import ClaimedOutboxEvent
+
+# 型注釈とisinstanceの両方に使うため、TypeAliasやtype文ではなくUnionTypeの値として持つ。
+PublishFailure = (
+    MessageSendError
+    | AnalyzableEventInvalidError
+    | IncompleteArticleEventInvalidError
+    | AssessedEventInvalidError
+    | CuratedEventInvalidError
+    | EventRouteMismatchError
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -51,13 +66,13 @@ class PublishFailed:
     """イベント単位の送信失敗で、再試行や停止の判断は含めない。"""
 
     event_id: UUID
-    error: PublishError
+    error: PublishFailure
 
     def __post_init__(self) -> None:
         if not isinstance(self.event_id, UUID):
             raise TypeError("publish result event_id must be a UUID")
-        if not isinstance(self.error, PublishError):
-            raise TypeError("publisher failure must contain PublishError")
+        if not isinstance(self.error, PublishFailure):
+            raise TypeError("publisher failure must be a PublishFailure")
 
 
 @dataclass(frozen=True, slots=True)

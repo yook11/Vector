@@ -96,15 +96,13 @@ def test_sender_body_round_trip_keeps_identity_time_and_payload(data):
     ],
 )
 def test_sender_and_receiver_share_validation_details(data, changes):
-    """本文生成と受信検証が同じ理由・詳細を返し、入力の原因連鎖を保持しない。"""
-    from app.outbox.publishing.errors import PublishEventInvalidError
-
+    """本文生成と受信検証が同じ構築失敗の例外と詳細を返し、入力の原因連鎖を保持しない。"""
     data.update(changes)
     with pytest.raises(AssessedEventInvalidError) as received:
         ArticleAssessedInScopeEvent.from_input(
             ReceivedMessage(message_id="id", body=json.dumps(data)).parse_json()
         )
-    with pytest.raises(PublishEventInvalidError) as caught:
+    with pytest.raises(AssessedEventInvalidError) as caught:
         build_assessed_in_scope_message(
             EventEnvelope(
                 event_id=UUID(data["event_id"]),
@@ -115,7 +113,6 @@ def test_sender_and_receiver_share_validation_details(data, changes):
             )
         )
     sent = caught.value
-    assert sent.reason.value == received.value.invalid.reason.value
-    assert sent.issues == received.value.invalid.issues
+    assert sent.invalid == received.value.invalid
     assert sent.__cause__ is None and sent.__context__ is None
     assert "private-" not in str(sent)

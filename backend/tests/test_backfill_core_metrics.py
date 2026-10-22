@@ -18,10 +18,10 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from logfire.testing import CaptureLogfire
 
+from app.aws.sqs.errors import MessageSendUnexpectedError
 from app.backfill import service
 from app.backfill.targets import BackfillEventTarget
 from app.collection.events import AnalyzableArticleCreated
-from app.outbox.publishing.errors import PublishError
 from app.outbox.publishing.publisher import (
     BatchPublishResult,
     PublishFailed,
@@ -100,7 +100,9 @@ def _publisher(*, failed_positions: frozenset[int] = frozenset()) -> MagicMock:
     publisher = MagicMock()
     publisher.publish_batch.side_effect = lambda items: BatchPublishResult(
         tuple(
-            PublishFailed(item.event_id, PublishError())
+            PublishFailed(
+                item.event_id, MessageSendUnexpectedError(exception_type="RuntimeError")
+            )
             if position in failed_positions
             else PublishSucceeded(item.event_id)
             for position, item in enumerate(items)

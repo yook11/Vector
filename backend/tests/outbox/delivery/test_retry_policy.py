@@ -1,10 +1,47 @@
-"""再試行・停止の契約を、外部通信やDBを使わず検証する。"""
+"""送信の失敗から再試行・停止を決める判断を、SQSへの送信の失敗などを直接渡し、外部通信やDBを使わず検証する。"""
 
-from dataclasses import FrozenInstanceError
 from datetime import timedelta
 
 import pytest
 
+from app.analysis.assessment.events import (
+    AssessedEventInvalid,
+    AssessedEventInvalidError,
+    AssessedEventInvalidReason,
+)
+from app.analysis.curation.events import (
+    CuratedEventInvalid,
+    CuratedEventInvalidError,
+    CuratedEventInvalidReason,
+)
+from app.aws.sqs.errors import (
+    MessageSendConfigurationError,
+    MessageSendConfigurationReason,
+    MessageSendCredentialsError,
+    MessageSendError,
+    MessageSendTransportError,
+    MessageSendUnexpectedError,
+    SqsServiceError,
+    SqsServiceErrorReason,
+)
+from app.aws.sqs.outgoing_message import (
+    MessageBodyMismatchError,
+    MessageTooLargeError,
+    SqsResponseField,
+    SqsResponseInvalidError,
+    SqsResponseInvalidReason,
+)
+from app.collection.article_acquisition.events import (
+    IncompleteArticleEventInvalid,
+    IncompleteArticleEventInvalidError,
+    IncompleteArticleEventInvalidReason,
+)
+from app.collection.events import (
+    AnalyzableEventInvalid,
+    AnalyzableEventInvalidError,
+    AnalyzableEventInvalidReason,
+)
+from app.db.errors import DatabaseUnexpectedError
 from app.http.failure import (
     HttpTransportFailure,
     HttpTransportFailureReason,
@@ -17,165 +54,189 @@ from app.outbox.delivery.retry_policy import (
     decide_publish_retry,
 )
 from app.outbox.delivery.values import RetryDelay
-from app.outbox.publishing.errors import (
-    PublishCleanupError,
-    PublishConfigurationError,
-    PublishConfigurationReason,
-    PublishError,
-    PublishEventInvalidError,
-    PublishEventInvalidReason,
-    PublishPhase,
-    PublishResponseInvalidError,
-    PublishServiceError,
-    PublishServiceReason,
-    PublishTransportError,
-    PublishUnexpectedError,
-)
+from app.outbox.publishing.route import EventRouteMismatchError
 
 
-def transport(reason=HttpTransportFailureReason.NETWORK_IO):
-    return PublishTransportError(
-        failure=HttpTransportFailure(HttpTransportStage.CONNECT, reason)
+def _throttled():
+    return SqsServiceError(
+        reason=SqsServiceErrorReason.THROTTLED, service_code="RequestThrottled"
+    )
+
+
+def _transport(reason=HttpTransportFailureReason.TIMEOUT):
+    return MessageSendTransportError(
+        failure=HttpTransportFailure(HttpTransportStage.CONNECT, reason),
+        exception_type="ConnectTimeoutError",
+    )
+
+
+@pytest.mark.parametrize("error", [_throttled(), _transport()])
+def test_resolvable_sqs_failure_is_retried_after_first_delay(error):
+    """送り直せば直りうるSQSの失敗(スロットリング・通信の待ち切れ)は、1回目の失敗なら30秒後に再試行する。"""
+    assert decide_publish_retry(error, attempt_count=1, jitter=0.5) == Retryable(
+        RetryDelay(timedelta(seconds=30))
     )
 
 
 @pytest.mark.parametrize(
-    ("reason", "expected"),
+    ("error", "reason"),
     [
         (
-            HttpTransportFailureReason.CERTIFICATE_VERIFICATION,
-            NonRetryable(NonRetryableReason.NON_RETRYABLE_FAILURE),
+            SqsServiceError(
+                reason=SqsServiceErrorReason.ACCESS_DENIED, service_code="AccessDenied"
+            ),
+            NonRetryableReason.NON_RETRYABLE_FAILURE,
         ),
         (
-            HttpTransportFailureReason.UNKNOWN,
-            NonRetryable(NonRetryableReason.UNCLASSIFIED_FAILURE),
+            SqsServiceError(
+                reason=SqsServiceErrorReason.UNKNOWN, service_code="FutureError"
+            ),
+            NonRetryableReason.UNCLASSIFIED_FAILURE,
+        ),
+        (
+            _transport(HttpTransportFailureReason.CERTIFICATE_VERIFICATION),
+            NonRetryableReason.NON_RETRYABLE_FAILURE,
+        ),
+        (
+            _transport(HttpTransportFailureReason.UNKNOWN),
+            NonRetryableReason.UNCLASSIFIED_FAILURE,
+        ),
+        (
+            MessageSendConfigurationError(
+                reason=MessageSendConfigurationReason.MISSING_CREDENTIALS
+            ),
+            NonRetryableReason.NON_RETRYABLE_FAILURE,
+        ),
+        (
+            MessageSendCredentialsError(exception_type="CredentialRetrievalError"),
+            NonRetryableReason.NON_RETRYABLE_FAILURE,
+        ),
+        (MessageTooLargeError(), NonRetryableReason.NON_RETRYABLE_FAILURE),
+        (
+            SqsResponseInvalidError(
+                reason=SqsResponseInvalidReason.MISSING,
+                field=SqsResponseField.MESSAGE_ID,
+            ),
+            NonRetryableReason.NON_RETRYABLE_FAILURE,
+        ),
+        (MessageBodyMismatchError(), NonRetryableReason.NON_RETRYABLE_FAILURE),
+        (
+            AnalyzableEventInvalidError(
+                AnalyzableEventInvalid(
+                    reason=AnalyzableEventInvalidReason.INVALID_PAYLOAD, issues=()
+                )
+            ),
+            NonRetryableReason.NON_RETRYABLE_FAILURE,
+        ),
+        (
+            IncompleteArticleEventInvalidError(
+                IncompleteArticleEventInvalid(
+                    reason=IncompleteArticleEventInvalidReason.INVALID_PAYLOAD,
+                    issues=(),
+                )
+            ),
+            NonRetryableReason.NON_RETRYABLE_FAILURE,
+        ),
+        (
+            AssessedEventInvalidError(
+                AssessedEventInvalid(
+                    reason=AssessedEventInvalidReason.INVALID_PAYLOAD, issues=()
+                )
+            ),
+            NonRetryableReason.NON_RETRYABLE_FAILURE,
+        ),
+        (
+            CuratedEventInvalidError(
+                CuratedEventInvalid(
+                    reason=CuratedEventInvalidReason.INVALID_PAYLOAD, issues=()
+                )
+            ),
+            NonRetryableReason.NON_RETRYABLE_FAILURE,
+        ),
+        (EventRouteMismatchError(), NonRetryableReason.NON_RETRYABLE_FAILURE),
+        (
+            MessageSendUnexpectedError(exception_type="ParamValidationError"),
+            NonRetryableReason.UNEXPECTED_FAILURE,
         ),
     ],
 )
-def test_non_resolvable_transport_failure_stop_reason(reason, expected):
-    """証明書の検証の失敗は再試行しない失敗、分類できない通信の失敗は未分類の失敗として止める。"""
-    assert (
-        decide_publish_retry(transport(reason), attempt_count=1, jitter=0.5) == expected
+def test_non_resolvable_failure_stops_with_its_reason(error, reason):
+    """送り直しても直らない失敗は止め、未分類のSQSの拒否・通信の失敗は未分類、想定外は想定外、それ以外は再試行しない失敗を理由にする。"""
+    assert decide_publish_retry(error, attempt_count=1, jitter=0.5) == NonRetryable(
+        reason
     )
 
 
-@pytest.mark.parametrize("reason", list(PublishServiceReason))
-@pytest.mark.parametrize("status", [None, 403, 503])
-def test_all_service_reasons_ignore_raw_status(reason, status):
-    """AWS側の応答を再分類せず、共通reasonだけで決める。"""
-    error = PublishServiceError(
-        reason=reason,
-        service_error_code="private-code",
-        status_code=status,
-        request_id="private-id",
-    )
-    result = decide_publish_retry(error, attempt_count=1, jitter=0.5)
-    if reason in (
-        PublishServiceReason.THROTTLED,
-        PublishServiceReason.SERVICE_UNAVAILABLE,
-    ):
-        assert result == Retryable(RetryDelay(timedelta(seconds=30)))
-    elif reason is PublishServiceReason.UNCLASSIFIED:
-        assert result == NonRetryable(NonRetryableReason.UNCLASSIFIED_FAILURE)
-    else:
-        assert result == NonRetryable(NonRetryableReason.NON_RETRYABLE_FAILURE)
+def test_unrecognized_send_failure_stops_as_unexpected():
+    """今後追加される未対応の送信の失敗を、暗黙に再試行せず想定外として止める。"""
 
+    class FutureSendError(MessageSendError):
+        pass
 
-@pytest.mark.parametrize("reason", list(PublishConfigurationReason))
-def test_all_configuration_reasons_stop(reason):
-    """取得失敗を含む資格情報・設定の問題を自動再試行しない。"""
     assert decide_publish_retry(
-        PublishConfigurationError(reason=reason), attempt_count=1, jitter=0
-    ) == NonRetryable(NonRetryableReason.NON_RETRYABLE_FAILURE)
+        FutureSendError("future"), attempt_count=1, jitter=0
+    ) == NonRetryable(NonRetryableReason.UNEXPECTED_FAILURE)
 
 
-@pytest.mark.parametrize("reason", list(PublishEventInvalidReason))
-def test_all_event_invalid_reasons_stop(reason):
-    """不正なイベントは送信回数にかかわらず停止する。"""
-    assert decide_publish_retry(
-        PublishEventInvalidError(reason=reason), attempt_count=1, jitter=0
-    ) == NonRetryable(NonRetryableReason.NON_RETRYABLE_FAILURE)
-
-
-@pytest.mark.parametrize("phase", list(PublishPhase))
-def test_unexpected_phases_stop_delivery(phase):
-    """送信処理の想定外は発生段階にかかわらず停止する。"""
-    error = PublishUnexpectedError(
-        original_exception=RuntimeError("private"), phase=phase
+@pytest.mark.parametrize(
+    ("error", "reason"),
+    [
+        (
+            MessageSendConfigurationError(
+                reason=MessageSendConfigurationReason.MISSING_CREDENTIALS
+            ),
+            NonRetryableReason.NON_RETRYABLE_FAILURE,
+        ),
+        (
+            SqsServiceError(
+                reason=SqsServiceErrorReason.UNKNOWN, service_code="FutureError"
+            ),
+            NonRetryableReason.UNCLASSIFIED_FAILURE,
+        ),
+        (
+            MessageSendUnexpectedError(exception_type="ParamValidationError"),
+            NonRetryableReason.UNEXPECTED_FAILURE,
+        ),
+    ],
+)
+def test_stop_reason_is_kept_at_retry_limit(error, reason):
+    """上限の5回目でも、送り直しても直らない失敗は上限到達ではなく元の理由で止める。"""
+    assert decide_publish_retry(error, attempt_count=5, jitter=0.5) == NonRetryable(
+        reason
     )
-    assert decide_publish_retry(error, attempt_count=1, jitter=0) == NonRetryable(
-        NonRetryableReason.UNEXPECTED_FAILURE
-    )
-
-
-@pytest.mark.parametrize(("attempt", "base"), [(1, 30), (2, 120), (3, 600), (4, 1800)])
-@pytest.mark.parametrize(("jitter", "percent"), [(0, 80), (0.5, 100), (1, 120)])
-def test_delay_schedule_and_jitter_endpoints(attempt, base, jitter, percent):
-    """各試行の待ち時間と±20%の境界を固定する。"""
-    assert decide_publish_retry(
-        transport(),
-        attempt_count=attempt,
-        jitter=jitter,
-    ) == Retryable(RetryDelay(timedelta(seconds=base * percent / 100)))
 
 
 @pytest.mark.parametrize("attempt", [5, 6, 100])
-def test_retryable_failure_stops_at_fifth_attempt(attempt):
-    """初回を含めた5回目の失敗で追加の再試行を止める。"""
-    assert decide_publish_retry(transport(), attempt_count=attempt, jitter=0) == (
-        NonRetryable(NonRetryableReason.RETRY_EXHAUSTED)
-    )
+def test_resolvable_failure_stops_at_fifth_attempt(attempt):
+    """初回を含めた5回目の失敗で、送り直せる失敗でも追加の再試行を止める。"""
+    assert decide_publish_retry(
+        _transport(), attempt_count=attempt, jitter=0
+    ) == NonRetryable(NonRetryableReason.RETRY_EXHAUSTED)
+
+
+@pytest.mark.parametrize(
+    ("attempt", "seconds"), [(1, 30), (2, 120), (3, 600), (4, 1800)]
+)
+def test_delay_schedule(attempt, seconds):
+    """jitterが中央のとき、1〜4回目の失敗の待ち時間は30秒・2分・10分・30分になる。"""
+    assert decide_publish_retry(
+        _transport(), attempt_count=attempt, jitter=0.5
+    ) == Retryable(RetryDelay(timedelta(seconds=seconds)))
+
+
+@pytest.mark.parametrize(("jitter", "seconds"), [(0, 24), (1, 36)])
+def test_jitter_endpoints(jitter, seconds):
+    """jitterの両端では、1回目の待ち時間が基準の30秒から±20%の24秒と36秒になる。"""
+    assert decide_publish_retry(
+        _transport(), attempt_count=1, jitter=jitter
+    ) == Retryable(RetryDelay(timedelta(seconds=seconds)))
 
 
 @pytest.mark.parametrize(
     "error",
-    [
-        transport(HttpTransportFailureReason.CERTIFICATE_VERIFICATION),
-        PublishConfigurationError(
-            reason=PublishConfigurationReason.MISSING_CREDENTIALS
-        ),
-        PublishEventInvalidError(reason=PublishEventInvalidReason.INVALID_PAYLOAD),
-        PublishServiceError(
-            reason=PublishServiceReason.UNCLASSIFIED,
-            service_error_code="x",
-            status_code=500,
-        ),
-        PublishUnexpectedError(
-            original_exception=ValueError(), phase=PublishPhase.SEND
-        ),
-        PublishError(),
-    ],
+    [ValueError("db failed"), DatabaseUnexpectedError(), KeyboardInterrupt(), None],
 )
-@pytest.mark.parametrize("attempt", [5, 6])
-def test_immediate_stop_reason_takes_precedence_over_retry_limit(error, attempt):
-    """即停止理由を上限到達で上書きしない。"""
-    assert decide_publish_retry(error, attempt_count=attempt, jitter=0) == (
-        decide_publish_retry(error, attempt_count=1, jitter=0)
-    )
-
-
-def test_unrecognized_publish_error_stops_as_unexpected():
-    """今後追加される未対応の種類を暗黙に再試行しない。"""
-
-    class FuturePublishError(PublishError):
-        pass
-
-    for error in (PublishError(), FuturePublishError()):
-        assert decide_publish_retry(error, attempt_count=1, jitter=0) == (
-            NonRetryable(NonRetryableReason.UNEXPECTED_FAILURE)
-        )
-
-
-@pytest.mark.parametrize(
-    "error",
-    [
-        ValueError("db failed"),
-        KeyboardInterrupt(),
-        None,
-        PublishCleanupError(original_exception=RuntimeError()),
-    ],
-)
-def test_non_publish_error_is_rejected(error):
+def test_non_publish_failure_is_rejected(error):
     """DBやプロセスの失敗を配信失敗の判断対象にしない。"""
     with pytest.raises(TypeError):
         decide_publish_retry(error, attempt_count=1, jitter=0)
@@ -185,14 +246,14 @@ def test_non_publish_error_is_rejected(error):
 def test_non_integer_attempt_count_is_rejected(attempt):
     """boolを含む整数以外の回数を拒否する。"""
     with pytest.raises(TypeError):
-        decide_publish_retry(transport(), attempt_count=attempt, jitter=0)
+        decide_publish_retry(_transport(), attempt_count=attempt, jitter=0)
 
 
 @pytest.mark.parametrize("attempt", [0, -1])
 def test_non_positive_attempt_count_is_rejected(attempt):
     """確保前の回数を誤って渡すことを防ぐ。"""
     with pytest.raises(ValueError):
-        decide_publish_retry(transport(), attempt_count=attempt, jitter=0)
+        decide_publish_retry(_transport(), attempt_count=attempt, jitter=0)
 
 
 @pytest.mark.parametrize(
@@ -201,101 +262,20 @@ def test_non_positive_attempt_count_is_rejected(attempt):
 def test_out_of_range_jitter_is_rejected(jitter):
     """非有限値や範囲外の値から待ち時間を生成しない。"""
     with pytest.raises(ValueError):
-        decide_publish_retry(transport(), attempt_count=1, jitter=jitter)
+        decide_publish_retry(_transport(), attempt_count=1, jitter=jitter)
 
 
 @pytest.mark.parametrize("jitter", [True, False, "0.5", None])
 def test_non_numeric_jitter_is_rejected(jitter):
     """boolや文字列を乱数値とみなさない。"""
     with pytest.raises(TypeError):
-        decide_publish_retry(transport(), attempt_count=1, jitter=jitter)
+        decide_publish_retry(_transport(), attempt_count=1, jitter=jitter)
 
 
-def test_decision_is_repeatable_and_does_not_mutate_error():
-    """診断情報と元例外のチェーンを変更せず同じ結果を返す。"""
-    error = PublishServiceError(
-        reason=PublishServiceReason.THROTTLED,
-        service_error_code="AccessDenied",
-        status_code=403,
-        request_id="private",
-    )
-    error.__cause__ = RuntimeError("private-message")
-    before = vars(error).copy()
-    cause = error.__cause__
-    expected = Retryable(RetryDelay(timedelta(seconds=120)))
-    assert decide_publish_retry(error, attempt_count=2, jitter=0.5) == expected
-    assert vars(error) == before
-    assert error.__cause__ is cause
-    error.service_error_code = "different"
-    error.request_id = "different"
-    assert decide_publish_retry(error, attempt_count=2, jitter=0.5) == expected
-    error.service_error_code = before["service_error_code"]
-    error.request_id = before["request_id"]
-    assert vars(error) == before
-    assert error.__cause__ is cause
-
-
-@pytest.mark.parametrize(
-    "result",
-    [
-        Retryable(RetryDelay(timedelta(seconds=30))),
-        NonRetryable(NonRetryableReason.RETRY_EXHAUSTED),
-    ],
-)
-def test_decisions_are_immutable(result):
-    """handlerへ渡した判断結果を後から変更できない。"""
-    with pytest.raises(FrozenInstanceError):
-        if isinstance(result, Retryable):
-            result.delay = timedelta(0)
-        else:
-            result.reason = NonRetryableReason.UNEXPECTED_FAILURE
-
-
-@pytest.mark.parametrize("attempt", [1, 4, 5, 6, 100])
-def test_integrity_failure_stops_regardless_of_attempt(attempt):
-    """本文不一致は試行回数にかかわらず停止し、失敗の値を書き換えない。"""
-    from app.outbox.publishing.errors import (
-        PublishIntegrityError,
-        PublishIntegrityReason,
-    )
-
-    error = PublishIntegrityError(reason=PublishIntegrityReason.BODY_CHECKSUM_MISMATCH)
-    before = vars(error).copy()
-    assert decide_publish_retry(
-        error, attempt_count=attempt, jitter=0.5
-    ) == NonRetryable(NonRetryableReason.NON_RETRYABLE_FAILURE)
-    assert vars(error) == before
-
-
-@pytest.mark.parametrize("attempt", [1, 5, 6])
-def test_response_invalid_stops_without_retry_limit_reclassification(attempt):
-    """受付の成否を確認できない応答違反は、回数によらず明示的に停止する。"""
-    error = PublishResponseInvalidError()
-    assert decide_publish_retry(
-        error, attempt_count=attempt, jitter=0.5
-    ) == NonRetryable(NonRetryableReason.NON_RETRYABLE_FAILURE)
-
-
-def test_retry_delays_cover_every_attempt_before_shared_limit():
-    """確保処理と共有する上限まで、待ち時間と上限到達の判断が整合する。"""
-    from app.outbox.delivery.retry_policy import _RETRY_DELAYS, MAX_PUBLISH_ATTEMPTS
-
-    assert MAX_PUBLISH_ATTEMPTS == 5
-    assert len(_RETRY_DELAYS) == MAX_PUBLISH_ATTEMPTS - 1
-    for attempt in range(1, MAX_PUBLISH_ATTEMPTS):
-        assert decide_publish_retry(
-            transport(), attempt_count=attempt, jitter=0.5
-        ) == Retryable(RetryDelay(timedelta(seconds=_RETRY_DELAYS[attempt - 1])))
-    assert decide_publish_retry(
-        transport(), attempt_count=MAX_PUBLISH_ATTEMPTS, jitter=0.5
-    ) == NonRetryable(NonRetryableReason.RETRY_EXHAUSTED)
-
-
-@pytest.mark.parametrize("delay", [timedelta(0), timedelta(seconds=-1), None])
-def test_retryable_requires_validated_delay(delay):
-    """判断結果は検証済みの待ち時間を保持する。"""
+def test_retryable_rejects_raw_timedelta():
+    """再試行の判断は、検証済みのRetryDelayでない生のtimedeltaを待ち時間として受け取らない。"""
     with pytest.raises(TypeError):
-        Retryable(delay)
+        Retryable(timedelta(seconds=30))
 
 
 @pytest.mark.parametrize("reason", ["non_retryable_failure", "", "custom_reason", None])

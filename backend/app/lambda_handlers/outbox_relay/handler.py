@@ -26,9 +26,8 @@ def embedding_handler(event: object, context: object) -> dict[str, str]:
     route = EventDeliveryRoute(
         event_type=ArticleAssessedInScope.EVENT_TYPE,
         queue_url=settings.sqs_article_embedding_queue_url,
-        build_message=build_assessed_in_scope_message,
     )
-    return asyncio.run(run_relay(settings, route))
+    return asyncio.run(run_relay(settings, route, build_assessed_in_scope_message))
 
 
 def assessment_handler(event: object, context: object) -> dict[str, str]:
@@ -37,9 +36,8 @@ def assessment_handler(event: object, context: object) -> dict[str, str]:
     route = EventDeliveryRoute(
         event_type=ArticleCuratedSignal.EVENT_TYPE,
         queue_url=settings.sqs_article_assessment_queue_url,
-        build_message=build_curated_signal_message,
     )
-    return asyncio.run(run_relay(settings, route))
+    return asyncio.run(run_relay(settings, route, build_curated_signal_message))
 
 
 def curation_handler(event: object, context: object) -> dict[str, str]:
@@ -48,9 +46,8 @@ def curation_handler(event: object, context: object) -> dict[str, str]:
     route = EventDeliveryRoute(
         event_type=AnalyzableArticleCreated.EVENT_TYPE,
         queue_url=settings.sqs_article_curation_queue_url,
-        build_message=build_analyzable_created_message,
     )
-    return asyncio.run(run_relay(settings, route))
+    return asyncio.run(run_relay(settings, route, build_analyzable_created_message))
 
 
 def completion_handler(event: object, context: object) -> dict[str, str]:
@@ -59,6 +56,5 @@ def completion_handler(event: object, context: object) -> dict[str, str]:
     route = EventDeliveryRoute(
         event_type=IncompleteArticleRecorded.EVENT_TYPE,
         queue_url=settings.sqs_article_completion_queue_url,
-        build_message=build_incomplete_recorded_message,
     )
-    return asyncio.run(run_relay(settings, route))
+    return asyncio.run(run_relay(settings, route, build_incomplete_recorded_message))

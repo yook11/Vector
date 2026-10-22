@@ -1,4 +1,4 @@
-"""バッチの受付結果と、個別失敗・全体失敗の境界を検証する。"""
+"""バッチの受付結果と、個別失敗・全体失敗の境界を検証する(SQSクライアントはモック・Stubber・資格情報のない本物のSDK)。"""
 
 from __future__ import annotations
 
@@ -10,24 +10,26 @@ from uuid import UUID
 
 import botocore.session
 import pytest
-from botocore.credentials import ReadOnlyCredentials
-from botocore.exceptions import ClientError, HTTPClientError, ReadTimeoutError
+from botocore.credentials import CredentialResolver
+from botocore.exceptions import (
+    ClientError,
+    HTTPClientError,
+    NoCredentialsError,
+    ReadTimeoutError,
+)
 from botocore.stub import Stubber
 
-from app.aws.sqs.errors import SqsServiceError
-from app.aws.sqs.outgoing_message import SqsResponseInvalidError
-from app.outbox.publishing.errors import (
-    PublishCleanupError,
-    PublishConfigurationError,
-    PublishConfigurationReason,
-    PublishEventInvalidError,
-    PublishEventInvalidReason,
-    PublishPhase,
-    PublishResponseInvalidError,
-    PublishServiceError,
-    PublishServiceReason,
-    PublishTransportError,
-    PublishUnexpectedError,
+from app.aws.sqs.errors import (
+    MessageSendConfigurationError,
+    MessageSendCredentialsError,
+    MessageSendTransportError,
+    MessageSendUnexpectedError,
+    SqsServiceError,
+)
+from app.aws.sqs.outgoing_message import (
+    MessageBodyMismatchError,
+    MessageTooLargeError,
+    SqsResponseInvalidError,
 )
 from app.outbox.publishing.publisher import (
     BatchPublishResult,
@@ -36,7 +38,6 @@ from app.outbox.publishing.publisher import (
 )
 from app.outbox.publishing.route import EventMessage
 from app.outbox.sqs import failure_handler as failure_handler_module
-from app.outbox.sqs import publisher as publisher_module
 from app.outbox.sqs.failure_handler import SqsPublishFailureHandler
 from app.outbox.sqs.publisher import SqsSender
 
@@ -148,8 +149,8 @@ def test_batch_success_preserves_body_and_input_order_on_resend(envelope, count)
     assert events == original
 
 
-def test_partial_failure_keeps_success_without_entry_diagnostics(envelope):
-    """HTTP 200の部分失敗に、項目にないstatusやまとめ全体のRequestIdを付けない。"""
+def test_partial_failure_keeps_success_and_rejects_only_failed_entry(envelope):
+    """HTTP 200の部分失敗では失敗した項目だけをSQSの拒否にし、成功の受付は保つ。"""
     second = replace(envelope, event_id=UUID(int=2))
     sender, client, _ = _sender(
         response={
@@ -161,28 +162,30 @@ def test_partial_failure_keeps_success_without_entry_diagnostics(envelope):
     result = sender.send_batch(queue_url=QUEUE_URL, messages=[envelope, second])
     failed, succeeded = result.results
     assert isinstance(failed, PublishFailed)
-    assert isinstance(failed.error, PublishServiceError)
-    assert failed.error.reason is PublishServiceReason.ACCESS_DENIED
-    assert failed.error.status_code is None
-    assert failed.error.request_id is None
+    assert (type(failed.error), failed.error.reason, failed.error.service_code) == (
+        SqsServiceError,
+        "access_denied",
+        "AccessDenied",
+    )
     assert succeeded == PublishSucceeded(second.event_id)
     client.send_message_batch.assert_called_once()
     client.close.assert_called_once()
 
 
 @pytest.mark.parametrize("sender_fault", [False, True])
-def test_unknown_entry_code_is_unclassified_regardless_of_sender_fault(
+def test_unknown_entry_code_is_unknown_regardless_of_sender_fault(
     envelope, sender_fault
 ):
-    """未知のAWSコードをSenderFaultによらず未分類として保持する。"""
+    """未知のAWSコードを、SenderFaultによらず未知の理由のSQSの拒否として保持する。"""
     sender, _, _ = _sender(
         response={"Failed": [_failure(envelope.event_id, "FutureCode", sender_fault)]}
     )
     error = sender.send_batch(queue_url=QUEUE_URL, messages=[envelope]).results[0].error
-    assert error.reason is PublishServiceReason.UNCLASSIFIED
-    assert error.service_error_code == "FutureCode"
-    assert error.status_code is None
-    assert error.request_id is None
+    assert (type(error), error.reason, error.service_code) == (
+        SqsServiceError,
+        "unknown",
+        "FutureCode",
+    )
 
 
 @pytest.mark.parametrize("count", [1, 2])
@@ -205,11 +208,9 @@ def test_message_and_batch_byte_limits(envelope, count, extra, small_message_lim
             sender.send_batch(queue_url=QUEUE_URL, messages=events)
         factory.assert_not_called()
     elif extra:
-        assert (
-            sender.send_batch(queue_url=QUEUE_URL, messages=events)
-            .results[0]
-            .error.reason
-            is PublishEventInvalidReason.MESSAGE_TOO_LARGE
+        assert isinstance(
+            sender.send_batch(queue_url=QUEUE_URL, messages=events).results[0].error,
+            MessageTooLargeError,
         )
         factory.assert_not_called()
     else:
@@ -228,18 +229,23 @@ def test_message_and_batch_byte_limits(envelope, count, extra, small_message_lim
                 {"Error": {"Code": "AccessDenied", "Message": "private"}},
                 "SendMessageBatch",
             ),
-            PublishServiceError,
+            SqsServiceError,
         ),
-        (ReadTimeoutError(endpoint_url="private"), PublishTransportError),
-        (HTTPClientError(error="private"), PublishTransportError),
-        (RuntimeError("private"), PublishUnexpectedError),
+        (ReadTimeoutError(endpoint_url="private"), MessageSendTransportError),
+        (HTTPClientError(error="private"), MessageSendTransportError),
+        (
+            ClientError({"Error": {"Code": "AccessDenied"}}, "AssumeRole"),
+            MessageSendCredentialsError,
+        ),
+        (NoCredentialsError(), MessageSendConfigurationError),
+        (RuntimeError("private"), MessageSendUnexpectedError),
     ],
 )
 @pytest.mark.parametrize("close_fails", [False, True])
 def test_whole_request_failure_preserves_local_failure_and_cleanup(
     envelope, exc, expected, close_fails, cleanup_log
 ):
-    """全体失敗を送信対象へ反映し、ローカルの不正や先行障害を上書きしない。"""
+    """全体失敗(署名時の資格情報の取得の失敗を含む)を送信対象へ反映し、ローカルの不正や先行障害を上書きしない。"""
     cleanup_log.side_effect = RuntimeError("private log failure")
     good = replace(envelope, event_id=UUID(int=2))
     bad = replace(envelope, event_id=UUID(int=3), body="x" * (1024 * 1024 + 1))
@@ -248,86 +254,27 @@ def test_whole_request_failure_preserves_local_failure_and_cleanup(
     )
     result = sender.send_batch(queue_url=QUEUE_URL, messages=[envelope, good, bad])
     for outcome in result.results[:2]:
-        assert isinstance(outcome.error, expected)
-        assert outcome.error.__cause__ is exc
-    assert result.results[2].error.reason is PublishEventInvalidReason.MESSAGE_TOO_LARGE
+        assert type(outcome.error) is expected
+    assert isinstance(result.results[2].error, MessageTooLargeError)
     assert cleanup_log.call_count == int(close_fails)
     client.send_message_batch.assert_called_once()
     client.close.assert_called_once()
 
 
-@pytest.mark.parametrize(
-    "close_error",
-    [
-        RuntimeError("private"),
-        PublishConfigurationError(
-            reason=PublishConfigurationReason.MISSING_CREDENTIALS
-        ),
-    ],
-)
 @pytest.mark.parametrize("logging_failure", [False, True])
-def test_cleanup_failure_preserves_success(
-    envelope, close_error, logging_failure, cleanup_log
-):
-    """終了失敗を安全に記録し、診断出力が失敗しても受付結果を返す。"""
+def test_cleanup_failure_preserves_success(envelope, logging_failure, cleanup_log):
+    """終了失敗を例外の型だけで記録し、診断出力が失敗しても受付結果を返す。"""
     if logging_failure:
         cleanup_log.side_effect = RuntimeError("private log failure")
     sender, _, _ = _sender(
-        response={"Successful": [_success(envelope)]}, close_error=close_error
+        response={"Successful": [_success(envelope)]},
+        close_error=RuntimeError("private"),
     )
     result = sender.send_batch(queue_url=QUEUE_URL, messages=[envelope])
     assert result.results == (PublishSucceeded(envelope.event_id),)
     cleanup_log.assert_called_once_with(
-        "outbox_publish_cleanup_failed",
-        error_code="publish_cleanup_error",
-        original_exception_type=f"{type(close_error).__module__}.{type(close_error).__qualname__}",
+        "outbox_publish_cleanup_failed", error_class="builtins.RuntimeError"
     )
-
-
-def test_whole_request_classifier_failure_keeps_both_types(envelope, monkeypatch):
-    """分類処理が失敗しても元例外と分類例外の型を保持する。"""
-    original = RuntimeError("original private")
-    monkeypatch.setattr(
-        "app.outbox.sqs.error_mapping._publish_error_from_sqs_exception",
-        Mock(side_effect=ValueError("classifier private")),
-    )
-    sender, _, _ = _sender(error=original)
-    error = sender.send_batch(queue_url=QUEUE_URL, messages=[envelope]).results[0].error
-    assert error.phase is PublishPhase.CLASSIFY_FAILURE
-    assert error.original_exception_type == "builtins.RuntimeError"
-    assert error.classification_exception_type == "builtins.ValueError"
-    assert error.__cause__ is original
-
-
-def test_entry_classifier_failure_preserves_other_results(envelope, monkeypatch):
-    """応答対応付けの完了後は、個別の分類障害を該当イベントに限定する。"""
-    from app.outbox.sqs.error_mapping import _publish_service_error
-
-    def classify(error, **kwargs):
-        if error.service_code == "Bad":
-            raise ValueError("private")
-        return _publish_service_error(error, **kwargs)
-
-    monkeypatch.setattr("app.outbox.sqs.error_mapping._publish_service_error", classify)
-    events = [replace(envelope, event_id=UUID(int=i)) for i in [1, 2, 3]]
-    sender, _, _ = _sender(
-        response={
-            "Successful": [_success(events[0])],
-            "Failed": [
-                _failure(events[1].event_id, "Bad"),
-                _failure(events[2].event_id, "RequestThrottled"),
-            ],
-        }
-    )
-    result = sender.send_batch(queue_url=QUEUE_URL, messages=events)
-    assert result.results[0] == PublishSucceeded(events[0].event_id)
-    error = result.results[1].error
-    assert error.phase is PublishPhase.CLASSIFY_FAILURE
-    assert isinstance(error.__cause__, SqsServiceError)
-    assert error.__cause__.service_code == "Bad"
-    assert error.original_exception_type == "app.aws.sqs.errors.SqsServiceError"
-    assert error.classification_exception_type == "builtins.ValueError"
-    assert result.results[2].error.reason is PublishServiceReason.THROTTLED
 
 
 @pytest.mark.parametrize(
@@ -379,7 +326,6 @@ def test_malformed_response_invalidates_all_sent_results(envelope, case):
     result = sender.send_batch(queue_url=QUEUE_URL, messages=[envelope, second])
     assert len(result.results) == 2
     for outcome in result.results:
-        assert isinstance(outcome.error, PublishResponseInvalidError)
         expected = {
             "root": ("invalid_type", "response"),
             "list": ("invalid_type", "failed_entries"),
@@ -393,10 +339,11 @@ def test_malformed_response_invalidates_all_sent_results(envelope, case):
             "code": ("invalid_type", "error_code"),
             "sender_fault": ("invalid_type", "sender_fault"),
         }
-        cause = outcome.error.__cause__
-        assert isinstance(cause, SqsResponseInvalidError)
-        assert (cause.reason.value, cause.field.value) == expected[case]
-        assert vars(outcome.error) == {}
+        error = outcome.error
+        assert (type(error), (error.reason.value, error.field.value)) == (
+            SqsResponseInvalidError,
+            expected[case],
+        )
     client.close.assert_called_once()
 
 
@@ -411,34 +358,13 @@ def test_process_exit_is_not_wrapped_or_replaced_by_cleanup(envelope, exc, clean
     client.close.assert_called_once()
 
 
-@pytest.mark.parametrize("phase", ["initialize", "send"])
-def test_existing_publish_error_is_not_wrapped(envelope, phase):
-    """分類済みの送信エラーを同じインスタンスで返す。"""
-    original = PublishConfigurationError(
-        reason=PublishConfigurationReason.MISSING_CREDENTIALS
-    )
-    sender, client, factory = _sender(error=original if phase == "send" else None)
-    if phase == "initialize":
-        factory.side_effect = original
-    error = sender.send_batch(queue_url=QUEUE_URL, messages=[envelope]).results[0].error
-    assert error is original
-    assert error.__cause__ is None
-    if phase == "initialize":
-        client.send_message_batch.assert_not_called()
-
-
-def test_each_batch_freezes_credentials_and_closes_its_own_client(envelope):
-    """送信ごとに資格情報を確定し、その送信のクライアントを終了する。"""
+def test_each_batch_creates_and_closes_its_own_client(envelope):
+    """資格情報を自分で固定せず、送信ごとにクライアントを作って、その送信のクライアントを終了する。"""
     session = Mock()
     clients = [Mock(), Mock()]
     for client in clients:
         client.send_message_batch.return_value = {"Successful": [_success(envelope)]}
     session.create_client.side_effect = clients
-    freeze = session.get_credentials.return_value.get_frozen_credentials
-    freeze.side_effect = [
-        ReadOnlyCredentials("first", "secret", "token1"),
-        ReadOnlyCredentials("second", "secret", "token2"),
-    ]
     sender = SqsSender.from_session(
         session=session,
         region="ap-northeast-1",
@@ -447,11 +373,8 @@ def test_each_batch_freezes_credentials_and_closes_its_own_client(envelope):
         assert sender.send_batch(queue_url=QUEUE_URL, messages=[envelope]).results == (
             PublishSucceeded(envelope.event_id),
         )
-    assert freeze.call_count == 2
-    assert [
-        call.kwargs["aws_access_key_id"]
-        for call in session.create_client.call_args_list
-    ] == ["first", "second"]
+    assert session.create_client.call_count == 2
+    session.get_credentials.assert_not_called()
     assert (
         clients[0].send_message_batch.call_args
         == clients[1].send_message_batch.call_args
@@ -461,48 +384,45 @@ def test_each_batch_freezes_credentials_and_closes_its_own_client(envelope):
         client.close.assert_called_once()
 
 
-@pytest.mark.parametrize(
-    "exc",
-    [
-        ReadTimeoutError(endpoint_url="private"),
-        ClientError({"Error": {"Code": "AccessDenied"}}, "AssumeRole"),
-    ],
-)
-def test_credential_provider_failure_is_not_sqs_failure(envelope, exc):
-    """資格情報の取得障害をSQS送信障害と区別する。"""
-    session = Mock()
-    session.get_credentials.side_effect = exc
-    sender = SqsSender.from_session(
-        session=session,
-        region="ap-northeast-1",
-    )
+def test_missing_credentials_fail_at_signing_without_sending(envelope, monkeypatch):
+    """資格情報が見つからなくてもクライアントは作れ、署名で失敗して通信せずに全件を資格情報がない設定の不足にし、クライアントを閉じる。"""
+    session = botocore.session.Session()
+    session.register_component("credential_provider", CredentialResolver([]))
+    created = []
+    create_client = session.create_client
+
+    def create_and_watch(*args, **kwargs):
+        client = create_client(*args, **kwargs)
+        monkeypatch.setattr(
+            client._endpoint.http_session,
+            "send",
+            Mock(side_effect=AssertionError("must not send")),
+        )
+        monkeypatch.setattr(client, "close", Mock(wraps=client.close))
+        created.append(client)
+        return client
+
+    monkeypatch.setattr(session, "create_client", create_and_watch)
+    sender = SqsSender.from_session(session=session, region="ap-northeast-1")
+
     error = sender.send_batch(queue_url=QUEUE_URL, messages=[envelope]).results[0].error
-    assert isinstance(error, PublishConfigurationError)
-    assert error.reason is PublishConfigurationReason.CREDENTIALS_RETRIEVAL_FAILED
-    assert error.__cause__ is exc
-    session.create_client.assert_not_called()
+
+    assert (type(error), error.reason) == (
+        MessageSendConfigurationError,
+        "missing_credentials",
+    )
+    created[0].close.assert_called_once()
 
 
-def test_unexpected_initialization_failure_retains_phase(envelope):
-    """想定外の初期化障害に発生段階と元例外を保持する。"""
+def test_unexpected_client_creation_failure_keeps_only_its_type(envelope):
+    """想定外のクライアント生成の失敗は、型名だけを持つ想定外の送信の失敗になる。"""
     sender, _, factory = _sender()
     factory.side_effect = RuntimeError("private")
     error = sender.send_batch(queue_url=QUEUE_URL, messages=[envelope]).results[0].error
-    assert error.phase is PublishPhase.INITIALIZE
-    assert error.__cause__ is factory.side_effect
-
-
-def test_preparation_unexpected_failure_is_local(envelope, monkeypatch):
-    """本文の送信準備で発生した想定外例外を個別失敗にする。"""
-    sender, _, factory = _sender()
-    exc = RuntimeError("private")
-    monkeypatch.setattr(
-        "app.outbox.sqs.message_batch.OutgoingSqsMessage", Mock(side_effect=exc)
+    assert (type(error), error.exception_type) == (
+        MessageSendUnexpectedError,
+        "RuntimeError",
     )
-    error = sender.send_batch(queue_url=QUEUE_URL, messages=[envelope]).results[0].error
-    assert error.phase is PublishPhase.PREPARE_EVENT
-    assert error.__cause__ is exc
-    factory.assert_not_called()
 
 
 def test_results_are_frozen_and_do_not_expose_diagnostics(envelope, cleanup_log):
@@ -568,27 +488,24 @@ def test_all_entries_can_fail_with_missing_metadata(envelope, metadata):
     )
     result = sender.send_batch(queue_url=QUEUE_URL, messages=[envelope, second])
     assert [r.event_id for r in result.results] == [envelope.event_id, second.event_id]
-    assert [r.error.reason for r in result.results] == [
-        PublishServiceReason.ACCESS_DENIED,
-        PublishServiceReason.THROTTLED,
+    assert [(type(r.error), r.error.reason) for r in result.results] == [
+        (SqsServiceError, "access_denied"),
+        (SqsServiceError, "throttled"),
     ]
-    assert all(
-        r.error.request_id is None and r.error.status_code is None
-        for r in result.results
-    )
 
 
-def test_initialization_failure_preserves_invalid_event(envelope):
-    """送信対象を作れなくても、既知のイベント不正は設定失敗に置き換えない。"""
+def test_initialization_failure_preserves_oversized_event(envelope):
+    """クライアントを作れなくても、送る前に分かったサイズ超過は設定の不足に置き換えない。"""
     bad = replace(envelope, event_id=UUID(int=2), body="x" * (1024 * 1024 + 1))
-    original = PublishConfigurationError(
-        reason=PublishConfigurationReason.MISSING_CREDENTIALS
-    )
     sender, _, factory = _sender()
-    factory.side_effect = original
+    factory.side_effect = NoCredentialsError()
     result = sender.send_batch(queue_url=QUEUE_URL, messages=[bad, envelope])
-    assert result.results[0].error.reason is PublishEventInvalidReason.MESSAGE_TOO_LARGE
-    assert result.results[1].error is original
+    assert isinstance(result.results[0].error, MessageTooLargeError)
+    error = result.results[1].error
+    assert (type(error), error.reason) == (
+        MessageSendConfigurationError,
+        "missing_credentials",
+    )
 
 
 @pytest.mark.parametrize(
@@ -625,45 +542,10 @@ def test_checksum_uses_exact_transmitted_body(
     ]
 
 
-@pytest.mark.parametrize("include_valid", [False, True])
-def test_checksum_calculation_failure_is_local_before_send(
-    envelope, monkeypatch, include_valid
-):
-    """MD5計算障害を準備段階の失敗とし、残りの正常イベントだけ送る。"""
-    second = replace(envelope, event_id=UUID(int=2))
-    exc = ValueError("PRIVATE")
-    hash_call = Mock(
-        side_effect=[exc, md5(_body(second).encode("utf-8"), usedforsecurity=False)]
-    )
-    monkeypatch.setattr("app.aws.sqs.outgoing_message.md5", hash_call)
-    sender, client, factory = _sender(response={"Successful": [_success(second)]})
-    result = sender.send_batch(
-        queue_url=QUEUE_URL,
-        messages=[envelope, second] if include_valid else [envelope],
-    )
-    error = result.results[0].error
-    assert isinstance(error, PublishUnexpectedError)
-    assert error.phase is PublishPhase.PREPARE_EVENT
-    assert error.__cause__ is exc
-    assert all(
-        call.kwargs == {"usedforsecurity": False} for call in hash_call.call_args_list
-    )
-    if include_valid:
-        assert result.results[1] == PublishSucceeded(second.event_id)
-        assert len(client.send_message_batch.call_args.kwargs["Entries"]) == 1
-    else:
-        factory.assert_not_called()
-
-
 def test_mixed_integrity_and_service_failures_keep_success_and_cleanup(
     envelope, cleanup_log
 ):
     """本文不一致・サービス拒否・終了障害が混在しても成功を上書きしない。"""
-    from app.outbox.publishing.errors import (
-        PublishIntegrityError,
-        PublishIntegrityReason,
-    )
-
     events = [replace(envelope, event_id=UUID(int=i)) for i in [1, 2, 3]]
     mismatch = _success(events[1])
     mismatch["MD5OfMessageBody"] = "0" * 32
@@ -679,15 +561,13 @@ def test_mixed_integrity_and_service_failures_keep_success_and_cleanup(
     result = sender.send_batch(queue_url=QUEUE_URL, messages=events)
     assert [r.event_id for r in result.results] == [e.event_id for e in events]
     assert result.results[0] == PublishSucceeded(events[0].event_id)
-    assert isinstance(result.results[1].error, PublishIntegrityError)
-    assert (
-        result.results[1].error.reason is PublishIntegrityReason.BODY_CHECKSUM_MISMATCH
+    assert isinstance(result.results[1].error, MessageBodyMismatchError)
+    assert (type(result.results[2].error), result.results[2].error.reason) == (
+        SqsServiceError,
+        "throttled",
     )
-    assert result.results[2].error.reason is PublishServiceReason.THROTTLED
     cleanup_log.assert_called_once_with(
-        "outbox_publish_cleanup_failed",
-        error_code="publish_cleanup_error",
-        original_exception_type=f"{type(close_error).__module__}.{type(close_error).__qualname__}",
+        "outbox_publish_cleanup_failed", error_class="builtins.RuntimeError"
     )
     client.send_message_batch.assert_called_once()
     client.close.assert_called_once()
@@ -705,9 +585,9 @@ def test_response_invalid_preserves_local_failure_and_cleanup_without_raw_values
     response = {"Successful": [entry], "ResponseMetadata": {"RequestId": marker}}
     sender, client, _ = _sender(response=response, close_error=RuntimeError(marker))
     result = sender.send_batch(queue_url=QUEUE_URL, messages=[invalid, envelope])
-    assert isinstance(result.results[0].error, PublishEventInvalidError)
+    assert isinstance(result.results[0].error, MessageTooLargeError)
     error = result.results[1].error
-    assert isinstance(error, PublishResponseInvalidError)
+    assert isinstance(error, SqsResponseInvalidError)
     assert cleanup_log.call_count == 2
     diagnostic, cleanup = cleanup_log.call_args_list
     assert diagnostic.args == ("outbox_sqs_response_invalid",)
@@ -722,7 +602,7 @@ def test_response_invalid_preserves_local_failure_and_cleanup_without_raw_values
     assert marker not in str(cleanup_log.call_args_list)
     assert marker not in repr(result)
     assert marker not in str(error)
-    assert marker not in str(vars(error.__cause__))
+    assert marker not in str(vars(error))
     client.send_message_batch.assert_called_once()
     client.close.assert_called_once()
 
@@ -749,9 +629,7 @@ def test_client_closes_and_records_diagnostic_before_return(envelope, cleanup_lo
     assert trace == ["send", "close", "diagnostic", "returned"]
     assert result == BatchPublishResult((PublishSucceeded(envelope.event_id),))
     cleanup_log.assert_called_once_with(
-        "outbox_publish_cleanup_failed",
-        error_code="publish_cleanup_error",
-        original_exception_type="builtins.RuntimeError",
+        "outbox_publish_cleanup_failed", error_class="builtins.RuntimeError"
     )
     client.close.assert_called_once()
 
@@ -779,9 +657,9 @@ def test_invalid_response_diagnostic_is_once_per_sent_batch(
         invalid.event_id,
         events[1].event_id,
     ]
-    assert isinstance(result.results[1].error, PublishEventInvalidError)
+    assert isinstance(result.results[1].error, MessageTooLargeError)
     for index in (0, 2):
-        assert isinstance(result.results[index].error, PublishResponseInvalidError)
+        assert isinstance(result.results[index].error, SqsResponseInvalidError)
     cleanup_log.assert_called_once_with(
         "outbox_sqs_response_invalid",
         error_reason="not_in_request",
@@ -821,11 +699,12 @@ def test_response_diagnostic_process_exit_is_not_swallowed(envelope, cleanup_log
 
 
 def test_publisher_passes_diagnostics_to_injected_failure_handler(envelope):
-    """送信対象のIDと分類済み終了障害を、注入されたハンドラーへ渡す。"""
+    """送信対象のIDと応答の不正、元のままの終了障害を、注入されたハンドラーへ渡す。"""
     handler = Mock(spec=SqsPublishFailureHandler)
     client = Mock()
     client.send_message_batch.return_value = None
-    client.close.side_effect = RuntimeError("private cleanup")
+    close_error = RuntimeError("private cleanup")
+    client.close.side_effect = close_error
     publisher = SqsSender(
         client_factory=lambda: client,
         failure_handler=handler,
@@ -838,33 +717,25 @@ def test_publisher_passes_diagnostics_to_injected_failure_handler(envelope):
         invalid.event_id,
         envelope.event_id,
     ]
-    assert isinstance(result.results[0].error, PublishEventInvalidError)
-    assert isinstance(result.results[1].error, PublishResponseInvalidError)
+    assert isinstance(result.results[0].error, MessageTooLargeError)
+    assert isinstance(result.results[1].error, SqsResponseInvalidError)
     handler.handle_invalid_response.assert_called_once()
     diagnostic = handler.handle_invalid_response.call_args.kwargs
     assert diagnostic["event_ids"] == (envelope.event_id,)
-    assert isinstance(diagnostic["error"], SqsResponseInvalidError)
-    handler.handle_cleanup_failure.assert_called_once()
-    cleanup = handler.handle_cleanup_failure.call_args.args[0]
-    assert isinstance(cleanup, PublishCleanupError)
-    assert cleanup.original_exception_type == "builtins.RuntimeError"
+    assert diagnostic["error"] is result.results[1].error
+    handler.handle_cleanup_failure.assert_called_once_with(close_error)
 
 
 @pytest.mark.parametrize("primary_error", [None, KeyboardInterrupt()])
-def test_cleanup_classification_failure_preserves_original_outcome(
-    envelope, monkeypatch, primary_error
-):
-    """終了診断の分類障害でも、受付成功と先行するプロセス終了を維持する。"""
-    monkeypatch.setattr(
-        publisher_module,
-        "publish_cleanup_error_from_exception",
-        Mock(side_effect=ValueError("private classification")),
-    )
-    sender, client, _ = _sender(
-        response={"Successful": [_success(envelope)]},
-        error=primary_error,
-        close_error=RuntimeError("private cleanup"),
-    )
+def test_cleanup_diagnostic_failure_preserves_original_outcome(envelope, primary_error):
+    """終了診断そのものが失敗しても、受付成功と先行するプロセス終了を維持する。"""
+    handler = Mock(spec=SqsPublishFailureHandler)
+    handler.handle_cleanup_failure.side_effect = ValueError("private diagnostic")
+    client = Mock()
+    client.send_message_batch.return_value = {"Successful": [_success(envelope)]}
+    client.send_message_batch.side_effect = primary_error
+    client.close.side_effect = RuntimeError("private cleanup")
+    sender = SqsSender(client_factory=lambda: client, failure_handler=handler)
     if primary_error is None:
         assert sender.send_batch(queue_url=QUEUE_URL, messages=[envelope]).results == (
             PublishSucceeded(envelope.event_id),
