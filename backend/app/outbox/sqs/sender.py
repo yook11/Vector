@@ -13,7 +13,6 @@ from app.aws.sqs.outgoing_message import (
     SqsResponseInvalidError,
 )
 from app.outbox.publishing.contracts import (
-    BatchPublishResult,
     PublishFailed,
     PublishSucceeded,
 )
@@ -60,14 +59,21 @@ class SqsSender:
             failure_handler=SqsPublishFailureHandler(),
         )
 
-    def send_batch(
-        self, *, queue_url: str, messages: Sequence[EventMessage]
-    ) -> BatchPublishResult:
+    def send_batch[T](
+        self, *, queue_url: str, send_requests: Sequence[tuple[T, EventMessage]]
+    ) -> tuple[tuple[T, PublishSucceeded | PublishFailed], ...]:
         successes: list[PublishSucceeded] = []
         failures: list[PublishFailed] = []
         if not isinstance(queue_url, str) or not queue_url.strip():
             raise ValueError("queue URL must not be blank")
-        batch = SqsMessageBatch(messages)
+        if not isinstance(send_requests, Sequence) or isinstance(
+            send_requests, (str, bytes)
+        ):
+            raise TypeError(
+                "send requests must be a sequence of target and EventMessage pairs"
+            )
+        send_requests = tuple(send_requests)
+        batch = SqsMessageBatch([message for _, message in send_requests])
         failures.extend(batch.failures)
         if batch.outgoing is not None:
             try:
@@ -96,10 +102,9 @@ class SqsSender:
         results_by_event_id = {
             outcome.event_id: outcome for outcome in (*successes, *failures)
         }
-        return BatchPublishResult(
-            results=tuple(
-                results_by_event_id[envelope.event_id] for envelope in batch.inputs
-            ),
+        return tuple(
+            (original_event, results_by_event_id[message.event_id])
+            for original_event, message in send_requests
         )
 
     def _send_messages(

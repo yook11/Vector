@@ -70,23 +70,23 @@ publisherの失敗分類は下記の契約に従う。バックオフと試行�
 
 ## Implementation
 
-`publishing/contracts.py`に`EventEnvelope`・`BatchPublishResult`・`MessageSender`と`validate_send_results`を定義する。`publishing/route.py`の`EventMessage(event_id, body)`と`EventDeliveryRoute(event_type, queue_url)`はfrozen・slots付きとし、種別・キューの空白を拒否する。本文生成関数は配送定義と別に呼び出し元から渡す。
+`publishing/contracts.py`に`EventEnvelope`・`PublishSucceeded`・`PublishFailed`・`MessageSender`を定義する。MessageSenderは`send_requests`として元の対象と`EventMessage`の組を受け取り、送信と応答検証を担当する。正常に戻る場合は、元の対象の同一インスタンスと、入力メッセージと同じIDの受付成功・失敗の組を入力順で1件ずつ返す。`publishing/route.py`の`EventMessage(event_id, body)`と`EventDeliveryRoute(event_type, queue_url)`はfrozen・slots付きとし、種別・キューの空白を拒否する。本文生成関数は配送定義と別に呼び出し元から渡す。
 
-RelayとBackfillの本体が、`prepare_messages`による変換、`sender.send_batch`による送信、結果の照合と集約を順に呼ぶ。配送全体を包む`RoutedEventPublisher`と`EventPublisher`は廃止し、互換用のクラスやimportパスは設けない。
+RelayとBackfillの本体が、`build_sendable_message`による1件ずつの変換、`sender.send_batch`による送信、結果の反映を順に進める。配送全体を包む`RoutedEventPublisher`と`EventPublisher`は廃止し、互換用のクラスやimportパスは設けない。
 
-`publishing/preparation.py`の`prepare_messages(envelopes, *, route, build_message)`は、通信・DB操作なしで`(tuple[EventMessage, ...], tuple[PublishFailed, ...])`を返す。先に`EventBatch`で入力件数・型・ID重複を検証し、各イベントの種別確認と本文生成を行う。既知のイベント不正と種別不一致は個別失敗にするが、想定外例外や生成された型・IDの契約違反はそのまま伝播する。全入力の変換が終わるまで送信を始めず、全件変換失敗ではSenderを呼ばない。
+`publishing/preparation.py`の`build_sendable_message(envelope, *, route, build_message)`は、通信・DB操作なしでイベントの種別確認と本文生成を行い、元のevent_idを持つEventMessageを返す。本文生成関数が返す型・IDの契約違反はTypeErrorで拒否し、本文生成中の例外はそのまま伝播する。Relayは種別不一致とEventInvalidErrorを捕捉した時点で既存failure handlerへ渡し、Backfillは該当イベントを除外する。全入力の変換が終わるまで送信を始めず、全件変換失敗ではSenderを呼ばない。
 
-`validate_send_results`はSenderの戻り値の型と送信対象との件数・ID・順序を辞書への統合前に確認する。呼び出し元は変換失敗と送信結果を元イベント順にまとめる。Relayは全結果とlease対象の対応を確認してからDBへ反映し、Backfillは受付成功件数を集計する。Backfillは個別失敗があっても後続バッチを続け、契約違反や想定外例外では中断する。
+SQS応答の形式・ID・本文MD5の照合はSenderが利用する`app/aws/sqs`で行い、入力ごとの結果の件数・ID・順序はSqsSenderの組み立てとテストで保証する。RelayとBackfillはSenderの戻り値を再検証しない。Relayは返却された元の`LeasedOutboxEvent`の`envelope.event_id`・`lease_token`・`attempt_count`をそのままDB反映へ使い、IDによる引き直しや確保情報の再構築をしない。Backfillは返却された組の送信結果から受付成功件数を集計する。Backfillは個別失敗があっても後続バッチを続け、変換・送信から伝播した例外では中断する。Senderの契約違反を呼び出し側が全件反映前に検出する保証は設けない。
 
-`sqs/sender.py`の`SqsSender.from_session(session, region)`が共通送信部品を構築し、`send_batch(queue_url=..., messages=...)`で生成済みのEventMessageを受け取る。EventEnvelopeや各工程のイベント型・キュー対応を参照しない。`app/aws/sqs`の`OutgoingSqsMessage`は本文を変更せず、サイズ検証とMD5計算だけを担当する。SqsMessageBatchは1〜10件・型・ID重複・個別と合計サイズを検証する。個別サイズ超過は除外して正常分を送り、合計超過などのバッチ違反は送信前に拒否する。旧SqsEventPublisherと旧from_eventの互換名は設けない。
+`sqs/sender.py`の`SqsSender.from_session(session, region)`が共通送信部品を構築し、`send_batch(queue_url=..., send_requests=...)`で元の対象と生成済みのEventMessageの組を受け取る。Relayは`LeasedOutboxEvent`、Backfillは本文生成に使った`EventEnvelope`を元の対象とする。Senderは対象の内部を参照せず、受け取った同一インスタンスを結果と組にして返すためだけに保持する。lease・試行回数・各工程のイベント型・キュー対応を判断しない。`app/aws/sqs`の`OutgoingSqsMessage`は本文を変更せず、サイズ検証・MD5計算と応答の本文照合を担当する。SqsMessageBatchは1〜10件・型・ID重複・個別と合計サイズを検証する。個別サイズ超過は除外して正常分を送り、合計超過などのバッチ違反は送信前に拒否する。旧SqsEventPublisherと旧from_eventの互換名は設けない。
 
 3工程のrelayとLambda入口をコード上で接続済みである。`curation_handler`は`CurationOutboxRelaySettings.sqs_article_curation_queue_url`を使い、`build_analyzable_created_message`が共通Envelopeによる検証と本文生成を担う。CurationのAWS上での実行検証、本番適用・定期起動の有効化は未実施。
 
 ## Verification
 
-- `tests/outbox/publishing/`: 配送定義、入力契約、実イベント契約による変換失敗、想定外例外の伝播、送信結果の対応、既存JSONの保持をDB・通信なしで確認する。
-- `local_tests/outbox_relay/`と`tests/backfill/`: 変換失敗・送信失敗・成功の混在、全件変換失敗での非送信、不正な結果での中断を各呼び出し元で確認する。Backfillの接続解放は`local_tests/backfill/`で確認する。
-- `tests/outbox/sqs/`: 生成済み本文と指定キューを直接入力し、サイズ・件数・MD5・AWS応答・通信障害・終了処理の既存保証を確認する。
+- `tests/outbox/publishing/`: 配送定義、1件の変換契約、実イベント契約による変換失敗、想定外例外の伝播、結果の値型の構築条件、既存JSONの保持をDB・通信なしで確認する。
+- `local_tests/outbox_relay/`と`tests/backfill/`: 変換失敗・送信失敗・成功の混在、全件変換失敗での非送信、変換・送信から伝播した例外での中断を各呼び出し元で確認する。Backfillの接続解放は`local_tests/backfill/`で確認する。
+- `tests/outbox/sqs/`: 元の対象と生成済み本文の組、および指定キューを入力し、サイズ・件数・MD5・AWS応答・通信障害・終了処理と、各入力に1件ずつ同じIDで入力順に結果を返す契約を確認する。応答順の逆転とサイズ超過の除外・個別失敗が混在しても元のLeasedOutboxEventを同一参照で返し、呼び出し元のリスト変更でも対応を失わないことを確認する。部分失敗、クライアント生成失敗、全体送信失敗、不正応答でも対応を維持する。
 - イベントの詳細検証は既存のイベント契約テストが担当し、送受信のreason・issues一致は本文生成と受信解析を直接呼んで確認する。変換処理側で不正項目の全組合せを再検証しない。
 - relayの既存DBテストは共通の確保・保存・再試行を確認する。Curationの追加統合テストは正常・不正・旧種別の選択と代表的通信失敗への接続を確認し、共通規則を再度網羅しない。
 - `local_tests/curation/test_delivery.py`で取得・本文補完から実relay、送信本文、Curation Lambda、結果保存までを接続する。正常時のイベント本文・ID・時刻・配送先の保証はここに集約し、同じ正常系の部品テストを追加しない。
@@ -119,7 +119,7 @@ HttpTransportFailureは失敗した段階と理由を持ち、到達可能性は
 通常例外は操作境界で受け止め、元例外はcauseに保持するが、SDK自由文・本文・資格情報・送信先URLを例外文面へ出さない。共有イベント契約の検証例外は入力値を含むため、固定の理由へ変換してcause・contextには保持しない。
 phaseはinitialize、prepare_event、resolve_credentials、send、classify_failureを区別し、終了失敗は専用のPublishCleanupErrorで表す。
 分類処理失敗時は元例外と分類失敗の型を保持し、終了処理の失敗は先行する送信失敗を上書きしない。
-cleanupの失敗は送信処理の後に起きるため、未送信の根拠にしてはならない。受付成功・送信失敗の結果を維持し、SQS Publisherがcloseの通常失敗を診断ログへ記録してから結果を返す。BatchPublishResultにはイベントの結果だけを保持する。
+cleanupの失敗は送信処理の後に起きるため、未送信の根拠にしてはならない。受付成功・送信失敗の結果を維持し、SQS Publisherがcloseの通常失敗を診断ログへ記録してから結果を返す。元の対象と組にして返す個別結果には、終了処理の失敗を混在させない。
 BaseExceptionによるキャンセル・終了は通常失敗へ変換しない。
 Logfireの既存export秘匿処理を維持し、イベント単位の停止記録・通知とevent_idとの関連付けは既存の配信失敗処理が担当する。クライアント終了失敗の診断はSQS Publisher内で完結する。
 
@@ -132,15 +132,15 @@ Evidence: 既存EventEnvelope・資格情報確定処理・共通PublishError、
 
 ### 入力と結果
 
-- イベントから本文への変換は`prepare_messages`、同期送信は`MessageSender.send_batch(*, queue_url, messages) -> BatchPublishResult`とし、両工程を呼び出し元で明示する。
-- 結果はfrozen dataclassのPublishSucceeded(event_id)、PublishFailed(event_id, error)、BatchPublishResult(results)とする。
-- 個別結果は構築時にevent_idがUUIDであることを検証し、PublishFailedはerrorがPublishErrorであることも保証する。BatchPublishResultはresultsがtuple、各要素がPublishSucceededまたはPublishFailedであることを構築時に保証する。型違反は外部の値を含まないTypeErrorで拒否し、暗黙変換しない。例外内部のフィールドは追加検証しない。
-- 結果型自身は送信対象との件数・ID・順序の一致を検証しない。結果の空・重複やSQS固有の件数上限も構築条件に追加せず、呼び出し側の対応照合と既存の送信契約で扱う。
-- 正常に戻る場合は入力順のtupleに各イベントの結果を必ず1つ保持する。成功はSQS受付を意味し、DB更新やconsumer完了は意味しない。
-- 結果のreprに例外を展開しない。共通PublishErrorの診断情報は保持するが、結果型自身はログ・通知を出さない。
-- 空・11件以上・重複event_idはValueError、Sequence/EventEnvelopeおよびそのトップレベルフィールドの型違反はTypeErrorで、クライアント生成前に拒否する。
+- イベントから本文への変換は`build_sendable_message`、同期送信は`MessageSender.send_batch[T](*, queue_url: str, send_requests: Sequence[tuple[T, EventMessage]]) -> tuple[tuple[T, PublishSucceeded | PublishFailed], ...]`とし、両工程を呼び出し元で明示する。`T`は呼び出し元が渡す元の対象の型で、Senderはその内部を解釈しない。
+- 個別の結果はfrozen dataclassの`PublishSucceeded(event_id)`と`PublishFailed(event_id, error)`とする。戻り値は元の対象と個別結果の組のtupleとし、`BatchPublishResult`は廃止する。
+- 個別結果は構築時にevent_idがUUIDであることを検証し、PublishFailedはerrorがPublishFailureであることも保証する。型違反は外部の値を含まないTypeErrorで拒否し、暗黙変換しない。例外内部のフィールドは追加検証しない。
+- 結果型自身は送信対象との件数・ID・順序の一致を検証しない。結果の空・重複やSQS固有の件数上限も構築条件に追加せず、Senderが入力と結果の対応を保証する。RelayとBackfillでの再照合は行わない。
+- 正常に戻る場合は入力順のtupleに、元の対象の同一インスタンスと対応する結果の組を必ず1つずつ保持する。対象をコピー・再構築しない。成功はSQS受付を意味し、DB更新やconsumer完了は意味しない。
+- 個別結果は例外の診断情報を保持するが、ログ・通知を出さない。返却する組には元の対象も含まれるため、組全体をログへ出さず、既存の許可済み診断項目だけを記録する。
+- Senderは`send_requests`をSequenceとして受け取り、入力順をtupleへ固定してから各組のEventMessageをSqsMessageBatchへ渡す。空・11件以上・重複event_idの入力はValueError、Sequence/EventMessageの型違反はTypeErrorで、クライアント生成前に拒否する。
 - schema_versionはboolを除く整数とする。イベント単位の送信準備ではArticleAssessedInScopeEventの共有契約に従い、対応版1とpayload内部を検証してからJSON化する。
-- イベントごとの既知不正は各イベント契約の例外を保持した`PublishFailed`とし、そのイベントだけを除外する。本文生成中の想定外例外は伝播し、同じバッチの正常分も送らない。
+- イベントごとの既知不正は、Relayでは元の例外を保持した`PublishFailed`を既存failure handlerへ渡して記録し、Backfillでは該当イベントを除外する。本文生成中の想定外例外は伝播し、同じバッチの正常分も送らない。Relayで記録済みの変換失敗は取り消さない。
 - 既存形式のJSON本文をUTF-8にしたバイト数で計測する。個別本文が1,048,576 bytes超ならmessage_too_largeとし、送信しない。
 - 送信可能な本文の合計が1,048,576 bytes超なら呼び出し全体をValueErrorで拒否し、結果も返さない。自動分割しない。
 - 全件が個別失敗なら資格情報取得をせず結果を返す。正常イベントがあれば、資格情報を確定してからSendMessageBatchを最大1回呼ぶ。
@@ -152,7 +152,7 @@ SqsPublishFailureHandlerはSQS応答不正とクライアント終了失敗の�
 エラー分類は既存のerror_mappingに残し、ハンドラーはDB更新・再試行判断・送信を行わない。
 通常のログ障害はハンドラー内で抑止し、終了診断の分類障害もpublisher側で元の結果を維持する。BaseExceptionは抑止しない。
 Relay側のOutboxDeliveryFailureHandlerは、従来どおり配信の再試行・停止のDB反映と停止確定後の記録を担当する。
-`SqsSender.send_batch`はサイズ検証失敗・クライアント生成失敗・送信結果を入力順のBatchPublishResultへまとめる。クライアントの生成と終了もここで管理し、SQS送信・応答変換は_send_messagesが担う。イベントの変換失敗との統合はRelayとBackfillが担当する。
+`SqsSender.send_batch`はサイズ検証失敗・クライアント生成失敗・送信結果を、各send_requestの元の対象と組にして入力順のtupleへまとめる。クライアントの生成と終了もここで管理し、SQS送信・応答変換は_send_messagesが担う。イベントの変換失敗は送信前にRelayとBackfillが扱い、Senderには生成できたメッセージと元の対象の組だけを渡す。
 
 - 全体のSDK例外は既存分類を使って送信対象すべてへ反映し、送信前のイベント不正は上書きしない。
 - 資格情報取得失敗は既存の設定理由へ変換され、資格情報取得先への通信をSQSのtransport失敗として扱わない。
@@ -195,10 +195,10 @@ Evidence: SqsMessage.from_messageによる送信準備、SqsMessageのMD5確定�
 
 - `app/aws/sqs`の`OutgoingSqsMessage(body)`はfrozen dataclassとし、送る本文と照合用MD5の対応を保つ。body_md5は本文のUTF-8バイト列から構築時に計算し、独立した引数としては受け取らない。event_idは`OutgoingSqsMessageBatch`のキーとして持ち、EventEnvelopeやイベント型はフィールドに持たない。
 - `SqsMessageBatch`は生成済みのEventMessageごとに`OutgoingSqsMessage`を作り、サイズ検証とMD5確定をそこへ任せる。本文は加工しない。イベントの検証とJSON生成は配送定義の本文生成処理が所有する。
-- SQS本文の既知不正はPublishEventInvalidError(reason=message_too_large)で表す。イベント検証はprepare_messagesの本文生成境界、サイズ・MD5の準備失敗はSqsMessageBatchのPREPARE_EVENT境界で個別失敗にする。イベント本文生成の想定外例外は伝播し、そのバッチを送らない。
+- SQS本文のサイズ超過はMessageTooLargeErrorで表し、SqsMessageBatchが個別のPublishFailedにする。イベント検証はbuild_sendable_messageから本文生成関数へ委ね、既知の変換失敗の扱いはRelayとBackfillが担当する。イベント本文生成の想定外例外は伝播し、そのバッチを送らない。
 - Embedding本文は既存の5項目JSONとする。UTCのZ表記・小数秒はArticleAssessedInScopeEventのJSON直列化が所有し、build_assessed_in_scope_messageがmodel_dump(mode="json")の結果をjson.dumps(..., allow_nan=False)する。SqsSenderはJSONを解釈・再構築しない。
 - 1件上限の定数`MAX_MESSAGE_BYTES`は`app/aws/sqs`側が持ち、`OutgoingSqsMessageBatch`の本文合計サイズ検査も同じ定数を使う。バッチ件数・重複ID・フィールド型・合計サイズは個別メッセージ準備の外とする。
-- RelayとBackfillはprepare_messagesでEventBatchからEventMessageを生成し、SqsSenderへ渡す。SqsSenderはSqsMessageBatchを構築する。SDK用EntriesとMD5辞書を別々に準備・受け渡ししない。
+- RelayとBackfillはbuild_sendable_messageでEventEnvelopeから1件ずつEventMessageを生成し、正常分を元の対象と組にして`send_requests`へ追加する。SqsSenderは各組のEventMessageからSqsMessageBatchを構築する。SDK用EntriesとMD5辞書を別々に準備・受け渡ししない。
 - SDK呼び出しの直前にだけ各メッセージをId/MessageBodyの辞書へ変換する。body_md5はSDKへ送信しない。
 - 応答の照合は同じ`OutgoingSqsMessageBatch`の`verify`が行い、IDで対応する送ったメッセージと照合する。照合対象はEventEnvelopeではなく、送った`OutgoingSqsMessage`とする。
 
@@ -293,19 +293,19 @@ lease期間・1起動あたりの処理量・確保と停止の呼び出し順�
 ## Outbox relay本体（配線スライス①）
 
 Problem: ベクトル生成向けイベントの確保・送信・結果記録を接続し、送信失敗とDB障害を区別して扱う。
-Evidence: prepare_messages・MessageSender、OutboxDeliveryFailureHandler、OutboxDeliveryRepository、caller_managed_session_factoryの既存契約を使用する。
+Evidence: build_sendable_message・MessageSender、OutboxDeliveryFailureHandler、OutboxDeliveryRepository、caller_managed_session_factoryの既存契約を使用する。
 
 `OutboxRelay(session_factory, sender, failure_handler, *, route, build_message).run_once() -> None`は非同期APIとし、handlerには同じDBを使うsession factoryを渡す。
 
 - 対象は入口から渡す`route.event_type`に固定する。1回の実行は上限到達の停止100件、確保10件、送信最大1回までとし、lease期間は150秒とする。
 - 専用sessionで上限到達を停止してcommit・終了し、別sessionで確保してcommit・終了する。確保0件なら送信せず正常終了する。
-- 確保結果が持つ`envelope`をprepare_messagesへ渡し、生成できた本文があれば同期Senderを1回だけ呼ぶ。送信中はDB sessionを保持しない。
-- Senderの戻り値がBatchPublishResultであることと送信対象との対応を確認し、変換失敗との統合後も件数・入力順のevent_idをlease対象と全件照合してから結果を適用する。結果型が構築時に保証する内部構造は再検証しない。契約違反は外部の値を含まないTypeErrorまたはValueErrorで伝播する。
-- 成功はイベント単位のsessionでmark_publishedを呼び、Trueならcommit、Falseならrollbackして終了する。失敗は対応する確保情報とPublishFailedを既存handlerへ渡す。更新条件不一致でも後続の結果記録を続ける。
+- 確保結果が持つ`envelope`を1件ずつbuild_sendable_messageへ渡す。種別不一致とEventInvalidErrorはその時点で既存failure handlerへ渡し、生成できた本文があれば同期Senderを1回だけ呼ぶ。送信中はDB sessionを保持しない。
+- Relayは`send_requests`に`(leased_event, message)`を保持する。Senderは元のLeasedOutboxEventと対応する結果を入力順で1組ずつ返し、Relayは`for leased_event, result in send_results`で直接DB反映へ渡す。IDによる引き直しと、戻り値の型・件数・ID・順序の再検証は行わない。
+- 成功はRelayの成功分岐でイベント単位のsessionとトランザクションを開き、Repositoryのmark_publishedを直接呼ぶ。session.begin()により正常終了時は更新0件でもcommitし、例外時はrollbackする。leaseによる更新条件はRepositoryが維持する。失敗は対応する確保情報とPublishFailedを既存handlerへ渡す。更新条件不一致でも後続の結果記録を続ける。
 - handlerによる停止確定後の記録を再度呼ばない。上限到達の整理に架空のPublishErrorや送信失敗通知を追加しない。
 - 更新・commit・session終了の例外は実行全体へ伝播し、後続の結果記録を中断する。既存factoryのDB例外変換を使い、PublishErrorへ変換しない。確定済みの変更を取り消さず、未記録の確保情報はlease期限切れ後の既存処理に委ねる。
 - イベント変換・Sender呼び出し自体の失敗でも自動分割・その場での再送・合成したイベント別失敗を追加しない。BaseExceptionを包括しない。
-- クライアントの終了と終了失敗の診断はSQS Publisher内で完結し、Relayはイベント結果の照合とDB反映を担当する。cleanupの戻り値・ログ出力・finally処理を持たない。
+- クライアントの終了と終了失敗の診断はSqsSender内で完結し、Relayは配送の進行とDB反映を担当する。cleanupの戻り値・ログ出力・finally処理を持たない。
 
 Invariants: 正常終了は今回の処理の終了を意味し、全件送信成功やconsumerの完了を意味しない。受付後にDB記録が失敗した場合の重複送信は既存契約どおり許容する。
 Non-goals: Lambda入口、Terraform、通信timeout、定期起動、本番適用、consumer、既存Taskiqの切り替えは変更しない。Lambda120秒の反映は次のスライスとする。
@@ -468,7 +468,7 @@ Done: 既存テストによる振る舞いの検証と、lint・format・全単�
 Problem: 終了失敗をPublishUnexpectedErrorのphaseで表すと送信失敗との区別が読み取りにくく、変換関数にoverloadが必要になる。
 Evidence: 終了失敗はイベントの受付結果を上書きせず、再試行policyへ渡さない既存契約を持つ。
 PublishCleanupErrorはExceptionを直接継承し、CODE=publish_cleanup_errorとoriginal_exception_typeを安全な診断情報として持つ。
-PublishErrorの継承関係から分離し、SQS Publisher内の診断に使用する。BatchPublishResultには含めない。
+PublishErrorの継承関係から分離し、SQS Publisher内の診断に使用する。返却する個別の送信結果には含めない。
 publish_cleanup_error_from_exceptionは元の例外をcauseとして保持し、送信失敗の分類は行わない。
 PublishPhase.CLEANUPとoverloadを削除し、終了失敗を型で識別する。
 Invariants: 既存の受付成功・個別失敗・原因チェーン・自由文の秘匿とBaseExceptionの伝播を維持する。
@@ -503,11 +503,11 @@ Done: 呼び出し側の個別失敗の変換分岐がなくなり、公開入�
 Problem: 1回で送るまとまりの件数・ID重複・合計サイズの条件を、送信処理から分離して型に定義する。
 Evidence: 既存SqsMessage、publisherの入力検証・本文準備と、送信・失敗結果・応答照合の受け渡しを対象とする。
 
-- `publishing/event_batch.py`の不変な`EventBatch`が入力一覧をtupleへ固定し、1〜10件・EventEnvelopeと各フィールドの型・event_id重複なしを検証する。型違反はTypeError、件数・重複違反はValueErrorとする。
+- RelayはDBから最大10件を確保し、Backfillは対象を10件ずつに分割する。イベントはbuild_sendable_messageで1件ずつ変換し、EventBatchによる一括検証は行わない。
 - `SqsMessageBatch(messages: Sequence[EventMessage])`は工程固有のイベントを受け取らず、生成済み本文の件数・型・ID重複と送信サイズを検証する。入力はtupleで保持する。
-- イベント内容は本文生成処理の`ArticleAssessedInScopeEvent.from_input`、個別のUTF-8本文サイズは`OutgoingSqsMessage`、送信可能な本文の合計サイズは`OutgoingSqsMessageBatch`が検証する。prepare_messagesとSqsSenderはそれぞれの公開入力の件数・型・ID一意性を保証する。
-- 準備済みの`messages`と個別の`failures`を不変のtupleで保持し、不正イベントを除いた順序を維持する。
-- `prepare_messages(envelopes, *, route, build_message)`の内部で`EventBatch`を構築する。11件の入力を不正イベントの除外によって受け入れない。自動分割やIDの重複除去は行わない。
+- イベント内容は本文生成処理の`ArticleAssessedInScopeEvent.from_input`、個別のUTF-8本文サイズは`OutgoingSqsMessage`、送信可能な本文の合計サイズは`OutgoingSqsMessageBatch`が検証する。SqsSenderが生成済み本文の件数・型・ID一意性を保証する。
+- SqsMessageBatchは元の`inputs`・送信可能な`sendable`・個別の`failures`を不変のtupleで保持し、入力順を維持する。
+- Senderへ渡された11件のメッセージを、サイズ超過の除外によって10件以下にして受け入れない。Senderでの自動分割やIDの重複除去は行わない。
 - 合計サイズ超過は呼び出し全体のValueErrorとなり、クライアントを生成しない。
 - 正常なメッセージが0件なら準備失敗の結果だけを返し、AWS送信を呼ばない。結果は元の入力順に返す。
 - _send_messages・failed_resultsはSqsMessageBatchを受け取り、batch.sendableを使用する。SDK用Entriesは送信直前に作り、送信先は呼び出し元の配送定義からSenderへ渡す。
@@ -593,7 +593,7 @@ Embedding用の`build_assessed_in_scope_message`はイベント単位の本文�
 
 ## 配送定義と共通送信の分離（2026-09-11）
 
-EventDeliveryRoute・EventMessage・prepare_messages・SqsSenderを接続し、Relayの工程固有の依存を入口の組み立てへ集める。PublishEventInvalidErrorのissuesは固定enumのfield・codeを読み取り専用Protocolで受け取り、工程固有の詳細型に依存しない。詳細の値と入力を残さない変換は維持する。
+EventDeliveryRoute・EventMessage・build_sendable_message・SqsSenderを接続し、Relayの工程固有の依存を入口の組み立てへ集める。PublishEventInvalidErrorのissuesは固定enumのfield・codeを読み取り専用Protocolで受け取り、工程固有の詳細型に依存しない。詳細の値と入力を残さない変換は維持する。
 
 このスライス時点の配送はEmbeddingのみ。Assessmentのイベント検証・配送・Consumer接続、複数ルートの巡回・自動登録、AWS設定とデプロイは未実施。DB schema・SQL・リース・再試行・停止方針・トランザクション境界・キュー設定・依存パッケージは変更していない。
 
@@ -627,7 +627,7 @@ Non-goals: AWS上のAssessment relay Lambda・Scheduler・IAM・キュー・イ�
 
 配置・命名整理後の検証: app全体と変更テストのRuff lint・format、単体テスト6,629件、統合テスト1,400件が成功した。既存テストの参照先だけを更新し、ケースの追加は行っていない。一時DB・Redisは終了・削除済み。
 
-設定と失敗変換の責務整理: Embedding専用設定を`EmbeddingOutboxRelaySettings`へ改名し、共通設定・Assessment専用設定と区別した。環境変数と既存AWS入口は変更していない。イベントの本文生成は`prepare_messages`が担当し、既知のイベント不正だけを個別失敗にして、想定外例外は伝播する。RelayとBackfillが変換後にSenderを呼び、SQS固有のサイズ検証・SDK・資格情報・応答の分類はSQS側に残す。
+設定と失敗変換の責務整理: Embedding専用設定を`EmbeddingOutboxRelaySettings`へ改名し、共通設定・Assessment専用設定と区別した。環境変数と既存AWS入口は変更していない。イベントの本文生成は`build_sendable_message`が担当し、既知のイベント不正の処理はRelayとBackfillが所有する。想定外例外は伝播する。RelayとBackfillは変換後にSenderを呼び、Senderが保証する結果をDB反映・成功件数の集計に使う。SQS固有のサイズ検証・SDK・資格情報・応答の分類はSQS側に残す。
 
 PR作成時の最終検証: 設定名・本文準備エラーの責務整理と、既存のイベント／受信handlerテスト整理を含め、app全体・変更テストのRuff lint・format、単体テスト6,628件が成功した。統合テスト1,400件も同一の製品コードで成功し、一時DB・Redisは削除済み。統合検証後の追加対象は単体テストと文書のみ。テストガイドへ保証の所有先・1テスト1不変条件の方針を反映した。AWS設定・デプロイは未実施。
 

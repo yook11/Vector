@@ -210,7 +210,7 @@ async def test_cleanup_commits_before_sending(
     )
 
     class FailingSender:
-        def send_batch(self, *, queue_url, messages):
+        def send_batch(self, *, queue_url, send_requests):
             raise RuntimeError("send failed")
 
     with pytest.raises(RuntimeError, match="send failed"):

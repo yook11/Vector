@@ -50,33 +50,9 @@ class PublishFailed:
             raise TypeError("publisher failure must be a PublishFailure")
 
 
-@dataclass(frozen=True, slots=True)
-class BatchPublishResult:
-    """入力順のイベントごとの送信結果。"""
-
-    results: tuple[PublishSucceeded | PublishFailed, ...]
-
-    def __post_init__(self) -> None:
-        if not isinstance(self.results, tuple):
-            raise TypeError("publisher results must be a tuple")
-        if any(
-            not isinstance(result, PublishSucceeded | PublishFailed)
-            for result in self.results
-        ):
-            raise TypeError("invalid publisher result type")
-
-
 class MessageSender(Protocol):
-    def send_batch(
-        self, *, queue_url: str, messages: Sequence[EventMessage]
-    ) -> BatchPublishResult: ...
-
-
-def validate_send_results(result: object, messages: Sequence[EventMessage]) -> None:
-    """辞書への統合で不正な対応を隠さないよう、送信対象と結果の順序まで照合する。"""
-    if not isinstance(result, BatchPublishResult):
-        raise TypeError("sender must return BatchPublishResult")
-    if tuple(item.event_id for item in result.results) != tuple(
-        message.event_id for message in messages
-    ):
-        raise ValueError("sender results must match input message order")
+    def send_batch[T](
+        self, *, queue_url: str, send_requests: Sequence[tuple[T, EventMessage]]
+    ) -> tuple[tuple[T, PublishSucceeded | PublishFailed], ...]:
+        """送信と応答検証を行い、元の対象の同一インスタンスと本文に対応する受付結果を入力順で1組ずつ返す。"""
+        ...

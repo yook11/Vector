@@ -27,7 +27,6 @@ from app.outbox.publishing.contracts import (
     EventEnvelope,
     MessageSender,
     PublishSucceeded,
-    validate_send_results,
 )
 from app.outbox.publishing.preparation import build_sendable_message
 from app.outbox.publishing.route import (
@@ -49,7 +48,7 @@ async def _dispatch(
     build_message: Callable[[EventEnvelope], EventMessage],
     stage: str,
 ) -> None:
-    """受付結果を対象と照合し、部分失敗でも次のバッチを送信する。"""
+    """Senderが返す受付成功を集計し、部分失敗でも次のバッチを送信する。"""
     enqueued = 0
     for offset in range(0, len(targets), MAX_BATCH_MESSAGES):
         batch_targets = targets[offset : offset + MAX_BATCH_MESSAGES]
@@ -63,24 +62,22 @@ async def _dispatch(
             )
             for item in batch_targets
         )
-        messages: list[EventMessage] = []
+        send_requests: list[tuple[EventEnvelope, EventMessage]] = []
         for envelope in envelopes:
             try:
-                messages.append(
-                    build_sendable_message(
-                        envelope, route=route, build_message=build_message
-                    )
+                message = build_sendable_message(
+                    envelope, route=route, build_message=build_message
                 )
             except (EventRouteMismatchError, EventInvalidError):
                 continue
+            send_requests.append((envelope, message))
         successes = 0
-        if messages:
-            sent = sender.send_batch(
-                queue_url=route.queue_url, messages=tuple(messages)
+        if send_requests:
+            send_results = sender.send_batch(
+                queue_url=route.queue_url, send_requests=send_requests
             )
-            validate_send_results(sent, messages)
             successes = sum(
-                isinstance(result, PublishSucceeded) for result in sent.results
+                isinstance(result, PublishSucceeded) for _, result in send_results
             )
         record_dispatched(stage, successes)
         enqueued += successes

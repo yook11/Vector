@@ -14,7 +14,6 @@ from app.outbox.publishing.contracts import (
     MessageSender,
     PublishFailed,
     PublishSucceeded,
-    validate_send_results,
 )
 from app.outbox.publishing.preparation import build_sendable_message
 from app.outbox.publishing.route import (
@@ -65,47 +64,34 @@ class OutboxRelay:
         if not leased_events:
             return
 
-        sendable_messages: list[EventMessage] = []
+        send_requests: list[tuple[LeasedOutboxEvent, EventMessage]] = []
         for leased_event in leased_events:
             envelope = leased_event.envelope
             try:
-                sendable_messages.append(
-                    build_sendable_message(
-                        envelope, route=self._route, build_message=self._build_message
-                    )
+                message = build_sendable_message(
+                    envelope, route=self._route, build_message=self._build_message
                 )
             except (EventRouteMismatchError, EventInvalidError) as error:
                 await self._failure_handler.handle(
                     leased_event=leased_event,
                     failure=PublishFailed(envelope.event_id, error),
                 )
-        if not sendable_messages:
+            else:
+                send_requests.append((leased_event, message))
+        if not send_requests:
             return
 
-        sent = self._sender.send_batch(
-            queue_url=self._route.queue_url, messages=tuple(sendable_messages)
+        send_results = self._sender.send_batch(
+            queue_url=self._route.queue_url, send_requests=send_requests
         )
-        validate_send_results(sent, sendable_messages)
-        leased_by_id = {
-            leased_event.envelope.event_id: leased_event
-            for leased_event in leased_events
-        }
-        for result in sent.results:
-            leased_event = leased_by_id[result.event_id]
+        for leased_event, result in send_results:
             if isinstance(result, PublishSucceeded):
-                await self._mark_published(leased_event)
+                async with self._session_factory() as session, session.begin():
+                    await OutboxDeliveryRepository(session).mark_published(
+                        event_id=leased_event.envelope.event_id,
+                        lease_token=leased_event.lease_token,
+                    )
             else:
                 await self._failure_handler.handle(
                     leased_event=leased_event, failure=result
                 )
-
-    async def _mark_published(self, leased_event: LeasedOutboxEvent) -> None:
-        async with self._session_factory() as session:
-            updated = await OutboxDeliveryRepository(session).mark_published(
-                event_id=leased_event.envelope.event_id,
-                lease_token=leased_event.lease_token,
-            )
-            if updated:
-                await session.commit()
-            else:
-                await session.rollback()

@@ -1,4 +1,4 @@
-"""送信結果自身の成立条件と、送信対象との照合の境界を検証する。"""
+"""DB・通信を使わず、送信結果の値型が保証する構築条件を検証する。"""
 
 from dataclasses import FrozenInstanceError
 from uuid import UUID
@@ -21,7 +21,6 @@ from app.collection.events import (
 )
 from app.db.errors import DatabaseUnexpectedError
 from app.outbox.publishing.contracts import (
-    BatchPublishResult,
     PublishFailed,
     PublishSucceeded,
 )
@@ -87,37 +86,12 @@ def test_failed_result_rejects_non_publish_failure(error):
     assert "private-error" not in str(caught.value)
 
 
-@pytest.mark.parametrize("results", [None, [], [PublishSucceeded(UUID(int=1))]])
-def test_batch_rejects_non_tuple(results):
-    """可変コンテナをtupleへ変換せず、構築時に拒否する。"""
-    with pytest.raises(TypeError, match="results must be a tuple"):
-        BatchPublishResult(results)
-
-
-@pytest.mark.parametrize("entry", [None, "private-body", _send_failure()])
-def test_batch_rejects_invalid_entry_after_valid_result(entry):
-    """後半の不正要素も含めて、結果全体の構築を拒否する。"""
-    with pytest.raises(TypeError, match="invalid publisher result type") as caught:
-        BatchPublishResult((PublishSucceeded(UUID(int=1)), entry))
-    assert "private-body" not in str(caught.value)
-
-
 def test_results_preserve_values():
     """送信結果の参照を維持し、結果のフィールドは変更できない。"""
     error = _send_failure()
     success = PublishSucceeded(UUID(int=1))
     failure = PublishFailed(UUID(int=2), error)
-    results = (success, failure)
-    batch = BatchPublishResult(results)
-    assert batch.results is results
     assert failure.error is error
-    for value, field in ((success, "event_id"), (failure, "error"), (batch, "results")):
+    for value, field in ((success, "event_id"), (failure, "error")):
         with pytest.raises(FrozenInstanceError):
             setattr(value, field, None)
-
-
-def test_batch_leaves_correspondence_to_caller():
-    """空や重複を含む結果の依頼との対応は、構築時には判断しない。"""
-    assert BatchPublishResult(()).results == ()
-    result = PublishSucceeded(UUID(int=1))
-    assert BatchPublishResult((result, result)).results == (result, result)
