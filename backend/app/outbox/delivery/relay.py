@@ -8,7 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.outbox.delivery.failure_handler import OutboxDeliveryFailureHandler
 from app.outbox.delivery.repository import ClaimedOutboxEvent, OutboxDeliveryRepository
-from app.outbox.delivery.values import DeliveryBatchSelection, LeaseDuration
+from app.outbox.delivery.values import LeaseDuration
 from app.outbox.publishing.publisher import (
     BatchPublishResult,
     EventEnvelope,
@@ -37,14 +37,16 @@ class OutboxRelay:
 
     async def run_once(self) -> None:
         async with self._session_factory() as session:
+            # 試行上限に達したイベントを配信停止する。
             await OutboxDeliveryRepository(session).stop_deliveries_at_attempt_limit(
-                selection=DeliveryBatchSelection(event_type=self._event_type, limit=100)
+                event_type=self._event_type, limit=100
             )
             await session.commit()
 
         async with self._session_factory() as session:
-            events = await OutboxDeliveryRepository(session).claim_ready_batch(
-                selection=DeliveryBatchSelection(event_type=self._event_type, limit=10),
+            events = await OutboxDeliveryRepository(session).lease_events_to_publish(
+                event_type=self._event_type,
+                limit=10,
                 lease_duration=LeaseDuration(timedelta(seconds=150)),
             )
             await session.commit()
@@ -54,6 +56,7 @@ class OutboxRelay:
 
         envelopes = tuple(EventEnvelope.from_claimed(event) for event in events)
         batch = self._publisher.publish_batch(envelopes)
+
         if not isinstance(batch, BatchPublishResult):
             raise TypeError("publisher must return BatchPublishResult")
         self._validate_result_correspondence(batch, events)

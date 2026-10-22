@@ -10,7 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.outbox_event import OutboxEvent
 from app.outbox.delivery.retry_policy import MAX_PUBLISH_ATTEMPTS, NonRetryableReason
-from app.outbox.delivery.values import DeliveryBatchSelection, LeaseDuration, RetryDelay
+from app.outbox.delivery.values import LeaseDuration, RetryDelay
 
 
 @dataclass(frozen=True, slots=True)
@@ -33,11 +33,11 @@ class OutboxDeliveryRepository:
     def __init__(self, session: AsyncSession) -> None:
         self._session = session
 
-    async def claim_ready_batch(
-        self, *, selection: DeliveryBatchSelection, lease_duration: LeaseDuration
+    async def lease_events_to_publish(
+        self, *, event_type: str, limit: int, lease_duration: LeaseDuration
     ) -> list[ClaimedOutboxEvent]:
         """配信可能なイベントを確保し、更新後の値を返す。"""
-        if selection.limit <= 0:
+        if limit <= 0:
             return []
 
         table = OutboxEvent.__table__
@@ -45,7 +45,7 @@ class OutboxDeliveryRepository:
         candidates = (
             select(table.c.event_id)
             .where(
-                table.c.event_type == selection.event_type,
+                table.c.event_type == event_type,
                 table.c.attempt_count < MAX_PUBLISH_ATTEMPTS,
                 table.c.published_at.is_(None),
                 table.c.delivery_stopped_at.is_(None),
@@ -53,7 +53,7 @@ class OutboxDeliveryRepository:
                 or_(table.c.leased_until.is_(None), table.c.leased_until <= now),
             )
             .order_by(table.c.occurred_at)
-            .limit(selection.limit)
+            .limit(limit)
             .with_for_update(skip_locked=True)
             .cte("delivery_candidates")
         )
@@ -81,10 +81,10 @@ class OutboxDeliveryRepository:
         return [ClaimedOutboxEvent(**row) for row in rows]
 
     async def stop_deliveries_at_attempt_limit(
-        self, *, selection: DeliveryBatchSelection
+        self, *, event_type: str, limit: int
     ) -> list[UUID]:
         """試行上限に達し担当が不在のイベントを停止し、未commitの更新結果を返す。"""
-        if selection.limit <= 0:
+        if limit <= 0:
             return []
 
         table = OutboxEvent.__table__
@@ -92,14 +92,14 @@ class OutboxDeliveryRepository:
         candidates = (
             select(table.c.event_id)
             .where(
-                table.c.event_type == selection.event_type,
+                table.c.event_type == event_type,
                 table.c.attempt_count >= MAX_PUBLISH_ATTEMPTS,
                 table.c.published_at.is_(None),
                 table.c.delivery_stopped_at.is_(None),
                 or_(table.c.leased_until.is_(None), table.c.leased_until <= now),
             )
             .order_by(table.c.occurred_at)
-            .limit(selection.limit)
+            .limit(limit)
             .with_for_update(skip_locked=True)
             .cte("exhausted_candidates")
         )
