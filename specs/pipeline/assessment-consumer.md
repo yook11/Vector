@@ -353,7 +353,7 @@ AWS上のAssessment relay Lambda、Scheduler、IAM、SQSイベントソースと
 
 配置・命名整理後の検証: app全体と変更テストのRuff lint・format、単体テスト6,629件、統合テスト1,400件が成功した。既存テストの参照先だけを更新し、ケースの追加は行っていない。一時DB・Redisは終了・削除済み。
 
-設定と失敗変換の責務整理: Embedding専用設定を`EmbeddingOutboxRelaySettings`へ改名し、共通設定・Assessment専用設定と区別した。環境変数と既存AWS入口は変更していない。本文準備の失敗は`publishing.error_mapping.publish_preparation_error_from_exception`で扱い、分類済みPublishErrorの同一性、想定外例外のPREPARE_EVENTと原因チェーンを維持する。RoutedEventPublisherとSqsMessageBatchがこの処理を共有し、SQS固有のサイズ検証・SDK・資格情報・応答の分類はSQS側に残す。
+設定と失敗変換の責務整理: Embedding専用設定を`EmbeddingOutboxRelaySettings`へ改名し、共通設定・Assessment専用設定と区別した。環境変数と既存AWS入口は変更していない。イベントの本文生成は`prepare_messages`が担当し、既知のイベント不正だけを個別失敗にして、想定外例外は伝播する。RelayとBackfillが変換後にSenderを呼び、SQS固有のサイズ検証・SDK・資格情報・応答の分類はSQS側に残す。
 
 PR作成時の最終検証: 設定名・本文準備エラーの責務整理と、既存のイベント／受信handlerテスト整理を含め、app全体・変更テストのRuff lint・format、単体テスト6,628件が成功した。統合テスト1,400件も同一の製品コードで成功し、一時DB・Redisは削除済み。統合検証後の追加対象は単体テストと文書のみ。テストガイドへ保証の所有先・1テスト1不変条件の方針を反映した。AWS設定・デプロイは未実施。
 

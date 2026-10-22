@@ -10,8 +10,8 @@ from app.collection.article_acquisition.events import (
     IncompleteArticleEventInvalidError,
     IncompleteArticleRecordedEvent,
 )
+from app.outbox.publishing.contracts import EventEnvelope
 from app.outbox.publishing.incomplete_recorded import build_incomplete_recorded_message
-from app.outbox.publishing.publisher import EventEnvelope
 
 pytestmark = pytest.mark.unit
 

@@ -28,7 +28,7 @@ from app.collection.events import (
     AnalyzableEventInvalidReason,
 )
 from app.db.errors import DatabaseUnexpectedError
-from app.outbox.publishing.publisher import (
+from app.outbox.publishing.contracts import (
     BatchPublishResult,
     PublishFailed,
     PublishSucceeded,

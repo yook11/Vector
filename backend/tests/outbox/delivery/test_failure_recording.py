@@ -63,7 +63,7 @@ from app.outbox.delivery.failure_handler import (
 )
 from app.outbox.delivery.repository import LeasedOutboxEvent
 from app.outbox.delivery.retry_policy import NonRetryableReason
-from app.outbox.publishing.publisher import EventEnvelope, PublishFailed
+from app.outbox.publishing.contracts import EventEnvelope, PublishFailed
 from app.outbox.publishing.route import EventRouteMismatchError
 from tests.cloudwatch.records import emf_records
 from tests.outbox.helpers import FUTURE, PAST, insert_event, read_event

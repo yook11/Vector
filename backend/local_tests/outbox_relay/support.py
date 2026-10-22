@@ -12,6 +12,8 @@ from app.aws.sqs.errors import (
 )
 from app.outbox.delivery.failure_handler import OutboxDeliveryFailureHandler
 from app.outbox.delivery.relay import OutboxRelay
+from app.outbox.publishing.assessed_in_scope import build_assessed_in_scope_message
+from app.outbox.publishing.route import EventDeliveryRoute
 from tests.outbox.helpers import PAST, insert_event, read_event
 
 EVENT_TYPE = ArticleAssessedInScope.EVENT_TYPE
@@ -73,10 +75,17 @@ async def read_saved(owner_sessions, event):
         return await read_event(session, event.event_id)
 
 
-def make_relay(sessions, publisher, *, event_type=EVENT_TYPE):
+def make_relay(
+    sessions,
+    sender,
+    *,
+    event_type=EVENT_TYPE,
+    build_message=build_assessed_in_scope_message,
+):
     return OutboxRelay(
         sessions,
-        publisher,
+        sender,
         OutboxDeliveryFailureHandler(sessions, jitter=lambda: 0.5),
-        event_type=event_type,
+        route=EventDeliveryRoute(event_type, "https://sqs.invalid/embedding"),
+        build_message=build_message,
     )

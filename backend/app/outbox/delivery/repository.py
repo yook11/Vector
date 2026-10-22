@@ -9,7 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.outbox_event import OutboxEvent
 from app.outbox.delivery.retry_policy import MAX_PUBLISH_ATTEMPTS, NonRetryableReason
 from app.outbox.delivery.values import LeaseDuration, RetryDelay
-from app.outbox.publishing.publisher import EventEnvelope
+from app.outbox.publishing.contracts import EventEnvelope
 
 
 @dataclass(frozen=True, slots=True)

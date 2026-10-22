@@ -1,4 +1,4 @@
-"""確保済みイベントの送信と配信結果の確定を取りまとめる。"""
+"""DBのイベントの確保・メッセージ化・送信・配信結果の記録を取りまとめる。"""
 
 from collections.abc import Callable
 from contextlib import AbstractAsyncContextManager
@@ -9,43 +9,49 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.outbox.delivery.failure_handler import OutboxDeliveryFailureHandler
 from app.outbox.delivery.repository import LeasedOutboxEvent, OutboxDeliveryRepository
 from app.outbox.delivery.values import LeaseDuration
-from app.outbox.publishing.publisher import (
+from app.outbox.publishing.contracts import (
     BatchPublishResult,
-    EventPublisher,
+    EventEnvelope,
+    MessageSender,
     PublishSucceeded,
+    validate_send_results,
 )
+from app.outbox.publishing.preparation import prepare_messages
+from app.outbox.publishing.route import EventDeliveryRoute, EventMessage
 
 
 class OutboxRelay:
-    """1回の実行で上限到達の停止と、最大10件の送信を行う。"""
+    """1回の実行で最大10件の確保から配信結果の記録までを進める。"""
 
     def __init__(
         self,
         session_factory: Callable[[], AbstractAsyncContextManager[AsyncSession]],
-        publisher: EventPublisher,
+        sender: MessageSender,
         failure_handler: OutboxDeliveryFailureHandler,
         *,
-        event_type: str,
+        route: EventDeliveryRoute,
+        build_message: Callable[[EventEnvelope], EventMessage],
     ) -> None:
-        if not isinstance(event_type, str) or not event_type.strip():
-            raise ValueError("event type must not be blank")
-        self._event_type = event_type
+        if not callable(build_message):
+            raise TypeError("relay requires a message builder")
+        self._route = route
+        self._build_message = build_message
         self._session_factory = session_factory
-        self._publisher = publisher
+        self._sender = sender
         self._failure_handler = failure_handler
 
     async def run_once(self) -> None:
         async with self._session_factory() as session:
             # 試行上限に達したイベントを配信停止にする。
             await OutboxDeliveryRepository(session).stop_deliveries_at_attempt_limit(
-                event_type=self._event_type, limit=100
+                event_type=self._route.event_type, limit=100
             )
             await session.commit()
 
         async with self._session_factory() as session:
             repository = OutboxDeliveryRepository(session)
             leased_events = await repository.lease_events_to_publish(
-                event_type=self._event_type,
+                event_type=self._route.event_type,
                 limit=10,
                 lease_duration=LeaseDuration(timedelta(seconds=150)),
             )
@@ -54,12 +60,28 @@ class OutboxRelay:
         if not leased_events:
             return
 
-        batch = self._publisher.publish_batch(
-            tuple(leased_event.envelope for leased_event in leased_events)
+        envelopes = tuple(leased_event.envelope for leased_event in leased_events)
+
+        messages, conversion_failures = prepare_messages(
+            envelopes, route=self._route, build_message=self._build_message
         )
 
-        if not isinstance(batch, BatchPublishResult):
-            raise TypeError("publisher must return BatchPublishResult")
+        if messages:
+            sent = self._sender.send_batch(
+                queue_url=self._route.queue_url, messages=messages
+            )
+            validate_send_results(sent, messages)
+            send_results = sent.results
+        else:
+            send_results = ()
+
+        results_by_id = {
+            result.event_id: result for result in (*conversion_failures, *send_results)
+        }
+        batch = BatchPublishResult(
+            tuple(results_by_id[envelope.event_id] for envelope in envelopes)
+        )
+
         self._validate_result_correspondence(batch, leased_events)
         for leased_event, result in zip(leased_events, batch.results, strict=True):
             if isinstance(result, PublishSucceeded):

@@ -27,7 +27,7 @@ from app.collection.article_acquisition.events import IncompleteArticleEventInva
 from app.collection.events import AnalyzableEventInvalidError
 from app.http.failure import HttpTransportFailureReason
 from app.outbox.delivery.values import RetryDelay
-from app.outbox.publishing.publisher import PublishFailure
+from app.outbox.publishing.contracts import PublishFailure
 from app.outbox.publishing.route import EventRouteMismatchError
 
 

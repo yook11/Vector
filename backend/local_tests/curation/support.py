@@ -12,7 +12,7 @@ import httpx2
 
 from app.collection.events import AnalyzableArticleCreated
 from app.outbox.publishing.analyzable_created import build_analyzable_created_message
-from app.outbox.publishing.publisher import EventEnvelope
+from app.outbox.publishing.contracts import EventEnvelope
 
 handler_module = import_module("app.lambda_handlers.curation.handler")
 

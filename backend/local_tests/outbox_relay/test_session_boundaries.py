@@ -5,7 +5,7 @@ from unittest.mock import Mock
 
 import pytest
 
-from app.outbox.publishing.publisher import BatchPublishResult, PublishSucceeded
+from app.outbox.publishing.contracts import BatchPublishResult, PublishSucceeded
 from local_tests.outbox_relay.support import (
     make_relay,
     read_saved,
@@ -39,11 +39,11 @@ async def test_preparation_sessions_are_closed_before_send(
     """停止・確保の接続は、送信時点では貸し出されていない。"""
     ready = await seed_event(owner_sessions)
 
-    def send(envelopes):
+    def send(*, queue_url, messages):
         assert relay_engine.pool.checkedout() == 0
-        assert [envelope.event_id for envelope in envelopes] == [ready.event_id]
+        assert [envelope.event_id for envelope in messages] == [ready.event_id]
         return BatchPublishResult((PublishSucceeded(ready.event_id),))
 
-    publisher = Mock(publish_batch=Mock(side_effect=send))
-    await make_relay(relay_sessions, publisher).run_once()
-    publisher.publish_batch.assert_called_once()
+    sender = Mock(send_batch=Mock(side_effect=send))
+    await make_relay(relay_sessions, sender).run_once()
+    sender.send_batch.assert_called_once()

@@ -9,18 +9,18 @@
 - `app.backfill.repository.PipelineBacklog`：新経路のイベント対象抽出・件数観測・期限切れ整理の照会。旧 Taskiq Curation の対象取得は `app.queue.helpers.backlog`、管理画面の集計は `app.admin.pipeline_health.repository` が担う。
 - `app.backfill.targets`：再投入する保存済み事実。
 - `app.backfill.policy`：元記事の年齢窓と一回の処理上限。
-- 各consumerの共有イベント型と、既存`RoutedEventPublisher`・`SqsSender`。
+- 各consumerの共有イベント型と、共通`prepare_messages`・`SqsSender`。
 - 旧maintenanceテストと`tests/backfill/`の単体・DB統合テスト。
 
 ## Interface
 
-`app.backfill.service`に`backfill_curations`・`backfill_assessments`・`backfill_embeddings`・`backfill_completions`を用意する。いずれも`session_factory, publisher, *, enabled, now`を受け取り、正常時は`None`、続行不能な障害は例外を返す。`now`はタイムゾーン付き日時を呼び出し元から渡す。
+`app.backfill.service`に`backfill_curations`・`backfill_assessments`・`backfill_embeddings`・`backfill_completions`を用意する。いずれも`session_factory, sender, *, route, build_message, enabled, now`を受け取り、正常時は`None`、続行不能な障害は例外を返す。`now`はタイムゾーン付き日時を呼び出し元から渡す。
 
-DBと送信クライアントの生成・終了、設定取得は呼び出し元の責任とする。publisherは工程ごとの既存本文builderとキューを指定した`RoutedEventPublisher`に`SqsSender`を組み合わせる。新本体にTaskiq・Lambda・Redisの依存を持たせない。
+DBと送信クライアントの生成・終了、設定取得は呼び出し元の責任とする。工程ごとの配送定義・既存本文builderと`SqsSender`を本体へ渡し、`_dispatch`内で共通の`prepare_messages`を呼んでから`sender.send_batch`で送る。新本体にTaskiq・Lambda・Redisの依存を持たせない。
 
 ## Invariants
 
-- 順序：有効設定 → 期限切れ整理 → backlog総数と対象の取得 → 最大10件ずつ送信 → 結果記録。
+- 順序：有効設定 → 期限切れ整理 → backlog総数と対象の取得 → 最大10件ずつメッセージへ変換 → 正常分を送信 → 結果記録。
 - 無効ならDB照会・整理・送信を行わない。日次予算とstage holdは新経路に設けない。
 - 全工程で元記事の`created_at`を基準に、`now - 7日 <= created_at < now - 30分`を救済する。古い記事を優先し、一回50件まで送る。同時刻は対象ID順とする。
 - `created_at < now - 7日`は期限切れとする。curationは一回200件まで削除し、投資判定・embeddingは一回50件まで既存の救済除外行を作る。補完は一回50件まで未完成行を`closed`へ更新し、行は残す。
@@ -39,7 +39,7 @@ DBと送信クライアントの生成・終了、設定取得は呼び出し元
 
 対象ごと・再投入ごとに新しいUUIDをevent_idに使う。既存Outbox行の再送ではなく、DBに残る事実から受信契約に沿って再構成する。Outboxの検索・追加・状態更新は行わない。
 
-受付結果の件数・ID対応を確認してから受付成功を数える。PublishFailedがあっても後続バッチを送る。同一実行内の追加リトライはしない。publisherの契約違反や想定外例外は実行全体の失敗とする。
+Senderの戻り値の型・件数・ID・順序を辞書への統合前に確認し、変換失敗との集約後に受付成功を数える。全件変換失敗のバッチはSenderを呼ばず、次のバッチへ進む。本文生成中の想定外例外では同じバッチのどのメッセージも送らない。PublishFailedがあっても後続バッチを送る。同一実行内の追加リトライはしない。本文生成・Senderの契約違反や想定外例外は実行全体の失敗とする。
 
 送信成功はSQS受付のみを意味し、DBに送信済み状態を持たせない。未完了なら次回も送る。
 

@@ -12,7 +12,7 @@ from app.analysis.assessment.events import (
 )
 from app.lambda_handlers.sqs.received_message import ReceivedMessage
 from app.outbox.publishing.assessed_in_scope import build_assessed_in_scope_message
-from app.outbox.publishing.publisher import EventEnvelope
+from app.outbox.publishing.contracts import EventEnvelope
 
 
 @pytest.fixture

@@ -8,7 +8,7 @@ from app.aws.sqs.outgoing_message import (
     OutgoingSqsMessage,
     OutgoingSqsMessageBatch,
 )
-from app.outbox.publishing.publisher import PublishFailed
+from app.outbox.publishing.contracts import PublishFailed
 from app.outbox.publishing.route import EventMessage
 
 

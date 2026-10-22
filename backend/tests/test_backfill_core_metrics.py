@@ -22,11 +22,12 @@ from app.aws.sqs.errors import MessageSendUnexpectedError
 from app.backfill import service
 from app.backfill.targets import BackfillEventTarget
 from app.collection.events import AnalyzableArticleCreated
-from app.outbox.publishing.publisher import (
+from app.outbox.publishing.contracts import (
     BatchPublishResult,
     PublishFailed,
     PublishSucceeded,
 )
+from tests.backfill.helpers import delivery_arguments
 
 NOW = datetime(2026, 9, 14, 12, tzinfo=UTC)
 
@@ -95,20 +96,20 @@ def _backlog(case: _MetricCase, *, count: int, targets: list[BackfillEventTarget
     return backlog
 
 
-def _publisher(*, failed_positions: frozenset[int] = frozenset()) -> MagicMock:
-    """入力順の指定位置だけ送信失敗にする publisher。"""
-    publisher = MagicMock()
-    publisher.publish_batch.side_effect = lambda items: BatchPublishResult(
+def _sender(*, failed_positions: frozenset[int] = frozenset()) -> MagicMock:
+    """入力順の指定位置だけ送信失敗にする sender。"""
+    sender = MagicMock()
+    sender.send_batch.side_effect = lambda *, queue_url, messages: BatchPublishResult(
         tuple(
             PublishFailed(
                 item.event_id, MessageSendUnexpectedError(exception_type="RuntimeError")
             )
             if position in failed_positions
             else PublishSucceeded(item.event_id)
-            for position, item in enumerate(items)
+            for position, item in enumerate(messages)
         )
     )
-    return publisher
+    return sender
 
 
 async def _run(
@@ -118,7 +119,7 @@ async def _run(
     cleaned: int = 0,
     count: int = 0,
     targets: list[BackfillEventTarget] | None = None,
-    publisher: MagicMock | None = None,
+    sender: MagicMock | None = None,
 ) -> MagicMock:
     backlog = _backlog(case, count=count, targets=targets or [])
     with (
@@ -129,7 +130,8 @@ async def _run(
     ):
         await case.entry(
             _session_factory(),
-            publisher or _publisher(),
+            sender or _sender(),
+            **delivery_arguments("curation"),
             enabled=enabled,
             now=NOW,
         )
@@ -233,7 +235,7 @@ async def test_dispatched_counter_counts_only_accepted_events(
         case,
         count=len(targets),
         targets=targets,
-        publisher=_publisher(failed_positions=failed_positions),
+        sender=_sender(failed_positions=failed_positions),
     )
 
     dispatched = _find_metric(_collected_metrics(capfire), "vector.backfill.dispatched")

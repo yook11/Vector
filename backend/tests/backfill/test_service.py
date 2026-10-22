@@ -15,7 +15,12 @@ from app.models.curation_noise import CurationNoise
 from app.models.incomplete_article import IncompleteArticle
 from app.models.out_of_scope_article_record import OutOfScopeArticleRecord
 from app.models.outbox_event import OutboxEvent
-from tests.backfill.helpers import RecordingPublisher, complete_target, seed_target
+from tests.backfill.helpers import (
+    RecordingSender,
+    complete_target,
+    delivery_arguments,
+    seed_target,
+)
 
 NOW = datetime(2026, 9, 14, 12, tzinfo=UTC)
 CASES = [
@@ -51,26 +56,28 @@ async def test_window_and_saved_event_facts(
         )
         for age in offsets
     ]
-    publisher = RecordingPublisher()
-    await entry(session_factory, publisher, enabled=True, now=NOW)
+    sender = RecordingSender()
+    await entry(
+        session_factory, sender, **delivery_arguments(stage), enabled=True, now=NOW
+    )
     expected = [records[3], records[2]]
     key = PAYLOAD_KEY[stage]
-    assert [item.payload[key] for item in publisher.envelopes] == [
+    assert [item.payload[key] for item in sender.envelopes] == [
         item.target_id for item in expected
     ]
-    assert [item.occurred_at for item in publisher.envelopes] == [
+    assert [item.occurred_at for item in sender.envelopes] == [
         item.occurred_at for item in expected
     ]
     if stage == "assessment":
-        assert [
-            item.payload["analyzable_article_id"] for item in publisher.envelopes
-        ] == [item.article_id for item in expected]
+        assert [item.payload["analyzable_article_id"] for item in sender.envelopes] == [
+            item.article_id for item in expected
+        ]
     if stage == "embedding":
-        assert [item.payload["curation_id"] for item in publisher.envelopes] == [
+        assert [item.payload["curation_id"] for item in sender.envelopes] == [
             item.curation_id for item in expected
         ]
     if stage == "completion":
-        assert [item.payload["source_id"] for item in publisher.envelopes] == [
+        assert [item.payload["source_id"] for item in sender.envelopes] == [
             sample_source.id for _ in expected
         ]
 
@@ -133,9 +140,11 @@ async def test_completed_and_excluded_targets_are_not_sent(
             )
         )
     await db_session.commit()
-    publisher = RecordingPublisher()
-    await entry(session_factory, publisher, enabled=True, now=NOW)
-    assert publisher.envelopes == []
+    sender = RecordingSender()
+    await entry(
+        session_factory, sender, **delivery_arguments(stage), enabled=True, now=NOW
+    )
+    assert sender.envelopes == []
 
 
 @pytest.mark.asyncio
@@ -154,9 +163,11 @@ async def test_run_limit_keeps_oldest_fifty(
         )
         for i in range(51)
     ]
-    publisher = RecordingPublisher()
-    await entry(session_factory, publisher, enabled=True, now=NOW)
-    assert [item.payload[PAYLOAD_KEY[stage]] for item in publisher.envelopes] == [
+    sender = RecordingSender()
+    await entry(
+        session_factory, sender, **delivery_arguments(stage), enabled=True, now=NOW
+    )
+    assert [item.payload[PAYLOAD_KEY[stage]] for item in sender.envelopes] == [
         item.target_id for item in reversed(records[1:])
     ]
 
@@ -170,14 +181,16 @@ async def test_backfill_does_not_use_outbox(
     await seed_target(
         db_session, sample_source, sample_categories[0], stage, NOW - timedelta(days=1)
     )
-    publisher = RecordingPublisher()
-    await entry(session_factory, publisher, enabled=True, now=NOW)
-    assert len(publisher.envelopes) == 1
+    sender = RecordingSender()
+    await entry(
+        session_factory, sender, **delivery_arguments(stage), enabled=True, now=NOW
+    )
+    assert len(sender.envelopes) == 1
     assert await db_session.scalar(select(func.count()).select_from(OutboxEvent)) == 0
 
 
 @pytest.mark.asyncio
-async def test_cleanup_commits_before_publishing(
+async def test_cleanup_commits_before_sending(
     db_session, session_factory, sample_source, sample_categories
 ):
     """送信開始時には期限切れ整理が他の接続からも確定済みである。"""
@@ -196,13 +209,17 @@ async def test_cleanup_commits_before_publishing(
         NOW - timedelta(days=1),
     )
 
-    class FailingPublisher:
-        def publish_batch(self, envelopes):
+    class FailingSender:
+        def send_batch(self, *, queue_url, messages):
             raise RuntimeError("send failed")
 
     with pytest.raises(RuntimeError, match="send failed"):
         await service.backfill_curations(
-            session_factory, FailingPublisher(), enabled=True, now=NOW
+            session_factory,
+            FailingSender(),
+            **delivery_arguments("curation"),
+            enabled=True,
+            now=NOW,
         )
     assert await db_session.get(AnalyzableArticleRecord, old.article_id) is None
 
@@ -228,5 +245,9 @@ async def test_database_failure_is_propagated(session_factory):
 
     with pytest.raises(Exception, match="missing_backfill_column"):
         await service.backfill_curations(
-            unavailable_first, RecordingPublisher(), enabled=True, now=NOW
+            unavailable_first,
+            RecordingSender(),
+            **delivery_arguments("curation"),
+            enabled=True,
+            now=NOW,
         )

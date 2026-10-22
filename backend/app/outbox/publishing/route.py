@@ -10,7 +10,7 @@ from app.shared.errors import ApplicationError
 
 if TYPE_CHECKING:
     # PublishFailureがこの例外を参照するため、実行時はimportしない。
-    from app.outbox.publishing.publisher import EventEnvelope
+    from app.outbox.publishing.contracts import EventEnvelope
 
 
 class EventRouteMismatchError(ApplicationError):

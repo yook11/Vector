@@ -3,7 +3,7 @@
 import json
 
 from app.collection.events import AnalyzableArticleCreatedEvent
-from app.outbox.publishing.publisher import EventEnvelope
+from app.outbox.publishing.contracts import EventEnvelope
 from app.outbox.publishing.route import EventMessage
 
 
