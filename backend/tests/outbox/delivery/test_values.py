@@ -5,36 +5,7 @@ from datetime import timedelta
 
 import pytest
 
-from app.outbox.delivery.values import DeliveryBatchSelection, LeaseDuration, RetryDelay
-
-
-@pytest.mark.parametrize("value", [None, 1, True])
-def test_selection_rejects_non_string_event_type(value):
-    """イベント種別は文字列への自動変換を行わない。"""
-    with pytest.raises(TypeError):
-        DeliveryBatchSelection(event_type=value, limit=10)
-
-
-@pytest.mark.parametrize("value", ["", " \t\n"])
-def test_selection_rejects_blank_event_type(value):
-    """空の対象指定を生成時に拒否する。"""
-    with pytest.raises(ValueError):
-        DeliveryBatchSelection(event_type=value, limit=10)
-
-
-@pytest.mark.parametrize("value", [True, False, 1.5, "10", None])
-def test_selection_rejects_non_integer_limit(value):
-    """boolを含めて整数以外の件数を拒否する。"""
-    with pytest.raises(TypeError):
-        DeliveryBatchSelection(event_type="test.outbox", limit=value)
-
-
-@pytest.mark.parametrize("limit", [-1, 0, 10, 100])
-def test_selection_preserves_event_type_and_nonpositive_limit(limit):
-    """完全一致に使う文字列と、取得しない指定も補正せず保持する。"""
-    selection = DeliveryBatchSelection(event_type=" test.outbox ", limit=limit)
-    assert selection.event_type == " test.outbox "
-    assert selection.limit == limit
+from app.outbox.delivery.values import LeaseDuration, RetryDelay
 
 
 @pytest.mark.parametrize("factory", [LeaseDuration, RetryDelay])
@@ -73,8 +44,6 @@ def test_retry_delay_accepts_zero():
 @pytest.mark.parametrize(
     "value,attribute,replacement",
     [
-        (DeliveryBatchSelection(event_type="test.outbox", limit=10), "limit", True),
-        (DeliveryBatchSelection(event_type="test.outbox", limit=10), "event_type", ""),
         (LeaseDuration(timedelta(seconds=1)), "value", timedelta(0)),
         (RetryDelay(timedelta(0)), "value", timedelta(seconds=-1)),
     ],

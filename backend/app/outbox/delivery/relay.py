@@ -7,11 +7,10 @@ from datetime import timedelta
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.outbox.delivery.failure_handler import OutboxDeliveryFailureHandler
-from app.outbox.delivery.repository import ClaimedOutboxEvent, OutboxDeliveryRepository
-from app.outbox.delivery.values import DeliveryBatchSelection, LeaseDuration
+from app.outbox.delivery.repository import LeasedOutboxEvent, OutboxDeliveryRepository
+from app.outbox.delivery.values import LeaseDuration
 from app.outbox.publishing.publisher import (
     BatchPublishResult,
-    EventEnvelope,
     EventPublisher,
     PublishSucceeded,
 )
@@ -37,36 +36,44 @@ class OutboxRelay:
 
     async def run_once(self) -> None:
         async with self._session_factory() as session:
+            # 試行上限に達したイベントを配信停止にする。
             await OutboxDeliveryRepository(session).stop_deliveries_at_attempt_limit(
-                selection=DeliveryBatchSelection(event_type=self._event_type, limit=100)
+                event_type=self._event_type, limit=100
             )
             await session.commit()
 
         async with self._session_factory() as session:
-            events = await OutboxDeliveryRepository(session).claim_ready_batch(
-                selection=DeliveryBatchSelection(event_type=self._event_type, limit=10),
+            repository = OutboxDeliveryRepository(session)
+            leased_events = await repository.lease_events_to_publish(
+                event_type=self._event_type,
+                limit=10,
                 lease_duration=LeaseDuration(timedelta(seconds=150)),
             )
             await session.commit()
 
-        if not events:
+        if not leased_events:
             return
 
-        envelopes = tuple(EventEnvelope.from_claimed(event) for event in events)
-        batch = self._publisher.publish_batch(envelopes)
+        batch = self._publisher.publish_batch(
+            tuple(leased_event.envelope for leased_event in leased_events)
+        )
+
         if not isinstance(batch, BatchPublishResult):
             raise TypeError("publisher must return BatchPublishResult")
-        self._validate_result_correspondence(batch, events)
-        for event, result in zip(events, batch.results, strict=True):
+        self._validate_result_correspondence(batch, leased_events)
+        for leased_event, result in zip(leased_events, batch.results, strict=True):
             if isinstance(result, PublishSucceeded):
-                await self._mark_published(event)
+                await self._mark_published(leased_event)
             else:
-                await self._failure_handler.handle(event=event, failure=result)
+                await self._failure_handler.handle(
+                    leased_event=leased_event, failure=result
+                )
 
-    async def _mark_published(self, event: ClaimedOutboxEvent) -> None:
+    async def _mark_published(self, leased_event: LeasedOutboxEvent) -> None:
         async with self._session_factory() as session:
             updated = await OutboxDeliveryRepository(session).mark_published(
-                event_id=event.event_id, lease_token=event.lease_token
+                event_id=leased_event.envelope.event_id,
+                lease_token=leased_event.lease_token,
             )
             if updated:
                 await session.commit()
@@ -75,11 +82,11 @@ class OutboxRelay:
 
     @staticmethod
     def _validate_result_correspondence(
-        batch: BatchPublishResult, events: list[ClaimedOutboxEvent]
+        batch: BatchPublishResult, leased_events: list[LeasedOutboxEvent]
     ) -> None:
         """全件の対応を確認してから、最初の配信結果をDBへ適用する。"""
-        if len(batch.results) != len(events):
-            raise ValueError("publisher result count must match claimed events")
-        for event, result in zip(events, batch.results, strict=True):
-            if result.event_id != event.event_id:
-                raise ValueError("publisher result IDs must match claimed event order")
+        if len(batch.results) != len(leased_events):
+            raise ValueError("publisher result count must match leased events")
+        for leased_event, result in zip(leased_events, batch.results, strict=True):
+            if result.event_id != leased_event.envelope.event_id:
+                raise ValueError("publisher result IDs must match leased event order")

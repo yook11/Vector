@@ -30,9 +30,10 @@ from app.outbox.delivery.failure_handler import (
     OutboxDeliveryFailureHandler,
     RetryScheduled,
 )
-from app.outbox.delivery.repository import ClaimedOutboxEvent
+from app.outbox.delivery.repository import LeasedOutboxEvent
 from app.outbox.delivery.retry_policy import NonRetryableReason
 from app.outbox.publishing.publisher import (
+    EventEnvelope,
     PublishFailed,
     PublishFailure,
     PublishSucceeded,
@@ -64,28 +65,27 @@ def _configuration():
     )
 
 
-def _claimed(event_id=None, **changes):
-    values = dict(
-        event_id=event_id or uuid4(),
-        event_type="test.outbox",
-        schema_version=1,
-        payload={"article_id": 123},
-        occurred_at=PAST,
-        attempt_count=1,
-        lease_token=uuid4(),
-        leased_until=FUTURE,
+def _leased_event(event_id=None, *, lease_token=None, attempt_count=1):
+    return LeasedOutboxEvent(
+        envelope=EventEnvelope(
+            event_id=event_id or uuid4(),
+            event_type="test.outbox",
+            schema_version=1,
+            occurred_at=PAST,
+            payload={"article_id": 123},
+        ),
+        lease_token=lease_token or uuid4(),
+        attempt_count=attempt_count,
     )
-    values.update(changes)
-    return ClaimedOutboxEvent(**values)
 
 
-async def _seed(session_factory, **changes):
+async def _seed(session_factory, *, attempt_count=1, **changes):
     token = uuid4()
     values = dict(
         next_attempt_at=PAST,
         lease_token=token,
         leased_until=FUTURE,
-        attempt_count=1,
+        attempt_count=attempt_count,
         payload={"article_id": 123},
     )
     values.update(changes)
@@ -93,10 +93,10 @@ async def _seed(session_factory, **changes):
         event_id = await insert_event(session, **values)
         before = await read_event(session, event_id)
         await session.commit()
-    claimed = _claimed(
-        event_id, lease_token=token, attempt_count=values["attempt_count"]
+    leased_event = _leased_event(
+        event_id, lease_token=token, attempt_count=attempt_count
     )
-    return claimed, before
+    return leased_event, before
 
 
 @pytest.mark.parametrize(
@@ -120,7 +120,7 @@ async def test_result_means_committed_update_visible_from_another_session(
     record_stop,
 ):
     """確定結果とlease解除を別sessionから読み、無関係な列の維持も確認する。"""
-    claimed, before = await _seed(session_factory, attempt_count=attempt)
+    leased_event, before = await _seed(session_factory, attempt_count=attempt)
     jitter = Mock(return_value=0.5)
     async with session_factory() as reader:
         start = await reader.scalar(select(func.statement_timestamp()))
@@ -130,20 +130,21 @@ async def test_result_means_committed_update_visible_from_another_session(
     )
     assert (
         await handler.handle(
-            event=claimed, failure=PublishFailed(claimed.event_id, error)
+            leased_event=leased_event,
+            failure=PublishFailed(leased_event.envelope.event_id, error),
         )
         == expected
     )
     jitter.assert_called_once_with()
     if isinstance(expected, DeliveryStopped):
         record_stop.assert_called_once_with(
-            event=claimed, error=error, stop_reason=expected.reason
+            leased_event=leased_event, error=error, stop_reason=expected.reason
         )
     else:
         record_stop.assert_not_called()
     record_stop.reset_mock()
     async with session_factory() as reader:
-        saved = await read_event(reader, claimed.event_id)
+        saved = await read_event(reader, leased_event.envelope.event_id)
         end = await reader.scalar(select(func.statement_timestamp()))
     changes = {"lease_token": None, "leased_until": None}
     if isinstance(expected, RetryScheduled):
@@ -160,13 +161,14 @@ async def test_result_means_committed_update_visible_from_another_session(
     assert saved == {**before, **changes}
     assert (
         await handler.handle(
-            event=claimed, failure=PublishFailed(claimed.event_id, error)
+            leased_event=leased_event,
+            failure=PublishFailed(leased_event.envelope.event_id, error),
         )
         == DeliveryUpdateSkipped()
     )
     record_stop.assert_not_called()
     async with session_factory() as reader:
-        assert await read_event(reader, claimed.event_id) == saved
+        assert await read_event(reader, leased_event.envelope.event_id) == saved
 
 
 @pytest.mark.parametrize("error", [_transport(), _configuration()])
@@ -194,12 +196,14 @@ async def test_invalid_update_conditions_skip_without_modifying_rows(
         "published": {"published_at": PAST},
         "stopped": {"delivery_stopped_at": PAST, "delivery_stop_reason": "existing"},
     }.get(case, {})
-    claimed, before = await _seed(session_factory, **changes)
-    actual_id = claimed.event_id
+    leased_event, before = await _seed(session_factory, **changes)
+    actual_id = leased_event.envelope.event_id
     if case == "wrong_token":
-        claimed = replace(claimed, lease_token=uuid4())
+        leased_event = replace(leased_event, lease_token=uuid4())
     if case == "missing":
-        claimed = replace(claimed, event_id=uuid4())
+        leased_event = replace(
+            leased_event, envelope=replace(leased_event.envelope, event_id=uuid4())
+        )
     rollbacks = []
     commits = []
 
@@ -215,7 +219,8 @@ async def test_invalid_update_conditions_skip_without_modifying_rows(
             yield session
 
     result = await OutboxDeliveryFailureHandler(factory, jitter=lambda: 0.5).handle(
-        event=claimed, failure=PublishFailed(claimed.event_id, error)
+        leased_event=leased_event,
+        failure=PublishFailed(leased_event.envelope.event_id, error),
     )
     assert result == DeliveryUpdateSkipped()
     record_stop.assert_not_called()
@@ -234,7 +239,7 @@ async def test_database_failure_propagates_and_uncommitted_update_is_rolled_back
     record_stop,
 ):
     """実UPDATE後またはcommit直前の障害を注入し、変更の取り消しを確認する。"""
-    claimed, before = await _seed(session_factory)
+    leased_event, before = await _seed(session_factory)
     async with session_factory() as session:
         engine = session.bind
     original = SQLAlchemyError("injected database failure")
@@ -256,13 +261,14 @@ async def test_database_failure_propagates_and_uncommitted_update_is_rolled_back
 
     with pytest.raises(DatabaseError) as caught:
         await OutboxDeliveryFailureHandler(factory, jitter=lambda: 0.5).handle(
-            event=claimed, failure=PublishFailed(claimed.event_id, error)
+            leased_event=leased_event,
+            failure=PublishFailed(leased_event.envelope.event_id, error),
         )
     record_stop.assert_not_called()
     assert not isinstance(caught.value, PublishFailure)
     assert caught.value.__cause__ is original
     async with session_factory() as reader:
-        assert await read_event(reader, claimed.event_id) == before
+        assert await read_event(reader, leased_event.envelope.event_id) == before
 
 
 async def test_session_exit_failure_does_not_return_success_or_undo_commit(
@@ -270,7 +276,7 @@ async def test_session_exit_failure_does_not_return_success_or_undo_commit(
     record_stop,
 ):
     """commit後の終了失敗では成功結果を返さず、保存済みの停止は維持する。"""
-    claimed, _ = await _seed(session_factory)
+    leased_event, _ = await _seed(session_factory)
     failure = RuntimeError("session cleanup")
 
     @asynccontextmanager
@@ -281,12 +287,13 @@ async def test_session_exit_failure_does_not_return_success_or_undo_commit(
 
     with pytest.raises(RuntimeError) as caught:
         await OutboxDeliveryFailureHandler(factory, jitter=lambda: 0.5).handle(
-            event=claimed, failure=PublishFailed(claimed.event_id, _configuration())
+            leased_event=leased_event,
+            failure=PublishFailed(leased_event.envelope.event_id, _configuration()),
         )
     record_stop.assert_not_called()
     assert caught.value is failure
     async with session_factory() as reader:
-        saved = await read_event(reader, claimed.event_id)
+        saved = await read_event(reader, leased_event.envelope.event_id)
     assert saved["delivery_stopped_at"] is not None
     assert saved["lease_token"] is None
 
@@ -312,10 +319,11 @@ async def test_invalid_policy_input_never_opens_session(
     """判断対象外の入力はDBに触れる前に拒否する。"""
     factory = Mock()
     generate = Mock(return_value=jitter)
-    claimed = _claimed(attempt_count=attempt)
+    leased_event = _leased_event(attempt_count=attempt)
     with pytest.raises(exception_type):
         await OutboxDeliveryFailureHandler(factory, jitter=generate).handle(
-            event=claimed, failure=PublishFailed(claimed.event_id, error)
+            leased_event=leased_event,
+            failure=PublishFailed(leased_event.envelope.event_id, error),
         )
     record_stop.assert_not_called()
     factory.assert_not_called()
@@ -328,11 +336,14 @@ async def test_invalid_policy_input_never_opens_session(
 async def test_jitter_generation_failure_is_not_reclassified(failure, record_stop):
     """乱数生成の失敗やプロセス終了を配信失敗へ変換しない。"""
     factory = Mock()
-    claimed = _claimed()
+    leased_event = _leased_event()
     with pytest.raises(type(failure)) as caught:
         await OutboxDeliveryFailureHandler(
             factory, jitter=Mock(side_effect=failure)
-        ).handle(event=claimed, failure=PublishFailed(claimed.event_id, _transport()))
+        ).handle(
+            leased_event=leased_event,
+            failure=PublishFailed(leased_event.envelope.event_id, _transport()),
+        )
     record_stop.assert_not_called()
     assert caught.value is failure
     factory.assert_not_called()
@@ -343,9 +354,9 @@ async def test_invalid_failure_is_rejected_before_jitter_session_or_record(
     case, record_stop
 ):
     """別イベントの失敗や失敗結果以外の入力で副作用を起こさない。"""
-    claimed = _claimed()
+    leased_event = _leased_event()
     failure = {
-        "success": PublishSucceeded(claimed.event_id),
+        "success": PublishSucceeded(leased_event.envelope.event_id),
         "raw_error": _configuration(),
         "none": None,
         "wrong_id": PublishFailed(uuid4(), _configuration()),
@@ -354,7 +365,7 @@ async def test_invalid_failure_is_rejected_before_jitter_session_or_record(
     jitter = Mock(return_value=0.5)
     with pytest.raises(ValueError if case == "wrong_id" else TypeError):
         await OutboxDeliveryFailureHandler(factory, jitter=jitter).handle(
-            event=claimed, failure=failure
+            leased_event=leased_event, failure=failure
         )
     jitter.assert_not_called()
     factory.assert_not_called()

@@ -7,9 +7,10 @@ import pytest
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.outbox.delivery.repository import OutboxDeliveryRepository
+from app.outbox.delivery.repository import LeasedOutboxEvent, OutboxDeliveryRepository
 from app.outbox.delivery.retry_policy import MAX_PUBLISH_ATTEMPTS
-from app.outbox.delivery.values import DeliveryBatchSelection, LeaseDuration
+from app.outbox.delivery.values import LeaseDuration
+from app.outbox.publishing.publisher import EventEnvelope
 from tests.outbox.helpers import (
     FUTURE,
     PAST,
@@ -23,7 +24,7 @@ EVENT_TYPE = "article.assessed_in_scope"
 LEASE = timedelta(minutes=5)
 
 
-async def test_claim_ready_batch_skips_published_event(
+async def test_lease_events_to_publish_skips_published_event(
     db_session: AsyncSession,
 ) -> None:
     """送信済みの記録は確保しない。"""
@@ -36,14 +37,15 @@ async def test_claim_ready_batch_skips_published_event(
         next_attempt_at=PAST,
         published_at=PAST,
     )
-    claimed = await OutboxDeliveryRepository(db_session).claim_ready_batch(
-        selection=DeliveryBatchSelection(event_type="test.outbox", limit=10),
+    claimed = await OutboxDeliveryRepository(db_session).lease_events_to_publish(
+        event_type="test.outbox",
+        limit=10,
         lease_duration=LeaseDuration(timedelta(minutes=5)),
     )
-    assert {item.event_id for item in claimed} == {ready_id}
+    assert {item.envelope.event_id for item in claimed} == {ready_id}
 
 
-async def test_claim_ready_batch_skips_stopped_event(
+async def test_lease_events_to_publish_skips_stopped_event(
     db_session: AsyncSession,
 ) -> None:
     """配信停止済みの記録は確保しない。"""
@@ -57,14 +59,15 @@ async def test_claim_ready_batch_skips_stopped_event(
         delivery_stopped_at=PAST,
         delivery_stop_reason="max_attempts",
     )
-    claimed = await OutboxDeliveryRepository(db_session).claim_ready_batch(
-        selection=DeliveryBatchSelection(event_type="test.outbox", limit=10),
+    claimed = await OutboxDeliveryRepository(db_session).lease_events_to_publish(
+        event_type="test.outbox",
+        limit=10,
         lease_duration=LeaseDuration(timedelta(minutes=5)),
     )
-    assert {item.event_id for item in claimed} == {ready_id}
+    assert {item.envelope.event_id for item in claimed} == {ready_id}
 
 
-async def test_claim_ready_batch_skips_event_waiting_for_retry(
+async def test_lease_events_to_publish_skips_event_waiting_for_retry(
     db_session: AsyncSession,
 ) -> None:
     """再試行時刻が来ていない記録は確保しない。"""
@@ -76,14 +79,15 @@ async def test_claim_ready_batch_skips_event_waiting_for_retry(
         db_session,
         next_attempt_at=FUTURE,
     )
-    claimed = await OutboxDeliveryRepository(db_session).claim_ready_batch(
-        selection=DeliveryBatchSelection(event_type="test.outbox", limit=10),
+    claimed = await OutboxDeliveryRepository(db_session).lease_events_to_publish(
+        event_type="test.outbox",
+        limit=10,
         lease_duration=LeaseDuration(timedelta(minutes=5)),
     )
-    assert {item.event_id for item in claimed} == {ready_id}
+    assert {item.envelope.event_id for item in claimed} == {ready_id}
 
 
-async def test_claim_ready_batch_skips_event_with_active_lease(
+async def test_lease_events_to_publish_skips_event_with_active_lease(
     db_session: AsyncSession,
 ) -> None:
     """有効なleaseがある記録は確保しない。"""
@@ -97,11 +101,12 @@ async def test_claim_ready_batch_skips_event_with_active_lease(
         lease_token=uuid4(),
         leased_until=FUTURE,
     )
-    claimed = await OutboxDeliveryRepository(db_session).claim_ready_batch(
-        selection=DeliveryBatchSelection(event_type="test.outbox", limit=10),
+    claimed = await OutboxDeliveryRepository(db_session).lease_events_to_publish(
+        event_type="test.outbox",
+        limit=10,
         lease_duration=LeaseDuration(timedelta(minutes=5)),
     )
-    assert {item.event_id for item in claimed} == {ready_id}
+    assert {item.envelope.event_id for item in claimed} == {ready_id}
 
 
 async def test_claim_respects_limit_without_selecting_specific_ids(
@@ -111,12 +116,13 @@ async def test_claim_respects_limit_without_selecting_specific_ids(
     ready_ids = {await insert_event(db_session, next_attempt_at=PAST) for _ in range(3)}
     await insert_event(db_session, next_attempt_at=FUTURE)
 
-    claimed = await OutboxDeliveryRepository(db_session).claim_ready_batch(
-        selection=DeliveryBatchSelection(event_type="test.outbox", limit=2),
+    claimed = await OutboxDeliveryRepository(db_session).lease_events_to_publish(
+        event_type="test.outbox",
+        limit=2,
         lease_duration=LeaseDuration(timedelta(minutes=5)),
     )
 
-    claimed_ids = {item.event_id for item in claimed}
+    claimed_ids = {item.envelope.event_id for item in claimed}
     assert len(claimed) == len(claimed_ids) == 2
     assert claimed_ids <= ready_ids
 
@@ -131,14 +137,15 @@ async def test_claim_attempt_boundaries(db_session, attempt):
         attempt_count=attempt,
     )
     before = await read_event(db_session, event_id)
-    result = await OutboxDeliveryRepository(db_session).claim_ready_batch(
-        selection=DeliveryBatchSelection(event_type="test.outbox", limit=10),
+    result = await OutboxDeliveryRepository(db_session).lease_events_to_publish(
+        event_type="test.outbox",
+        limit=10,
         lease_duration=LeaseDuration(timedelta(minutes=5)),
     )
     if attempt < MAX_PUBLISH_ATTEMPTS:
         assert len(result) == 1
         assert result[0].attempt_count == attempt + 1
-        assert result[0].event_id == event_id
+        assert result[0].envelope.event_id == event_id
     else:
         assert result == []
         assert await read_event(db_session, event_id) == before
@@ -149,8 +156,9 @@ async def test_claim_returns_empty_when_no_event_is_ready(
 ) -> None:
     """対象外の行しかない場合は空リストを返す。"""
     await insert_event(db_session, next_attempt_at=FUTURE)
-    claimed = await OutboxDeliveryRepository(db_session).claim_ready_batch(
-        selection=DeliveryBatchSelection(event_type="test.outbox", limit=10),
+    claimed = await OutboxDeliveryRepository(db_session).lease_events_to_publish(
+        event_type="test.outbox",
+        limit=10,
         lease_duration=LeaseDuration(timedelta(minutes=5)),
     )
     assert claimed == []
@@ -169,10 +177,9 @@ async def test_claim_updates_only_lease_and_attempt_count(
     )
     before = await read_event(db_session, event_id)
 
-    await OutboxDeliveryRepository(db_session).claim_ready_batch(
-        selection=DeliveryBatchSelection(
-            event_type="article.assessed_in_scope", limit=10
-        ),
+    await OutboxDeliveryRepository(db_session).lease_events_to_publish(
+        event_type="article.assessed_in_scope",
+        limit=10,
         lease_duration=LeaseDuration(timedelta(minutes=5)),
     )
 
@@ -194,8 +201,9 @@ async def test_claim_sets_lease_expiry_from_database_time(
     event_id = await insert_event(db_session, next_attempt_at=PAST)
     started_at = await db_session.scalar(select(func.statement_timestamp()))
 
-    await OutboxDeliveryRepository(db_session).claim_ready_batch(
-        selection=DeliveryBatchSelection(event_type="test.outbox", limit=10),
+    await OutboxDeliveryRepository(db_session).lease_events_to_publish(
+        event_type="test.outbox",
+        limit=10,
         lease_duration=LeaseDuration(timedelta(minutes=5)),
     )
 
@@ -221,24 +229,26 @@ async def test_claim_returns_saved_values(
         event_type="article.assessed_in_scope",
         payload=payload,
     )
-    claimed = await OutboxDeliveryRepository(db_session).claim_ready_batch(
-        selection=DeliveryBatchSelection(
-            event_type="article.assessed_in_scope", limit=10
-        ),
+    claimed = await OutboxDeliveryRepository(db_session).lease_events_to_publish(
+        event_type="article.assessed_in_scope",
+        limit=10,
         lease_duration=LeaseDuration(timedelta(minutes=5)),
     )
     saved = await read_event(db_session, event_id)
 
-    assert len(claimed) == 1
-    event = claimed[0]
-    assert event.event_id == saved["event_id"]
-    assert event.event_type == saved["event_type"]
-    assert event.schema_version == saved["schema_version"]
-    assert event.payload == saved["payload"]
-    assert event.occurred_at == saved["occurred_at"]
-    assert event.attempt_count == saved["attempt_count"]
-    assert event.lease_token == saved["lease_token"]
-    assert event.leased_until == saved["leased_until"]
+    assert claimed == [
+        LeasedOutboxEvent(
+            envelope=EventEnvelope(
+                event_id=saved["event_id"],
+                event_type=saved["event_type"],
+                schema_version=saved["schema_version"],
+                occurred_at=saved["occurred_at"],
+                payload=saved["payload"],
+            ),
+            lease_token=saved["lease_token"],
+            attempt_count=saved["attempt_count"],
+        )
+    ]
 
 
 async def test_reclaim_replaces_expired_token_and_increments_attempt_count(
@@ -253,20 +263,20 @@ async def test_reclaim_replaces_expired_token_and_increments_attempt_count(
         leased_until=PAST,
         attempt_count=4,
     )
-    claimed = await OutboxDeliveryRepository(db_session).claim_ready_batch(
-        selection=DeliveryBatchSelection(event_type="test.outbox", limit=10),
+    claimed = await OutboxDeliveryRepository(db_session).lease_events_to_publish(
+        event_type="test.outbox",
+        limit=10,
         lease_duration=LeaseDuration(timedelta(minutes=5)),
     )
 
     assert len(claimed) == 1
     event = claimed[0]
-    assert event.event_id == event_id
+    assert event.envelope.event_id == event_id
     assert isinstance(event.lease_token, UUID)
     assert event.lease_token != old_token
     assert event.attempt_count == 5
     saved = await read_event(db_session, event_id)
     assert saved["lease_token"] == event.lease_token
-    assert saved["leased_until"] == event.leased_until
     assert saved["attempt_count"] == 5
 
 
@@ -275,11 +285,12 @@ async def test_claim_generates_a_different_token_for_each_event(
 ) -> None:
     """同じ一括確保でも、各イベントが別のtokenを持つ。"""
     ready_ids = {await insert_event(db_session, next_attempt_at=PAST) for _ in range(2)}
-    claimed = await OutboxDeliveryRepository(db_session).claim_ready_batch(
-        selection=DeliveryBatchSelection(event_type="test.outbox", limit=10),
+    claimed = await OutboxDeliveryRepository(db_session).lease_events_to_publish(
+        event_type="test.outbox",
+        limit=10,
         lease_duration=LeaseDuration(timedelta(minutes=5)),
     )
-    assert {event.event_id for event in claimed} == ready_ids
+    assert {event.envelope.event_id for event in claimed} == ready_ids
     assert len({event.lease_token for event in claimed}) == len(ready_ids)
 
 
@@ -289,8 +300,9 @@ async def test_nonpositive_limit_returns_empty_without_database_access(
 ) -> None:
     """DB接続のないsessionでも、非正の上限は空結果を返す。"""
     async with AsyncSession() as session:
-        claimed = await OutboxDeliveryRepository(session).claim_ready_batch(
-            selection=DeliveryBatchSelection(event_type="test.outbox", limit=limit),
+        claimed = await OutboxDeliveryRepository(session).lease_events_to_publish(
+            event_type="test.outbox",
+            limit=limit,
             lease_duration=LeaseDuration(timedelta(minutes=5)),
         )
     assert claimed == []
@@ -308,11 +320,12 @@ async def test_claim_batches_select_and_return_events_by_occurrence_time(db_sess
             occurred_at=PAST + timedelta(seconds=age),
             next_attempt_at=PAST + timedelta(seconds=2 - age),
         )
-    result = await OutboxDeliveryRepository(db_session).claim_ready_batch(
-        selection=DeliveryBatchSelection(event_type=EVENT_TYPE, limit=2),
+    result = await OutboxDeliveryRepository(db_session).lease_events_to_publish(
+        event_type=EVENT_TYPE,
+        limit=2,
         lease_duration=LeaseDuration(LEASE),
     )
-    ids = [event.event_id for event in result]
+    ids = [event.envelope.event_id for event in result]
     assert ids == [events[0], events[1]]
 
 
@@ -329,11 +342,12 @@ async def test_claim_equal_occurrence_times_allow_any_event_order(db_session):
         )
         for _ in range(3)
     }
-    result = await OutboxDeliveryRepository(db_session).claim_ready_batch(
-        selection=DeliveryBatchSelection(event_type=EVENT_TYPE, limit=2),
+    result = await OutboxDeliveryRepository(db_session).lease_events_to_publish(
+        event_type=EVENT_TYPE,
+        limit=2,
         lease_duration=LeaseDuration(LEASE),
     )
-    ids = [event.event_id for event in result]
+    ids = [event.envelope.event_id for event in result]
     assert len(ids) == len(set(ids)) == 2
     assert set(ids) <= events
 
@@ -357,17 +371,19 @@ async def test_claim_event_type_is_exact_and_old_events_are_included(db_session)
     before = await read_event(db_session, other)
     repository = OutboxDeliveryRepository(db_session)
     assert (
-        await repository.claim_ready_batch(
-            selection=DeliveryBatchSelection(event_type=f" {EVENT_TYPE} ", limit=10),
+        await repository.lease_events_to_publish(
+            event_type=f" {EVENT_TYPE} ",
+            limit=10,
             lease_duration=LeaseDuration(LEASE),
         )
         == []
     )
-    result = await repository.claim_ready_batch(
-        selection=DeliveryBatchSelection(event_type=EVENT_TYPE, limit=10),
+    result = await repository.lease_events_to_publish(
+        event_type=EVENT_TYPE,
+        limit=10,
         lease_duration=LeaseDuration(LEASE),
     )
-    assert [event.event_id for event in result] == [target]
+    assert [event.envelope.event_id for event in result] == [target]
     assert await read_event(db_session, other) == before
 
 
@@ -377,11 +393,12 @@ async def test_claim_batch_limit_leaves_excess_events_unchanged(db_session, limi
     before = await seed_batch_events(
         db_session, event_type=EVENT_TYPE, count=limit + 2, attempt_count=0
     )
-    result = await OutboxDeliveryRepository(db_session).claim_ready_batch(
-        selection=DeliveryBatchSelection(event_type=EVENT_TYPE, limit=limit),
+    result = await OutboxDeliveryRepository(db_session).lease_events_to_publish(
+        event_type=EVENT_TYPE,
+        limit=limit,
         lease_duration=LeaseDuration(LEASE),
     )
-    claimed_ids = {event.event_id for event in result}
+    claimed_ids = {event.envelope.event_id for event in result}
     assert len(result) == len(claimed_ids) == limit
     assert claimed_ids <= before.keys()
     remaining = before.keys() - claimed_ids

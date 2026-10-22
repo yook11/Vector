@@ -245,14 +245,14 @@ Evidence: 既存OutboxDeliveryRepository、outbox_eventsの状態・lease制約�
 
 ### APIと更新条件
 
-`claim_ready_batch(*, selection: DeliveryBatchSelection, lease_duration: LeaseDuration) -> list[ClaimedOutboxEvent]`
+`lease_events_to_publish(*, event_type: str, limit: int, lease_duration: LeaseDuration) -> list[LeasedOutboxEvent]`
 
 - 未配信・未停止・再試行時刻到来・leaseなしまたは期限切れ・確保前の試行回数が5回未満をDB側で判定する。
 - `occurred_at ASC`で候補を選び、件数上限と`FOR UPDATE SKIP LOCKED`を適用して、1つのSQLでlease設定と試行回数の加算を行う。
 - 確保前4回は確保後5回となり、確保前5回以上は確保しない。本文・発生日時・再試行予定日時など他の列は変更しない。
 - `RETURNING`の順序に依存せず、取得したoccurred_atで返却結果も整列する。同じ発生日時のイベント同士の選択・返却順は保証せず、ID順も要求しない。next_attempt_atは送信可能時刻の判定だけに使う。
 
-`stop_deliveries_at_attempt_limit(*, selection: DeliveryBatchSelection) -> list[UUID]`
+`stop_deliveries_at_attempt_limit(*, event_type: str, limit: int) -> list[UUID]`
 
 - 未配信・未停止・試行回数5回以上・leaseなしまたは期限切れの行を対象とし、next_attempt_atが未来でも停止する。
 - 確保と同じ順序・ロック方式で候補を制限し、1つのSQLで停止日時をDB現在時刻、停止理由を`NonRetryableReason.RETRY_EXHAUSTED.value`にし、leaseの2列をNULLへ戻す。
@@ -263,8 +263,7 @@ Evidence: 既存OutboxDeliveryRepository、outbox_eventsの状態・lease制約�
 
 ### 入力・トランザクションの境界
 
-- delivery.valuesの不変なDeliveryBatchSelection(event_type, limit)が生成時に入力を検証する。event_typeの型違反はTypeError、空・空白のみはValueErrorとし、文字列を自動補正しない。
-- DeliveryBatchSelectionのlimitはboolを除く整数を要求し、生成時の型違反はTypeErrorとする。0以下も保持でき、Repositoryはその場合DB操作なしで空リストを返す。
+- limitが0以下のとき、RepositoryはDB操作なしで空リストを返す。
 - LeaseDuration(value)は生成時にtimedelta以外をTypeError、0以下をValueErrorとする。件数が0以下でも、不正な期間はRepositoryへ渡す前に拒否する。
 - 選択条件の件数は呼び出し元が明示する。Relayは確保10件・停止100件を指定し、RepositoryにSQSの10件というリクエスト上限は持ち込まない。
 - RetryDelay(value)は生成時にtimedelta以外をTypeError、負の値をValueErrorとし、ゼロを許容する。schedule_retryはRetryDelayを受け取り、DBへ渡すときにvalueを取り出す。
@@ -295,7 +294,7 @@ Evidence: EventPublisher、OutboxDeliveryFailureHandler、OutboxDeliveryReposito
 
 - 対象は`ArticleAssessedInScope.EVENT_TYPE`に固定する。1回の実行は上限到達の停止100件、確保10件、送信最大1回までとし、lease期間は150秒とする。
 - 専用sessionで上限到達を停止してcommit・終了し、別sessionで確保してcommit・終了する。確保0件なら送信せず正常終了する。
-- 確保結果を`EventEnvelope.from_claimed`で送信内容へ変換し、同期publisherを直列に1回だけ呼ぶ。送信中はDB sessionを保持しない。
+- 確保結果が持つ`envelope`をそのまま送信内容とし、同期publisherを直列に1回だけ呼ぶ。送信中はDB sessionを保持しない。
 - publisherの戻り値がBatchPublishResultであることを確認し、件数・入力順のevent_idを全件照合してから結果を適用する。結果型が構築時に保証する内部構造は再検証しない。契約違反は外部の値を含まないTypeErrorまたはValueErrorで伝播する。
 - 成功はイベント単位のsessionでmark_publishedを呼び、Trueならcommit、Falseならrollbackして終了する。失敗は対応する確保情報とPublishFailedを既存handlerへ渡す。更新条件不一致でも後続の結果記録を続ける。
 - handlerによる停止確定後の記録を再度呼ばない。上限到達の整理に架空のPublishErrorや送信失敗通知を追加しない。
@@ -312,7 +311,7 @@ Verification（2026-09-08）: relay本体とテストのlint・format checkが�
 ## 再試行・停止ポリシー（スライス①）
 
 Problem: publisherが返す原因から、再試行・停止を判断する規則を一箇所に定義する。
-Evidence: publishing.errorsの共通分類と、claim_ready_batchが確保時にattempt_countを加算する契約に従う。
+Evidence: publishing.errorsの共通分類と、lease_events_to_publishが確保時にattempt_countを加算する契約に従う。
 
 delivery.retry_policy.decide_publish_retry(error, attempt_count, jitter)は、副作用のない判断関数とする。
 結果は不変のRetryable(delay)またはNonRetryable(reason)で返す。
@@ -354,7 +353,7 @@ Done: 全分類、proxy境界、試行上限、jitter境界、不正入力、判
 Problem: PublishFailedを入口として、policyの判断・DBへの確定・確定後の停止記録を取りまとめる。
 Evidence: OutboxDeliveryRepositoryは更新成否をboolで返し、トランザクションの確定は呼び出し元が担う。
 
-OutboxDeliveryFailureHandler.handle(event=ClaimedOutboxEvent, failure=PublishFailed)は、イベント単位の短いトランザクションと停止確定後の記録を管理する。
+OutboxDeliveryFailureHandler.handle(leased_event=LeasedOutboxEvent, failure=PublishFailed)は、イベント単位の短いトランザクションと停止確定後の記録を管理する。
 failureがPublishFailed以外ならTypeError、event_idが確保済みイベントと一致しなければValueErrorとして、jitter生成・DB操作・記録の前に拒否する。
 session factoryはcaller_managed_session_factoryと互換のsession開閉専用factoryを注入する。
 jitter生成関数は既定でrandom.randomを使い、テストでは固定値を注入する。

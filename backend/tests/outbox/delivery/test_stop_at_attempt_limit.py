@@ -9,7 +9,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.outbox.delivery.repository import OutboxDeliveryRepository
 from app.outbox.delivery.retry_policy import MAX_PUBLISH_ATTEMPTS, NonRetryableReason
-from app.outbox.delivery.values import DeliveryBatchSelection
 from tests.outbox.helpers import (
     FUTURE,
     PAST,
@@ -36,9 +35,7 @@ async def test_stop_selects_and_returns_events_by_occurrence_time(db_session):
         )
     result = await OutboxDeliveryRepository(
         db_session
-    ).stop_deliveries_at_attempt_limit(
-        selection=DeliveryBatchSelection(event_type=EVENT_TYPE, limit=2)
-    )
+    ).stop_deliveries_at_attempt_limit(event_type=EVENT_TYPE, limit=2)
     ids = result
     assert ids == [events[0], events[1]]
 
@@ -58,9 +55,7 @@ async def test_stop_equal_occurrence_times_allow_any_event_order(db_session):
     }
     result = await OutboxDeliveryRepository(
         db_session
-    ).stop_deliveries_at_attempt_limit(
-        selection=DeliveryBatchSelection(event_type=EVENT_TYPE, limit=2)
-    )
+    ).stop_deliveries_at_attempt_limit(event_type=EVENT_TYPE, limit=2)
     ids = result
     assert len(ids) == len(set(ids)) == 2
     assert set(ids) <= events
@@ -86,12 +81,12 @@ async def test_stop_event_type_is_exact_and_old_events_are_included(db_session):
     repository = OutboxDeliveryRepository(db_session)
     assert (
         await repository.stop_deliveries_at_attempt_limit(
-            selection=DeliveryBatchSelection(event_type=f" {EVENT_TYPE} ", limit=100)
+            event_type=f" {EVENT_TYPE} ", limit=100
         )
         == []
     )
     result = await repository.stop_deliveries_at_attempt_limit(
-        selection=DeliveryBatchSelection(event_type=EVENT_TYPE, limit=100)
+        event_type=EVENT_TYPE, limit=100
     )
     assert result == [target]
     assert await read_event(db_session, other) == before
@@ -103,7 +98,7 @@ async def test_stop_nonpositive_limit_is_noop_without_database(limit):
     async with AsyncSession() as session:
         assert (
             await OutboxDeliveryRepository(session).stop_deliveries_at_attempt_limit(
-                selection=DeliveryBatchSelection(event_type=EVENT_TYPE, limit=limit)
+                event_type=EVENT_TYPE, limit=limit
             )
             == []
         )
@@ -120,9 +115,7 @@ async def test_stop_limit_leaves_excess_events_unchanged(db_session, limit):
     )
     result = await OutboxDeliveryRepository(
         db_session
-    ).stop_deliveries_at_attempt_limit(
-        selection=DeliveryBatchSelection(event_type=EVENT_TYPE, limit=limit)
-    )
+    ).stop_deliveries_at_attempt_limit(event_type=EVENT_TYPE, limit=limit)
     stopped_ids = set(result)
     assert len(result) == len(stopped_ids) == limit
     assert stopped_ids <= before.keys()
@@ -143,12 +136,12 @@ async def test_next_stop_processes_events_left_unstopped(db_session):
     )
     repository = OutboxDeliveryRepository(db_session)
     first = await repository.stop_deliveries_at_attempt_limit(
-        selection=DeliveryBatchSelection(event_type=EVENT_TYPE, limit=1)
+        event_type=EVENT_TYPE, limit=1
     )
     remaining = before.keys() - set(first)
     assert len(remaining) == 2
     second = await repository.stop_deliveries_at_attempt_limit(
-        selection=DeliveryBatchSelection(event_type=EVENT_TYPE, limit=100)
+        event_type=EVENT_TYPE, limit=100
     )
     assert len(second) == 2
     assert set(second) == remaining
@@ -174,7 +167,7 @@ async def test_stop_attempt_and_lease_boundaries_ignore_retry_time(
     repository = OutboxDeliveryRepository(db_session)
     started = await db_session.scalar(select(func.statement_timestamp()))
     result = await repository.stop_deliveries_at_attempt_limit(
-        selection=DeliveryBatchSelection(event_type=EVENT_TYPE, limit=100)
+        event_type=EVENT_TYPE, limit=100
     )
     finished = await db_session.scalar(select(func.statement_timestamp()))
     saved = await read_event(db_session, event_id)
@@ -214,7 +207,7 @@ async def test_stop_leaves_finalized_events_unchanged(db_session, state):
     before = await read_event(db_session, event_id)
     assert (
         await OutboxDeliveryRepository(db_session).stop_deliveries_at_attempt_limit(
-            selection=DeliveryBatchSelection(event_type=EVENT_TYPE, limit=100)
+            event_type=EVENT_TYPE, limit=100
         )
         == []
     )
