@@ -36,9 +36,8 @@ def relay_environment(monkeypatch: pytest.MonkeyPatch, test_database_url: str) -
 @pytest.fixture
 def sender(monkeypatch):
     sender = Mock()
-    sender.send_batch.side_effect = lambda *, queue_url, send_requests: tuple(
-        (original, PublishSucceeded(message.event_id))
-        for original, message in send_requests
+    sender.send_batch.side_effect = lambda *, queue_url, batch: tuple(
+        PublishSucceeded(message.event_id) for message in batch.messages
     )
     monkeypatch.setattr(
         import_module("app.lambda_handlers.outbox_relay.execution"),
@@ -72,7 +71,7 @@ async def test_repeated_invocations_record_delivery_without_resending(
         assert saved.published_at is not None
     sender.send_batch.assert_called_once()
     assert [
-        e.event_id for _, e in sender.send_batch.call_args.kwargs["send_requests"]
+        e.event_id for e in sender.send_batch.call_args.kwargs["batch"].messages
     ] == [event_id]
 
 

@@ -15,6 +15,7 @@ from app.outbox.publishing.contracts import (
     PublishFailed,
     PublishSucceeded,
 )
+from app.outbox.publishing.message_batch import MessageBatch
 from app.outbox.publishing.preparation import build_sendable_message
 from app.outbox.publishing.route import (
     EventDeliveryRoute,
@@ -81,10 +82,15 @@ class OutboxRelay:
         if not send_requests:
             return
 
+        events_by_id = {
+            message.event_id: leased_event for leased_event, message in send_requests
+        }
         send_results = self._sender.send_batch(
-            queue_url=self._route.queue_url, send_requests=send_requests
+            queue_url=self._route.queue_url,
+            batch=MessageBatch([message for _, message in send_requests]),
         )
-        for leased_event, result in send_results:
+        for result in send_results:
+            leased_event = events_by_id[result.event_id]
             if isinstance(result, PublishSucceeded):
                 async with self._session_factory() as session, session.begin():
                     await OutboxDeliveryRepository(session).mark_published(

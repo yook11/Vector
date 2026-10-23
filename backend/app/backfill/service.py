@@ -28,6 +28,7 @@ from app.outbox.publishing.contracts import (
     MessageSender,
     PublishSucceeded,
 )
+from app.outbox.publishing.message_batch import MessageBatch
 from app.outbox.publishing.preparation import build_sendable_message
 from app.outbox.publishing.route import (
     EventDeliveryRoute,
@@ -62,7 +63,7 @@ async def _dispatch(
             )
             for item in batch_targets
         )
-        send_requests: list[tuple[EventEnvelope, EventMessage]] = []
+        messages: list[EventMessage] = []
         for envelope in envelopes:
             try:
                 message = build_sendable_message(
@@ -70,14 +71,14 @@ async def _dispatch(
                 )
             except (EventRouteMismatchError, EventInvalidError):
                 continue
-            send_requests.append((envelope, message))
+            messages.append(message)
         successes = 0
-        if send_requests:
+        if messages:
             send_results = sender.send_batch(
-                queue_url=route.queue_url, send_requests=send_requests
+                queue_url=route.queue_url, batch=MessageBatch(messages)
             )
             successes = sum(
-                isinstance(result, PublishSucceeded) for _, result in send_results
+                isinstance(result, PublishSucceeded) for result in send_results
             )
         record_dispatched(stage, successes)
         enqueued += successes

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Mapping
 from uuid import UUID
 
 from botocore.client import BaseClient
@@ -9,6 +9,8 @@ from botocore.session import Session
 from app.aws.sqs.errors import MessageSendError, to_message_send_error
 from app.aws.sqs.outgoing_message import (
     AcceptedSqsMessage,
+    MessageTooLargeError,
+    OutgoingSqsMessage,
     OutgoingSqsMessageBatch,
     SqsResponseInvalidError,
 )
@@ -16,22 +18,9 @@ from app.outbox.publishing.contracts import (
     PublishFailed,
     PublishSucceeded,
 )
-from app.outbox.publishing.route import EventMessage
+from app.outbox.publishing.message_batch import MessageBatch
 from app.outbox.sqs.client import create_sqs_client
 from app.outbox.sqs.failure_handler import SqsPublishFailureHandler
-from app.outbox.sqs.message_batch import SqsMessageBatch
-
-
-def failed_results(
-    batch: SqsMessageBatch,
-    *,
-    error: MessageSendError,
-) -> dict[UUID, PublishFailed]:
-    """指定された送信対象に、分類済みの失敗を結び付ける。"""
-    return {
-        message.event_id: PublishFailed(message.event_id, error)
-        for message in batch.sendable
-    }
 
 
 class SqsSender:
@@ -59,82 +48,70 @@ class SqsSender:
             failure_handler=SqsPublishFailureHandler(),
         )
 
-    def send_batch[T](
-        self, *, queue_url: str, send_requests: Sequence[tuple[T, EventMessage]]
-    ) -> tuple[tuple[T, PublishSucceeded | PublishFailed], ...]:
-        successes: list[PublishSucceeded] = []
-        failures: list[PublishFailed] = []
+    def send_batch(
+        self, *, queue_url: str, batch: MessageBatch
+    ) -> tuple[PublishSucceeded | PublishFailed, ...]:
         if not isinstance(queue_url, str) or not queue_url.strip():
             raise ValueError("queue URL must not be blank")
-        if not isinstance(send_requests, Sequence) or isinstance(
-            send_requests, (str, bytes)
-        ):
-            raise TypeError(
-                "send requests must be a sequence of target and EventMessage pairs"
-            )
-        send_requests = tuple(send_requests)
-        batch = SqsMessageBatch([message for _, message in send_requests])
-        failures.extend(batch.failures)
-        if batch.outgoing is not None:
+        if not isinstance(batch, MessageBatch):
+            raise TypeError("batch must be a MessageBatch")
+        if len(batch.messages) > 10:
+            raise ValueError("SQS batch must contain at most ten messages")
+
+        results: dict[UUID, PublishSucceeded | PublishFailed] = {}
+        sqs_messages: dict[str, OutgoingSqsMessage] = {}
+
+        for message in batch.messages:
             try:
-                client = self._client_factory()
-            except Exception as exc:
-                error = to_message_send_error(exc)
-                failures.extend(failed_results(batch, error=error).values())
+                sqs_message = OutgoingSqsMessage(message.body)
+            except MessageTooLargeError as error:
+                results[message.event_id] = PublishFailed(message.event_id, error)
             else:
-                try:
-                    sent_results = self._send_messages(
-                        client, batch, batch.outgoing, queue_url
-                    )
-                finally:
-                    try:
-                        client.close()
-                    except Exception as exc:
-                        try:
-                            self._failure_handler.handle_cleanup_failure(exc)
-                        except Exception:  # noqa: S110 — 終了診断の障害で元の結果を変更しない。
-                            pass
-                for outcome in sent_results.values():
-                    if isinstance(outcome, PublishSucceeded):
-                        successes.append(outcome)
-                    else:
-                        failures.append(outcome)
-        results_by_event_id = {
-            outcome.event_id: outcome for outcome in (*successes, *failures)
-        }
-        return tuple(
-            (original_event, results_by_event_id[message.event_id])
-            for original_event, message in send_requests
-        )
+                sqs_messages[str(message.event_id)] = sqs_message
+
+        if sqs_messages:
+            outgoing = OutgoingSqsMessageBatch(sqs_messages)
+            outcomes = self._send_messages(queue_url=queue_url, outgoing=outgoing)
+            for entry_id, outcome in outcomes.items():
+                event_id = UUID(entry_id)
+                if isinstance(outcome, AcceptedSqsMessage):
+                    results[event_id] = PublishSucceeded(event_id)
+                else:
+                    results[event_id] = PublishFailed(event_id, outcome)
+
+        return tuple(results[message.event_id] for message in batch.messages)
 
     def _send_messages(
         self,
-        client: BaseClient,
-        batch: SqsMessageBatch,
-        outgoing: OutgoingSqsMessageBatch,
+        *,
         queue_url: str,
-    ) -> Mapping[UUID, PublishSucceeded | PublishFailed]:
-        """送信全体の失敗と応答内の個別結果を、それぞれの対象に反映する。"""
+        outgoing: OutgoingSqsMessageBatch,
+    ) -> Mapping[str, AcceptedSqsMessage | MessageSendError]:
+        client = None
         try:
-            response = client.send_message_batch(
-                QueueUrl=queue_url, Entries=outgoing.entries()
-            )
-        except Exception as exc:
-            return failed_results(batch, error=to_message_send_error(exc))
+            try:
+                client = self._client_factory()
+                response = client.send_message_batch(
+                    QueueUrl=queue_url, Entries=outgoing.entries()
+                )
+            except Exception as exc:
+                error = to_message_send_error(exc)
+                return {entry_id: error for entry_id in outgoing.messages}
 
-        try:
-            sent = outgoing.verify(response)
-        except SqsResponseInvalidError as exc:
-            self._failure_handler.handle_invalid_response(
-                error=exc,
-                event_ids=tuple(message.event_id for message in batch.sendable),
-            )
-            return failed_results(batch, error=exc)
-        results: dict[UUID, PublishSucceeded | PublishFailed] = {}
-        for message in batch.sendable:
-            outcome = sent[str(message.event_id)]
-            if isinstance(outcome, AcceptedSqsMessage):
-                results[message.event_id] = PublishSucceeded(message.event_id)
-            else:
-                results[message.event_id] = PublishFailed(message.event_id, outcome)
-        return results
+            try:
+                return outgoing.verify(response)
+            except SqsResponseInvalidError as error:
+                self._failure_handler.handle_invalid_response(
+                    error=error,
+                    event_ids=tuple(UUID(entry_id) for entry_id in outgoing.messages),
+                )
+                return {entry_id: error for entry_id in outgoing.messages}
+        finally:
+            if client is not None:
+                try:
+                    client.close()
+                except Exception as exc:
+                    try:
+                        self._failure_handler.handle_cleanup_failure(exc)
+                    except Exception:  # noqa: S110 — 終了診断の障害で元の結果を変更しない。
+                        pass

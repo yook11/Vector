@@ -120,12 +120,9 @@ class RecordingSender:
     def __init__(self):
         self.batches = []
 
-    def send_batch(self, *, queue_url, send_requests):
-        self.batches.append(tuple(message for _, message in send_requests))
-        return tuple(
-            (original, PublishSucceeded(message.event_id))
-            for original, message in send_requests
-        )
+    def send_batch(self, *, queue_url, batch):
+        self.batches.append(batch.messages)
+        return tuple(PublishSucceeded(message.event_id) for message in batch.messages)
 
     @property
     def envelopes(self):
