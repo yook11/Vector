@@ -150,7 +150,7 @@ Evidence: 既存EventEnvelope・資格情報確定処理・共通PublishError、
 
 SqsPublishFailureHandlerはSQS応答不正とクライアント終了失敗の診断ログを担当し、SqsSenderへコンストラクターで注入する。from_sessionは標準のハンドラーを生成して接続する。
 エラー分類は既存のerror_mappingに残し、ハンドラーはDB更新・再試行判断・送信を行わない。
-通常のログ障害はハンドラー内で抑止し、終了診断の分類障害もpublisher側で元の結果を維持する。BaseExceptionは抑止しない。
+通常のログ障害は方針つきのロガーが抑止し、終了診断の分類障害もpublisher側で元の結果を維持する。BaseExceptionは抑止しない。
 Relay側のOutboxDeliveryFailureHandlerは、従来どおり配信の再試行・停止のDB反映と停止確定後の記録を担当する。
 `SqsSender.send_batch`はサイズ検証失敗・クライアント生成失敗・送信結果を、各send_requestの元の対象と組にして入力順のtupleへまとめる。クライアントの生成と終了もここで管理し、SQS送信・応答変換は_send_messagesが担う。イベントの変換失敗は送信前にRelayとBackfillが扱い、Senderには生成できたメッセージと元の対象の組だけを渡す。
 
@@ -165,7 +165,7 @@ Relay側のOutboxDeliveryFailureHandlerは、従来どおり配信の再試行�
 - BatchEntryIdsNotDistinct・BatchRequestTooLong・EmptyBatchRequest・InvalidBatchEntryId・TooManyEntriesInBatchRequestをrequest_rejectedへ追加する。
 - 対応付けが正常な個別応答の分類処理だけが失敗した場合は、そのイベントをclassify_failureのPublishUnexpectedErrorにする。他の受付成功・失敗は維持する。
 - 個別分類失敗の原因は個別失敗の`SqsServiceError`とし、元原因型と分類処理例外型を保持する。SDK Messageは取り込まない。
-- closeの通常例外はSQS Publisher内でPublishCleanupErrorへ変換し、warningのoutbox_publish_cleanup_failedを結果返却前に記録する。ログ項目はerror_codeとoriginal_exception_typeだけとし、本文・Queue URL・資格情報・SDK自由文・例外チェーンを出さない。診断変換・ログ出力の通常例外も先行する受付結果・失敗やキャンセルを上書きしない。closeの再試行や通知メトリクスは追加しない。
+- closeの通常例外は、warningのoutbox_publish_cleanup_failedとして結果返却前にexc_infoで記録し、項目はログ方針の例外変換に任せる。診断変換・ログ出力の通常例外も先行する受付結果・失敗やキャンセルを上書きしない。closeの再試行や通知メトリクスは追加しない。
 - BaseExceptionは包括しない。Relayはcleanupを受け取らず、イベントの再試行policyへ渡さない。
 
 Invariants: 送信は単一SDK試行であり、内部再送・自動分割・並列送信・DB更新をしない。ログ出力はSQS応答不正とクライアント終了失敗の診断に限定する。入力のイベントと既存本文形式を変更しない。
@@ -222,11 +222,8 @@ Verification（2026-09-08）: lint・format check、全単体テスト5,802件�
 
 ### 停止ログ
 
-handlerはDeliveryStoppedの確定後にrecord_publish_failureへ停止理由を渡し、記録関数はerror_codeとerror_reasonに加え、次の固定文をerror_messageに記録する。
+handlerはDeliveryStoppedの確定後にrecord_publish_failureへ停止理由を渡す。本文不一致の説明は、MessageBodyMismatchErrorの文(受け付けられている可能性を含む)としてerror_messageに出る。
 
-> 送信した本文と、送信先が受け取った本文のチェックサムが一致しません。送信先には受付済みの可能性があるため、このイベントの自動再試行を停止しました。
-
-- SQS固有の説明文は記録処理側に置き、SDK自由文や例外のmessageから取得しない。
 - 本文・チェックサム・request IDはログに出さない。設定修復のメトリクスとSlack通知の対象6理由は変更しない。
 - 再試行予約・更新なし・commit失敗では本文不一致の停止メッセージを出さない。
 
@@ -396,10 +393,10 @@ aws/sqsのrequires_configuration_fixは、configurationのmissing_credentials・
 credentials_retrieval_failed、暗号化関連、通信失敗、イベント不正、未分類・想定外はメトリクスを書かない。
 NonRetryableReasonだけでは設定修復が必要か判断しない。
 
-record_publish_failure(event, error, stop_reason=NonRetryableReason)は、handlerが停止確定を確認した後に呼び、outbox_delivery_stoppedをinfoレベルで記録する。
+record_publish_failure(event, error, stop_reason=NonRetryableReason)は、handlerが停止確定を確認した後に呼び、outbox_delivery_stoppedを、non_retryable_failureならerror、retry_exhaustedならwarningで記録する。
 RetryScheduled・DeliveryUpdateSkippedではhandlerが記録関数を呼ばない。
-ログ項目はevent_id、attempt_count、stop_reason、error_code、requires_configuration_fixと、該当時のerror_reason・transport_stage・transport_reason・phase・original_exception_type・classification_exception_typeに限定する。
-本文・資格情報・Queue URL・SDKの自由文や生のサービスコード・例外チェーンを出力しない。
+ログ項目はevent_id、attempt_count、stop_reason、requires_configuration_fixとし、失敗はexc_infoで渡してログ方針の例外変換に任せる。
+本文・資格情報・Queue URLは出力しない。
 設定修復が必要な停止だけ、Vector/Pipelineのoutbox_publish_configuration_failureへCount=1をEMFで出力する。
 dimensionは空とし、個別イベント・原因ごとの系列を増やさない。
 
@@ -409,7 +406,7 @@ AlarmはOutboxのSQS送信全体で1つ、60秒のSumが1以上、evaluation_per
 
 Invariants: 記録関数はhandler内部でcommit・session終了に成功した後に呼び、RetryScheduled・DeliveryUpdateSkippedでは出力しない。
 ログとメトリクスは独立して試行し、通常の出力失敗を配信処理へ返さない。
-出力失敗は固定メッセージoutbox_failure_recording_failedと例外型だけで記録を試み、その失敗を再帰的に記録しない。
+ログの出力の通常障害はロガーが抑止し、メトリクスの出力失敗はoutbox_failure_recording_failedとして例外とともに記録する。
 BaseExceptionは捕捉しない。
 DB確定と記録出力は非原子的であり、間のプロセス終了による欠落は保証対象外とする。
 このメトリクスは厳密なユニーク停止件数ではなく、記録の再呼び出しやEMFの重複を許容する発生検知用とする。
