@@ -265,7 +265,7 @@ evaluation_periodsとdatapoints_to_alarmは1、欠損はnotBreaching、通知は
 ### 通知時の対応
 
 1. relayのCloudWatch Logs（Terraformのaws_cloudwatch_log_group.outbox_relay）でoutbox_delivery_stoppedを検索する。
-2. requires_configuration_fix=trueのerror_code・error_reasonとevent_idを確認する。
+2. requires_configuration_fix=trueのerror_class・error_detailsとevent_idを確認する。
 3. Lambdaの資格情報、IAMのSQS送信権限、region、送信先キュー設定を確認・修復する。
 4. 対象event_idの停止状態を確認し、別途定義する明示的な再開操作を判断する。
 

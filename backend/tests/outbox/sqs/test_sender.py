@@ -1,7 +1,9 @@
-"""バッチの受付結果と、個別失敗・全体失敗の境界を検証する(SQSクライアントはモック・Stubber・資格情報のない本物のSDK)。"""
+"""バッチの受付結果と、個別失敗・全体失敗の境界を検証する(SQSクライアントはモック・Stubber・資格情報のない本物のSDK、診断ログは標準出力のJSONから読む)。"""
 
 from __future__ import annotations
 
+import json
+import sys
 from copy import deepcopy
 from dataclasses import FrozenInstanceError, replace
 from datetime import UTC, datetime
@@ -39,7 +41,6 @@ from app.outbox.publishing.contracts import (
     PublishSucceeded,
 )
 from app.outbox.publishing.route import EventMessage
-from app.outbox.sqs import failure_handler as failure_handler_module
 from app.outbox.sqs.failure_handler import SqsPublishFailureHandler
 from app.outbox.sqs.sender import SqsSender
 
@@ -55,10 +56,30 @@ def envelope():
 
 
 @pytest.fixture
-def cleanup_log(monkeypatch):
-    log = Mock()
-    monkeypatch.setattr(failure_handler_module.logger, "warning", log)
-    return log
+def read_logs(capsys):
+    """出力されたログを、実行ごとに変わる時刻と発生位置を除いて返す。"""
+
+    def _read():
+        logs = [json.loads(line) for line in capsys.readouterr().out.splitlines()]
+        for log in logs:
+            del log["timestamp"]
+            log.pop("frames", None)
+        return logs
+
+    return _read
+
+
+class _BrokenOutput:
+    """書き込みで指定の例外を送出する標準出力。"""
+
+    def __init__(self, error):
+        self._error = error
+
+    def write(self, text):
+        raise self._error
+
+    def flush(self):
+        raise self._error
 
 
 def _success(envelope):
@@ -326,10 +347,9 @@ def test_message_and_batch_byte_limits(envelope, count, extra, small_message_lim
 )
 @pytest.mark.parametrize("close_fails", [False, True])
 def test_whole_request_failure_preserves_local_failure_and_cleanup(
-    envelope, exc, expected, close_fails, cleanup_log
+    envelope, exc, expected, close_fails, read_logs
 ):
     """全体失敗(署名時の資格情報の取得の失敗を含む)を送信対象へ反映し、ローカルの不正や先行障害を上書きしない。"""
-    cleanup_log.side_effect = RuntimeError("private log failure")
     good = replace(envelope, event_id=UUID(int=2))
     bad = replace(envelope, event_id=UUID(int=3), body="x" * (1024 * 1024 + 1))
     sender, client, _ = _sender(
@@ -347,27 +367,38 @@ def test_whole_request_failure_preserves_local_failure_and_cleanup(
     for _, outcome in result[:2]:
         assert type(outcome.error) is expected
     assert isinstance(result[2][1].error, MessageTooLargeError)
-    assert cleanup_log.call_count == int(close_fails)
+    assert [log["event"] for log in read_logs()] == [
+        "outbox_publish_cleanup_failed"
+    ] * int(close_fails)
     client.send_message_batch.assert_called_once()
     client.close.assert_called_once()
 
 
 @pytest.mark.parametrize("logging_failure", [False, True])
-def test_cleanup_failure_preserves_success(envelope, logging_failure, cleanup_log):
-    """終了失敗を例外の型だけで記録し、診断出力が失敗しても受付結果を返す。"""
+def test_cleanup_failure_preserves_success(
+    envelope, logging_failure, read_logs, monkeypatch
+):
+    """終了失敗を例外とともにwarningで記録し、診断出力が失敗しても受付結果を返す。"""
     if logging_failure:
-        cleanup_log.side_effect = RuntimeError("private log failure")
+        monkeypatch.setattr(sys, "stdout", _BrokenOutput(OSError("log sink failed")))
     sender, _, _ = _sender(
         response={"Successful": [_success(envelope)]},
-        close_error=RuntimeError("private"),
+        close_error=RuntimeError("close failed"),
     )
     result = sender.send_batch(
         queue_url=QUEUE_URL, send_requests=[(envelope, envelope)]
     )
     assert result == ((envelope, PublishSucceeded(envelope.event_id)),)
-    cleanup_log.assert_called_once_with(
-        "outbox_publish_cleanup_failed", error_class="builtins.RuntimeError"
-    )
+    if not logging_failure:
+        assert read_logs() == [
+            {
+                "event": "outbox_publish_cleanup_failed",
+                "level": "warning",
+                "log_policy": "pipeline_control",
+                "error_class": "builtins.RuntimeError",
+                "error_message": "close failed",
+            }
+        ]
 
 
 @pytest.mark.parametrize(
@@ -446,9 +477,9 @@ def test_malformed_response_invalidates_all_sent_results(envelope, case):
 
 
 @pytest.mark.parametrize("exc", [KeyboardInterrupt(), SystemExit()])
-def test_process_exit_is_not_wrapped_or_replaced_by_cleanup(envelope, exc, cleanup_log):
+def test_process_exit_is_not_wrapped_or_replaced_by_cleanup(envelope, exc, monkeypatch):
     """プロセス終了を分類せず、通常の終了障害でも置き換えない。"""
-    cleanup_log.side_effect = RuntimeError("private log failure")
+    monkeypatch.setattr(sys, "stdout", _BrokenOutput(OSError("log sink failed")))
     sender, client, _ = _sender(error=exc, close_error=ValueError("cleanup"))
     with pytest.raises(type(exc)) as caught:
         sender.send_batch(queue_url=QUEUE_URL, send_requests=[(envelope, envelope)])
@@ -527,22 +558,22 @@ def test_unexpected_client_creation_failure_keeps_only_its_type(envelope):
     )
 
 
-def test_results_are_frozen_and_do_not_expose_diagnostics(envelope, cleanup_log):
-    """送信結果を書き換えられず、表示に診断情報を漏らさない。"""
+def test_results_are_frozen_and_do_not_expose_diagnostics(envelope, read_logs):
+    """送信結果を書き換えられず、表示とログに応答由来の値を漏らさない。"""
     marker = "PRIVATE_BODY_CREDENTIAL_QUEUE"
     sender, _, _ = _sender(
         response={
             "Failed": [_failure(envelope.event_id, marker)],
             "ResponseMetadata": {"RequestId": marker},
         },
-        close_error=RuntimeError(marker),
+        close_error=RuntimeError("close failed"),
     )
     result = sender.send_batch(
         queue_url=QUEUE_URL, send_requests=[(envelope, envelope)]
     )
     assert marker not in repr(result)
     assert marker not in str(result[0][1].error)
-    assert marker not in str(cleanup_log.call_args)
+    assert marker not in json.dumps(read_logs())
     for obj, attr, value in [
         (result[0][1], "event_id", UUID(int=2)),
         (PublishSucceeded(envelope.event_id), "event_id", UUID(int=2)),
@@ -651,13 +682,13 @@ def test_checksum_uses_exact_transmitted_body(
 
 
 def test_mixed_integrity_and_service_failures_keep_success_and_cleanup(
-    envelope, cleanup_log
+    envelope, read_logs
 ):
     """本文不一致・サービス拒否・終了障害が混在しても成功を上書きしない。"""
     events = [replace(envelope, event_id=UUID(int=i)) for i in [1, 2, 3]]
     mismatch = _success(events[1])
     mismatch["MD5OfMessageBody"] = "0" * 32
-    close_error = RuntimeError("PRIVATE")
+    close_error = RuntimeError("close failed")
     sender, client, _ = _sender(
         response={
             "Successful": [mismatch, _success(events[0])],
@@ -676,24 +707,32 @@ def test_mixed_integrity_and_service_failures_keep_success_and_cleanup(
         SqsServiceError,
         "throttled",
     )
-    cleanup_log.assert_called_once_with(
-        "outbox_publish_cleanup_failed", error_class="builtins.RuntimeError"
-    )
+    assert read_logs() == [
+        {
+            "event": "outbox_publish_cleanup_failed",
+            "level": "warning",
+            "log_policy": "pipeline_control",
+            "error_class": "builtins.RuntimeError",
+            "error_message": "close failed",
+        }
+    ]
     client.send_message_batch.assert_called_once()
     client.close.assert_called_once()
 
 
 @pytest.mark.parametrize("case", ["bad_checksum", "unknown_id"])
 def test_response_invalid_preserves_local_failure_and_cleanup_without_raw_values(
-    envelope, case, cleanup_log
+    envelope, case, read_logs
 ):
-    """応答違反を全送信対象へ反映し、送信前の不正と終了失敗を上書きしない。"""
+    """応答違反を全送信対象へ反映し、送信前の不正と終了失敗を上書きせず、応答由来の値を記録しない。"""
     marker = "PRIVATE_BODY_QUEUE_CREDENTIAL"
     invalid = replace(envelope, event_id=UUID(int=2), body="x" * (1024 * 1024 + 1))
     entry = _success(envelope)
     entry["MD5OfMessageBody" if case == "bad_checksum" else "Id"] = marker
     response = {"Successful": [entry], "ResponseMetadata": {"RequestId": marker}}
-    sender, client, _ = _sender(response=response, close_error=RuntimeError(marker))
+    sender, client, _ = _sender(
+        response=response, close_error=RuntimeError("close failed")
+    )
     result = sender.send_batch(
         queue_url=QUEUE_URL, send_requests=[(invalid, invalid), (envelope, envelope)]
     )
@@ -704,18 +743,31 @@ def test_response_invalid_preserves_local_failure_and_cleanup_without_raw_values
     assert isinstance(result[0][1].error, MessageTooLargeError)
     error = result[1][1].error
     assert isinstance(error, SqsResponseInvalidError)
-    assert cleanup_log.call_count == 2
-    diagnostic, cleanup = cleanup_log.call_args_list
-    assert diagnostic.args == ("outbox_sqs_response_invalid",)
-    assert diagnostic.kwargs == {
-        "error_reason": "invalid_format"
-        if case == "bad_checksum"
-        else "not_in_request",
-        "response_field": "body_checksum" if case == "bad_checksum" else "entry_id",
-        "event_ids": [str(envelope.event_id)],
-    }
-    assert cleanup.args == ("outbox_publish_cleanup_failed",)
-    assert marker not in str(cleanup_log.call_args_list)
+    logs = read_logs()
+    assert logs == [
+        {
+            "event": "outbox_sqs_response_invalid",
+            "level": "warning",
+            "log_policy": "pipeline_control",
+            "event_ids": [str(envelope.event_id)],
+            "error_class": "app.aws.sqs.outgoing_message.SqsResponseInvalidError",
+            "error_message": "SQSの応答を検証できませんでした",
+            "error_details": {
+                "reason": "invalid_format"
+                if case == "bad_checksum"
+                else "not_in_request",
+                "field": "body_checksum" if case == "bad_checksum" else "entry_id",
+            },
+        },
+        {
+            "event": "outbox_publish_cleanup_failed",
+            "level": "warning",
+            "log_policy": "pipeline_control",
+            "error_class": "builtins.RuntimeError",
+            "error_message": "close failed",
+        },
+    ]
+    assert marker not in json.dumps(logs)
     assert marker not in repr(result)
     assert marker not in str(error)
     assert marker not in str(vars(error))
@@ -723,10 +775,19 @@ def test_response_invalid_preserves_local_failure_and_cleanup_without_raw_values
     client.close.assert_called_once()
 
 
-def test_client_closes_and_records_diagnostic_before_return(envelope, cleanup_log):
+def test_client_closes_and_records_diagnostic_before_return(envelope, monkeypatch):
     """送信・終了・診断を完了してから、呼び出し元へ受付結果を返す。"""
     sender, client, _ = _sender()
     trace = []
+    written = []
+
+    class TracingOutput:
+        def write(self, text):
+            trace.append("diagnostic")
+            written.append(text)
+
+        def flush(self):
+            pass
 
     def send(**kwargs):
         trace.append("send")
@@ -734,11 +795,11 @@ def test_client_closes_and_records_diagnostic_before_return(envelope, cleanup_lo
 
     def close():
         trace.append("close")
-        raise RuntimeError("private body credentials queue-url")
+        raise RuntimeError("close failed")
 
     client.send_message_batch.side_effect = send
     client.close.side_effect = close
-    cleanup_log.side_effect = lambda *args, **kwargs: trace.append("diagnostic")
+    monkeypatch.setattr(sys, "stdout", TracingOutput())
     result = sender.send_batch(
         queue_url=QUEUE_URL, send_requests=[(envelope, envelope)]
     )
@@ -746,15 +807,15 @@ def test_client_closes_and_records_diagnostic_before_return(envelope, cleanup_lo
 
     assert trace == ["send", "close", "diagnostic", "returned"]
     assert result == ((envelope, PublishSucceeded(envelope.event_id)),)
-    cleanup_log.assert_called_once_with(
-        "outbox_publish_cleanup_failed", error_class="builtins.RuntimeError"
-    )
+    assert [json.loads(text)["event"] for text in written] == [
+        "outbox_publish_cleanup_failed"
+    ]
     client.close.assert_called_once()
 
 
 @pytest.mark.parametrize("logging_failure", [False, True])
 def test_invalid_response_diagnostic_is_once_per_sent_batch(
-    envelope, logging_failure, cleanup_log
+    envelope, logging_failure, read_logs, monkeypatch
 ):
     """応答の外部IDを記録せず、診断出力に失敗しても全送信対象の結果を返す。"""
     events = [replace(envelope, event_id=UUID(int=i)) for i in (3, 1)]
@@ -764,7 +825,7 @@ def test_invalid_response_diagnostic_is_once_per_sent_batch(
     entry["Id"] = marker
     sender, client, _ = _sender(response={"Successful": [entry, _success(events[1])]})
     if logging_failure:
-        cleanup_log.side_effect = RuntimeError(marker)
+        monkeypatch.setattr(sys, "stdout", _BrokenOutput(OSError("log sink failed")))
 
     result = sender.send_batch(
         queue_url=QUEUE_URL,
@@ -783,20 +844,27 @@ def test_invalid_response_diagnostic_is_once_per_sent_batch(
     assert isinstance(result[1][1].error, MessageTooLargeError)
     for index in (0, 2):
         assert isinstance(result[index][1].error, SqsResponseInvalidError)
-    cleanup_log.assert_called_once_with(
-        "outbox_sqs_response_invalid",
-        error_reason="not_in_request",
-        response_field="entry_id",
-        event_ids=[str(event.event_id) for event in events],
-    )
-    assert marker not in str(cleanup_log.call_args)
+    if not logging_failure:
+        logs = read_logs()
+        assert logs == [
+            {
+                "event": "outbox_sqs_response_invalid",
+                "level": "warning",
+                "log_policy": "pipeline_control",
+                "event_ids": [str(event.event_id) for event in events],
+                "error_class": "app.aws.sqs.outgoing_message.SqsResponseInvalidError",
+                "error_message": "SQSの応答を検証できませんでした",
+                "error_details": {"reason": "not_in_request", "field": "entry_id"},
+            }
+        ]
+        assert marker not in json.dumps(logs)
     client.send_message_batch.assert_called_once()
     client.close.assert_called_once()
 
 
 @pytest.mark.parametrize("mismatch", [False, True])
 def test_valid_response_shape_does_not_log_response_violation(
-    envelope, mismatch, cleanup_log
+    envelope, mismatch, read_logs
 ):
     """正常形式の応答と本文不一致は、応答形式違反の診断を出さない。"""
     entry = _success(envelope)
@@ -807,13 +875,13 @@ def test_valid_response_shape_does_not_log_response_violation(
         queue_url=QUEUE_URL, send_requests=[(envelope, envelope)]
     )
     assert isinstance(result[0][1], PublishFailed if mismatch else PublishSucceeded)
-    cleanup_log.assert_not_called()
+    assert read_logs() == []
 
 
-def test_response_diagnostic_process_exit_is_not_swallowed(envelope, cleanup_log):
+def test_response_diagnostic_process_exit_is_not_swallowed(envelope, monkeypatch):
     """診断出力でのプロセス終了を通常失敗へ変換せず、クライアントは閉じる。"""
     exit_error = KeyboardInterrupt()
-    cleanup_log.side_effect = exit_error
+    monkeypatch.setattr(sys, "stdout", _BrokenOutput(exit_error))
     sender, client, _ = _sender(response=None)
     with pytest.raises(KeyboardInterrupt) as caught:
         sender.send_batch(queue_url=QUEUE_URL, send_requests=[(envelope, envelope)])

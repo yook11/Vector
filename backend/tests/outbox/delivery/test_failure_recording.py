@@ -1,7 +1,8 @@
-"""停止の記録の項目と設定修復のメトリクス条件、記録出力の境界を検証する(ログはstructlogで捕捉し、EMFは標準出力から読み、handlerとの合成は実DB)。"""
+"""停止の記録の項目と設定修復のメトリクス条件、記録出力の境界を検証する(ログとEMFは標準出力のJSONから読み、handlerとの合成は実DB)。"""
 
 import json
 import re
+import sys
 from contextlib import asynccontextmanager
 from pathlib import Path
 from unittest.mock import Mock
@@ -10,7 +11,6 @@ from uuid import uuid4
 import pytest
 from sqlalchemy import event as sqlalchemy_event
 from sqlalchemy.exc import SQLAlchemyError
-from structlog.testing import capture_logs
 
 from app.analysis.assessment.events import (
     AssessedEventInvalidError,
@@ -74,8 +74,34 @@ def _missing_credentials():
     )
 
 
-def _sqs_rejection(reason):
-    return SqsServiceError(reason=reason, service_code=PRIVATE)
+def _sqs_rejection(reason, service_code):
+    return SqsServiceError(reason=reason, service_code=service_code)
+
+
+def _logs(out):
+    """標準出力からEMFを除いたログを、実行ごとに変わる時刻と発生位置を除いて返す。"""
+    logs = []
+    for line in out.splitlines():
+        log = json.loads(line)
+        if "_aws" in log:
+            continue
+        del log["timestamp"]
+        log.pop("frames", None)
+        logs.append(log)
+    return logs
+
+
+class _BrokenOutput:
+    """書き込みで指定の例外を送出する標準出力。"""
+
+    def __init__(self, error):
+        self._error = error
+
+    def write(self, text):
+        raise self._error
+
+    def flush(self):
+        raise self._error
 
 
 @pytest.fixture
@@ -101,7 +127,8 @@ def leased_event():
             True,
             {
                 "error_class": "app.aws.sqs.errors.MessageSendConfigurationError",
-                "error_reason": "missing_credentials",
+                "error_message": "メッセージの送信に必要な設定がありません",
+                "error_details": {"reason": "missing_credentials"},
             },
         ),
         (
@@ -111,7 +138,8 @@ def leased_event():
             True,
             {
                 "error_class": "app.aws.sqs.errors.MessageSendConfigurationError",
-                "error_reason": "incomplete_credentials",
+                "error_message": "メッセージの送信に必要な設定がありません",
+                "error_details": {"reason": "incomplete_credentials"},
             },
         ),
         (
@@ -121,7 +149,8 @@ def leased_event():
             True,
             {
                 "error_class": "app.aws.sqs.errors.MessageSendConfigurationError",
-                "error_reason": "missing_region",
+                "error_message": "メッセージの送信に必要な設定がありません",
+                "error_details": {"reason": "missing_region"},
             },
         ),
         (
@@ -129,87 +158,135 @@ def leased_event():
             False,
             {
                 "error_class": "app.aws.sqs.errors.MessageSendCredentialsError",
-                "exception_type": "CredentialRetrievalError",
+                "error_message": "メッセージの送信に使う資格情報を取得できませんでした",
+                "error_details": {"exception_type": "CredentialRetrievalError"},
             },
         ),
         (
-            _sqs_rejection(SqsServiceErrorReason.AUTHENTICATION_FAILED),
+            _sqs_rejection(
+                SqsServiceErrorReason.AUTHENTICATION_FAILED, "InvalidClientTokenId"
+            ),
             True,
             {
                 "error_class": "app.aws.sqs.errors.SqsServiceError",
-                "error_reason": "authentication_failed",
+                "error_message": "SQSがエラーを返し、メッセージを送信できませんでした",
+                "error_details": {
+                    "reason": "authentication_failed",
+                    "service_code": "InvalidClientTokenId",
+                },
             },
         ),
         (
-            _sqs_rejection(SqsServiceErrorReason.ACCESS_DENIED),
+            _sqs_rejection(SqsServiceErrorReason.ACCESS_DENIED, "AccessDenied"),
             True,
             {
                 "error_class": "app.aws.sqs.errors.SqsServiceError",
-                "error_reason": "access_denied",
+                "error_message": "SQSがエラーを返し、メッセージを送信できませんでした",
+                "error_details": {
+                    "reason": "access_denied",
+                    "service_code": "AccessDenied",
+                },
             },
         ),
         (
-            _sqs_rejection(SqsServiceErrorReason.DESTINATION_NOT_FOUND),
+            _sqs_rejection(
+                SqsServiceErrorReason.DESTINATION_NOT_FOUND, "QueueDoesNotExist"
+            ),
             True,
             {
                 "error_class": "app.aws.sqs.errors.SqsServiceError",
-                "error_reason": "destination_not_found",
+                "error_message": "SQSがエラーを返し、メッセージを送信できませんでした",
+                "error_details": {
+                    "reason": "destination_not_found",
+                    "service_code": "QueueDoesNotExist",
+                },
             },
         ),
         (
-            _sqs_rejection(SqsServiceErrorReason.THROTTLED),
+            _sqs_rejection(SqsServiceErrorReason.THROTTLED, "RequestThrottled"),
             False,
             {
                 "error_class": "app.aws.sqs.errors.SqsServiceError",
-                "error_reason": "throttled",
+                "error_message": "SQSがエラーを返し、メッセージを送信できませんでした",
+                "error_details": {
+                    "reason": "throttled",
+                    "service_code": "RequestThrottled",
+                },
             },
         ),
         (
-            _sqs_rejection(SqsServiceErrorReason.SERVICE_UNAVAILABLE),
+            _sqs_rejection(
+                SqsServiceErrorReason.SERVICE_UNAVAILABLE, "ServiceUnavailable"
+            ),
             False,
             {
                 "error_class": "app.aws.sqs.errors.SqsServiceError",
-                "error_reason": "service_unavailable",
+                "error_message": "SQSがエラーを返し、メッセージを送信できませんでした",
+                "error_details": {
+                    "reason": "service_unavailable",
+                    "service_code": "ServiceUnavailable",
+                },
             },
         ),
         (
-            _sqs_rejection(SqsServiceErrorReason.REQUEST_REJECTED),
+            _sqs_rejection(
+                SqsServiceErrorReason.REQUEST_REJECTED, "InvalidParameterValue"
+            ),
             False,
             {
                 "error_class": "app.aws.sqs.errors.SqsServiceError",
-                "error_reason": "request_rejected",
+                "error_message": "SQSがエラーを返し、メッセージを送信できませんでした",
+                "error_details": {
+                    "reason": "request_rejected",
+                    "service_code": "InvalidParameterValue",
+                },
             },
         ),
         (
-            _sqs_rejection(SqsServiceErrorReason.SECURITY_REJECTED),
+            _sqs_rejection(
+                SqsServiceErrorReason.SECURITY_REJECTED, "IncompleteSignature"
+            ),
             False,
             {
                 "error_class": "app.aws.sqs.errors.SqsServiceError",
-                "error_reason": "security_rejected",
+                "error_message": "SQSがエラーを返し、メッセージを送信できませんでした",
+                "error_details": {
+                    "reason": "security_rejected",
+                    "service_code": "IncompleteSignature",
+                },
             },
         ),
         (
-            _sqs_rejection(SqsServiceErrorReason.REQUEST_EXPIRED),
+            _sqs_rejection(SqsServiceErrorReason.REQUEST_EXPIRED, "RequestExpired"),
             False,
             {
                 "error_class": "app.aws.sqs.errors.SqsServiceError",
-                "error_reason": "request_expired",
+                "error_message": "SQSがエラーを返し、メッセージを送信できませんでした",
+                "error_details": {
+                    "reason": "request_expired",
+                    "service_code": "RequestExpired",
+                },
             },
         ),
         (
-            _sqs_rejection(SqsServiceErrorReason.ENCRYPTION_ERROR),
+            _sqs_rejection(SqsServiceErrorReason.ENCRYPTION_ERROR, "KmsDisabled"),
             False,
             {
                 "error_class": "app.aws.sqs.errors.SqsServiceError",
-                "error_reason": "encryption_error",
+                "error_message": "SQSがエラーを返し、メッセージを送信できませんでした",
+                "error_details": {
+                    "reason": "encryption_error",
+                    "service_code": "KmsDisabled",
+                },
             },
         ),
         (
-            _sqs_rejection(SqsServiceErrorReason.UNKNOWN),
+            _sqs_rejection(SqsServiceErrorReason.UNKNOWN, "FutureError"),
             False,
             {
                 "error_class": "app.aws.sqs.errors.SqsServiceError",
-                "error_reason": "unknown",
+                "error_message": "SQSがエラーを返し、メッセージを送信できませんでした",
+                "error_details": {"reason": "unknown", "service_code": "FutureError"},
             },
         ),
         (
@@ -222,8 +299,13 @@ def leased_event():
             False,
             {
                 "error_class": "app.aws.sqs.errors.MessageSendTransportError",
-                "transport_stage": "unknown",
-                "transport_reason": "tls",
+                "error_message": "メッセージの送信で通信が完了しませんでした",
+                "error_details": {
+                    "stage": "unknown",
+                    "reason": "tls",
+                    "proxy_status": None,
+                    "exception_type": "SSLError",
+                },
             },
         ),
         (
@@ -231,13 +313,17 @@ def leased_event():
             False,
             {
                 "error_class": "app.aws.sqs.errors.MessageSendUnexpectedError",
-                "exception_type": "ParamValidationError",
+                "error_message": "想定外の理由でメッセージを送信できませんでした",
+                "error_details": {"exception_type": "ParamValidationError"},
             },
         ),
         (
             MessageTooLargeError(),
             False,
-            {"error_class": "app.aws.sqs.outgoing_message.MessageTooLargeError"},
+            {
+                "error_class": "app.aws.sqs.outgoing_message.MessageTooLargeError",
+                "error_message": "メッセージの本文が送信できる大きさを超えています",
+            },
         ),
         (
             SqsResponseInvalidError(
@@ -245,7 +331,11 @@ def leased_event():
                 field=SqsResponseField.MESSAGE_ID,
             ),
             False,
-            {"error_class": "app.aws.sqs.outgoing_message.SqsResponseInvalidError"},
+            {
+                "error_class": "app.aws.sqs.outgoing_message.SqsResponseInvalidError",
+                "error_message": "SQSの応答を検証できませんでした",
+                "error_details": {"reason": "missing", "field": "message_id"},
+            },
         ),
         (
             MessageBodyMismatchError(),
@@ -253,8 +343,8 @@ def leased_event():
             {
                 "error_class": "app.aws.sqs.outgoing_message.MessageBodyMismatchError",
                 "error_message": (
-                    "送信した本文と、送信先が受け取った本文のチェックサムが一致しません。"
-                    "送信先には受付済みの可能性があるため、このイベントの自動再試行を停止しました。"
+                    "SQSが受け取った本文が送信した本文と一致しません。"
+                    "SQSには受け付けられている可能性があります"
                 ),
             },
         ),
@@ -265,7 +355,12 @@ def leased_event():
             False,
             {
                 "error_class": "app.collection.events.AnalyzableEventInvalidError",
-                "error_reason": "invalid_payload",
+                "error_message": "Validation failed: invalid_payload",
+                "error_details": {
+                    "kind": "application_validation",
+                    "reason": "invalid_payload",
+                    "issues": [],
+                },
             },
         ),
         (
@@ -281,7 +376,12 @@ def leased_event():
                     "app.collection.article_acquisition.events."
                     "IncompleteArticleEventInvalidError"
                 ),
-                "error_reason": "invalid_envelope",
+                "error_message": "Validation failed: invalid_envelope",
+                "error_details": {
+                    "kind": "application_validation",
+                    "reason": "invalid_envelope",
+                    "issues": [],
+                },
             },
         ),
         (
@@ -296,7 +396,12 @@ def leased_event():
                 "error_class": (
                     "app.analysis.assessment.events.AssessedEventInvalidError"
                 ),
-                "error_reason": "unsupported_event_type",
+                "error_message": "Validation failed: unsupported_event_type",
+                "error_details": {
+                    "kind": "application_validation",
+                    "reason": "unsupported_event_type",
+                    "issues": [],
+                },
             },
         ),
         (
@@ -309,30 +414,38 @@ def leased_event():
             False,
             {
                 "error_class": "app.analysis.curation.events.CuratedEventInvalidError",
-                "error_reason": "unsupported_schema_version",
+                "error_message": "Validation failed: unsupported_schema_version",
+                "error_details": {
+                    "kind": "application_validation",
+                    "reason": "unsupported_schema_version",
+                    "issues": [],
+                },
             },
         ),
         (
             EventRouteMismatchError(),
             False,
-            {"error_class": "app.outbox.publishing.route.EventRouteMismatchError"},
+            {
+                "error_class": "app.outbox.publishing.route.EventRouteMismatchError",
+                "error_message": "イベントの種別が配送定義の種別と一致しません",
+            },
         ),
     ],
 )
 def test_stop_log_fields_and_metric_by_failure(
     error, requires_fix, fields, leased_event, capsys
 ):
-    """停止を失敗ごとに決まった項目で記録し、設定修復の6理由だけメトリクスを出し、SQSの生のコード・自由文・元例外は出さない。"""
-    error.__cause__ = RuntimeError(PRIVATE)
-    with capture_logs() as logs:
-        recording.record_publish_failure(
-            leased_event=leased_event, error=error, stop_reason=STOP_REASON
-        )
-    records = emf_records(capsys.readouterr().out)
-    assert logs == [
+    """送り直しても直らない失敗の停止を、失敗の型・文・診断情報つきのerrorで記録し、設定修復の6理由だけメトリクスを出し、イベントの中身は出さない。"""
+    recording.record_publish_failure(
+        leased_event=leased_event, error=error, stop_reason=STOP_REASON
+    )
+    out = capsys.readouterr().out
+    records = emf_records(out)
+    assert _logs(out) == [
         {
             "event": "outbox_delivery_stopped",
-            "log_level": "info",
+            "level": "error",
+            "log_policy": "pipeline_control",
             "event_id": str(leased_event.envelope.event_id),
             "attempt_count": 1,
             "stop_reason": "non_retryable_failure",
@@ -341,7 +454,7 @@ def test_stop_log_fields_and_metric_by_failure(
         }
     ]
     assert len(records) == int(requires_fix)
-    assert PRIVATE not in json.dumps([logs, records])
+    assert PRIVATE not in out
     if requires_fix:
         record = records[0]
         assert record[recording.CONFIGURATION_FAILURE_METRIC] == 1
@@ -356,46 +469,71 @@ def test_stop_log_fields_and_metric_by_failure(
         assert set(record) == {"_aws", recording.CONFIGURATION_FAILURE_METRIC}
 
 
-def test_retry_exhaustion_alone_is_not_alarm_target(leased_event, capsys):
-    """再試行上限は人の設定修復が必要という根拠にしない。"""
-    with capture_logs() as logs:
-        recording.record_publish_failure(
-            leased_event=leased_event,
-            error=MessageSendTransportError(
-                failure=HttpTransportFailure(
-                    HttpTransportStage.RECEIVE, HttpTransportFailureReason.TIMEOUT
-                ),
-                exception_type="ReadTimeoutError",
+def test_retry_exhaustion_is_warning_and_not_alarm_target(leased_event, capsys):
+    """送り直せる失敗で回数を使い切った停止はwarningで記録し、人の設定修復が必要という根拠にしない。"""
+    recording.record_publish_failure(
+        leased_event=leased_event,
+        error=MessageSendTransportError(
+            failure=HttpTransportFailure(
+                HttpTransportStage.RECEIVE, HttpTransportFailureReason.TIMEOUT
             ),
-            stop_reason=NonRetryableReason.RETRY_EXHAUSTED,
-        )
-    assert len(logs) == 1
-    assert capsys.readouterr().out == ""
+            exception_type="ReadTimeoutError",
+        ),
+        stop_reason=NonRetryableReason.RETRY_EXHAUSTED,
+    )
+    out = capsys.readouterr().out
+    assert _logs(out) == [
+        {
+            "event": "outbox_delivery_stopped",
+            "level": "warning",
+            "log_policy": "pipeline_control",
+            "event_id": str(leased_event.envelope.event_id),
+            "attempt_count": 1,
+            "stop_reason": "retry_exhausted",
+            "requires_configuration_fix": False,
+            "error_class": "app.aws.sqs.errors.MessageSendTransportError",
+            "error_message": "メッセージの送信で通信が完了しませんでした",
+            "error_details": {
+                "stage": "receive",
+                "reason": "timeout",
+                "proxy_status": None,
+                "exception_type": "ReadTimeoutError",
+            },
+        }
+    ]
+    assert emf_records(out) == []
 
 
 @pytest.mark.parametrize("failed_sink", ["log", "metric", "both"])
 def test_output_failures_do_not_propagate_or_block_other_sink(
-    failed_sink,
-    leased_event,
-    monkeypatch,
+    failed_sink, leased_event, capsys, monkeypatch
 ):
-    """出力障害とその記録障害でも再帰せず、独立した出力を試みる。"""
-    logger = Mock()
-    metric = Mock()
-    logger.warning.side_effect = RuntimeError(PRIVATE)
-    if failed_sink in ("log", "both"):
-        logger.info.side_effect = RuntimeError(PRIVATE)
-    if failed_sink in ("metric", "both"):
-        metric.side_effect = ValueError(PRIVATE)
-    monkeypatch.setattr(recording, "logger", logger)
+    """ログの出力障害でもメトリクスを試み、メトリクスの出力障害は例外とともに記録し、どちらも配信処理へ戻さない。"""
+    metric = Mock(
+        side_effect=ValueError("metric sink failed")
+        if failed_sink in ("metric", "both")
+        else None
+    )
     monkeypatch.setattr(recording, "emit_metric", metric)
+    if failed_sink in ("log", "both"):
+        monkeypatch.setattr(sys, "stdout", _BrokenOutput(OSError("log sink failed")))
     recording.record_publish_failure(
         leased_event=leased_event, error=_missing_credentials(), stop_reason=STOP_REASON
     )
-    logger.info.assert_called_once()
     metric.assert_called_once()
-    assert logger.warning.call_count == (2 if failed_sink == "both" else 1)
-    assert PRIVATE not in str(logger.warning.call_args_list)
+    if failed_sink == "metric":
+        logs = _logs(capsys.readouterr().out)
+        assert [log["event"] for log in logs] == [
+            "outbox_delivery_stopped",
+            "outbox_failure_recording_failed",
+        ]
+        assert logs[1] == {
+            "event": "outbox_failure_recording_failed",
+            "level": "warning",
+            "log_policy": "pipeline_control",
+            "error_class": "builtins.ValueError",
+            "error_message": "metric sink failed",
+        }
 
 
 @pytest.mark.parametrize("sink", ["log", "metric"])
@@ -403,9 +541,7 @@ def test_base_exception_is_not_swallowed(sink, leased_event, monkeypatch):
     """プロセス終了を記録の通常障害として握りつぶさない。"""
     failure = KeyboardInterrupt()
     if sink == "log":
-        logger = Mock()
-        logger.info.side_effect = failure
-        monkeypatch.setattr(recording, "logger", logger)
+        monkeypatch.setattr(sys, "stdout", _BrokenOutput(failure))
     else:
         monkeypatch.setattr(recording, "emit_metric", Mock(side_effect=failure))
     with pytest.raises(KeyboardInterrupt) as caught:
@@ -519,36 +655,35 @@ async def test_handler_composition_records_only_committed_stops(
             else DeliveryUpdateSkipped()
         )
 
-    with capture_logs() as logs:
-        if mode == "commit_failed":
-            with pytest.raises(SQLAlchemyError):
-                await handle_failure()
-        else:
+    if mode == "commit_failed":
+        with pytest.raises(SQLAlchemyError):
             await handle_failure()
+    else:
+        await handle_failure()
+    out = capsys.readouterr().out
+    stops = [log for log in _logs(out) if log["event"] == "outbox_delivery_stopped"]
     assert record.call_count == int(mode == "committed")
-    assert len(
-        [log for log in logs if log["event"] == "outbox_delivery_stopped"]
-    ) == int(mode == "committed")
-    assert len(emf_records(capsys.readouterr().out)) == int(
+    assert len(stops) == int(mode == "committed")
+    assert len(emf_records(out)) == int(
         mode == "committed" and failure_kind == "configuration"
     )
     if failure_kind == "integrity" and mode == "committed":
-        stop = next(log for log in logs if log["event"] == "outbox_delivery_stopped")
-        assert stop["error_class"] == (
-            "app.aws.sqs.outgoing_message.MessageBodyMismatchError"
+        assert (stops[0]["error_class"], stops[0]["error_message"]) == (
+            "app.aws.sqs.outgoing_message.MessageBodyMismatchError",
+            "SQSが受け取った本文が送信した本文と一致しません。"
+            "SQSには受け付けられている可能性があります",
         )
-        assert "自動再試行を停止しました" in stop["error_message"]
     if failure_kind == "response_invalid" and mode == "committed":
-        stop = next(log for log in logs if log["event"] == "outbox_delivery_stopped")
-        assert "error_reason" not in stop
-        assert "response_field" not in stop
-        assert not stop["requires_configuration_fix"]
+        assert (
+            stops[0]["error_details"],
+            stops[0]["requires_configuration_fix"],
+        ) == ({"reason": "missing", "field": "message_id"}, False)
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("failed_sink", ["log", "metric", "both"])
 async def test_handler_returns_committed_stop_despite_output_failure(
-    session_factory, leased_event, failed_sink, monkeypatch
+    session_factory, leased_event, failed_sink, capsys, monkeypatch
 ):
     """記録先の障害でも停止の確定結果を維持し、再処理で記録を繰り返さない。"""
     from dataclasses import replace
@@ -565,15 +700,14 @@ async def test_handler_returns_committed_stop_despite_output_failure(
     leased_event = replace(
         leased_event, envelope=replace(leased_event.envelope, event_id=event_id)
     )
-    logger = Mock()
-    metric = Mock()
-    logger.warning.side_effect = RuntimeError(PRIVATE)
-    if failed_sink in ("log", "both"):
-        logger.info.side_effect = RuntimeError(PRIVATE)
-    if failed_sink in ("metric", "both"):
-        metric.side_effect = RuntimeError(PRIVATE)
-    monkeypatch.setattr(recording, "logger", logger)
+    metric = Mock(
+        side_effect=RuntimeError("metric sink failed")
+        if failed_sink in ("metric", "both")
+        else None
+    )
     monkeypatch.setattr(recording, "emit_metric", metric)
+    if failed_sink in ("log", "both"):
+        monkeypatch.setattr(sys, "stdout", _BrokenOutput(OSError("log sink failed")))
     handler = OutboxDeliveryFailureHandler(session_factory, jitter=lambda: 0.5)
     failure = PublishFailed(event_id, _missing_credentials())
     assert await handler.handle(
@@ -588,7 +722,11 @@ async def test_handler_returns_committed_stop_despite_output_failure(
         await handler.handle(leased_event=leased_event, failure=failure)
         == DeliveryUpdateSkipped()
     )
-    logger.info.assert_called_once()
     metric.assert_called_once()
+    if failed_sink == "metric":
+        assert [log["event"] for log in _logs(capsys.readouterr().out)] == [
+            "outbox_delivery_stopped",
+            "outbox_failure_recording_failed",
+        ]
     async with session_factory() as reader:
         assert await read_event(reader, event_id) == saved
