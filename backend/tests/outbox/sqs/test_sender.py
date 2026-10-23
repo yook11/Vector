@@ -6,7 +6,6 @@ import json
 import sys
 from copy import deepcopy
 from dataclasses import FrozenInstanceError, replace
-from datetime import UTC, datetime
 from hashlib import md5
 from unittest.mock import Mock
 from uuid import UUID
@@ -34,12 +33,11 @@ from app.aws.sqs.outgoing_message import (
     MessageTooLargeError,
     SqsResponseInvalidError,
 )
-from app.outbox.delivery.repository import LeasedOutboxEvent
 from app.outbox.publishing.contracts import (
-    EventEnvelope,
     PublishFailed,
     PublishSucceeded,
 )
+from app.outbox.publishing.message_batch import MessageBatch
 from app.outbox.publishing.route import EventMessage
 from app.outbox.sqs.failure_handler import SqsPublishFailureHandler
 from app.outbox.sqs.sender import SqsSender
@@ -163,8 +161,8 @@ def test_batch_success_preserves_body_and_input_order_on_resend(envelope, count)
                 )
                 assert sender.send_batch(
                     queue_url=QUEUE_URL,
-                    send_requests=[(message, message) for message in events],
-                ) == tuple((e, PublishSucceeded(e.event_id)) for e in events)
+                    batch=MessageBatch(events),
+                ) == tuple(PublishSucceeded(e.event_id) for e in events)
             stubber.assert_no_pending_responses()
     finally:
         client.close()
@@ -182,13 +180,13 @@ def test_partial_failure_keeps_success_and_rejects_only_failed_entry(envelope):
         }
     )
     result = sender.send_batch(
-        queue_url=QUEUE_URL, send_requests=[(envelope, envelope), (second, second)]
+        queue_url=QUEUE_URL, batch=MessageBatch([envelope, second])
     )
-    assert [item.event_id for _, item in result] == [
+    assert [item.event_id for item in result] == [
         envelope.event_id,
         second.event_id,
     ]
-    (_, failed), (_, succeeded) = result
+    failed, succeeded = result
     assert isinstance(failed, PublishFailed)
     assert (type(failed.error), failed.error.reason, failed.error.service_code) == (
         SqsServiceError,
@@ -200,25 +198,10 @@ def test_partial_failure_keeps_success_and_rejects_only_failed_entry(envelope):
     client.close.assert_called_once()
 
 
-def test_mixed_results_return_original_leased_events(small_message_limit):
-    """応答順と送信前の除外によらず、元の確保済みイベントを対応する結果と同一参照で返す。"""
-    leased_events = [
-        LeasedOutboxEvent(
-            envelope=EventEnvelope(
-                event_id=UUID(int=i),
-                event_type="test.event",
-                schema_version=1,
-                occurred_at=datetime(2026, 10, 23, tzinfo=UTC),
-                payload={"index": i},
-            ),
-            lease_token=UUID(int=100 + i),
-            attempt_count=i,
-        )
-        for i in range(1, 5)
-    ]
-    messages = [EventMessage(event.envelope.event_id, "{}") for event in leased_events]
+def test_mixed_results_preserve_input_order(small_message_limit):
+    """送信前のサイズ超過とSQSの成功・失敗を、応答順によらず入力順で返す。"""
+    messages = [EventMessage(UUID(int=i), "{}") for i in range(1, 5)]
     messages[1] = replace(messages[1], body="x" * (LIMIT + 1))
-    send_requests = list(zip(leased_events, messages, strict=True))
     sender, _, _ = _sender(
         response={
             "Successful": [_success(messages[3]), _success(messages[0])],
@@ -226,42 +209,50 @@ def test_mixed_results_return_original_leased_events(small_message_limit):
         }
     )
 
-    results = sender.send_batch(queue_url=QUEUE_URL, send_requests=send_requests)
+    results = sender.send_batch(queue_url=QUEUE_URL, batch=MessageBatch(messages))
 
-    assert len(results) == len(leased_events)
-    for original, (returned, outcome) in zip(leased_events, results, strict=True):
-        assert returned is original
-        assert outcome.event_id == original.envelope.event_id
-    assert isinstance(results[0][1], PublishSucceeded)
-    assert isinstance(results[1][1].error, MessageTooLargeError)
-    assert isinstance(results[2][1].error, SqsServiceError)
-    assert isinstance(results[3][1], PublishSucceeded)
+    assert [result.event_id for result in results] == [
+        message.event_id for message in messages
+    ]
+    assert isinstance(results[0], PublishSucceeded)
+    assert isinstance(results[1].error, MessageTooLargeError)
+    assert isinstance(results[2].error, SqsServiceError)
+    assert isinstance(results[3], PublishSucceeded)
 
 
-def test_original_target_is_retained_when_request_list_changes(envelope):
-    """送信中に呼び出し元のリストが変更されても、受け取った対象との対応を維持する。"""
-    original = object()
-    send_requests = [(original, envelope)]
+def test_source_changes_do_not_change_batch_during_send(envelope):
+    """送信中に呼び出し元のリストが変更されても、バッチの入力に対応する結果を返す。"""
+    messages = [envelope]
+    batch = MessageBatch(messages)
     sender, client, _ = _sender()
 
     def send(**kwargs):
-        send_requests.clear()
+        messages.clear()
         return {"Successful": [_success(envelope)]}
 
     client.send_message_batch.side_effect = send
-    results = sender.send_batch(queue_url=QUEUE_URL, send_requests=send_requests)
+    results = sender.send_batch(queue_url=QUEUE_URL, batch=batch)
 
-    assert len(results) == 1
-    assert results[0][0] is original
-    assert results[0][1] == PublishSucceeded(envelope.event_id)
+    assert results == (PublishSucceeded(envelope.event_id),)
 
 
-@pytest.mark.parametrize("send_requests", [None, "private", b"private", iter(())])
-def test_non_sequence_requests_are_rejected_before_client_creation(send_requests):
-    """送信要求はSequenceとして受け取り、型違反ではクライアントを生成しない。"""
+@pytest.mark.parametrize("batch", [None, "private", b"private", iter(()), []])
+def test_non_batch_input_is_rejected_before_client_creation(batch):
+    """MessageBatch以外の入力ではクライアントを生成しない。"""
     sender, _, factory = _sender()
-    with pytest.raises(TypeError, match="send requests must be a sequence"):
-        sender.send_batch(queue_url=QUEUE_URL, send_requests=send_requests)
+    with pytest.raises(TypeError, match="batch must be a MessageBatch"):
+        sender.send_batch(queue_url=QUEUE_URL, batch=batch)
+    factory.assert_not_called()
+
+
+def test_more_than_ten_messages_are_rejected_before_client_creation():
+    """入力バッチが11件なら、SQSへの送信前に件数違反を伝える。"""
+    batch = MessageBatch([EventMessage(UUID(int=i), "{}") for i in range(11)])
+    sender, _, factory = _sender()
+
+    with pytest.raises(ValueError, match="at most ten messages"):
+        sender.send_batch(queue_url=QUEUE_URL, batch=batch)
+
     factory.assert_not_called()
 
 
@@ -273,9 +264,9 @@ def test_unknown_entry_code_is_unknown_regardless_of_sender_fault(
     sender, _, _ = _sender(
         response={"Failed": [_failure(envelope.event_id, "FutureCode", sender_fault)]}
     )
-    error = sender.send_batch(
-        queue_url=QUEUE_URL, send_requests=[(envelope, envelope)]
-    )[0][1].error
+    error = sender.send_batch(queue_url=QUEUE_URL, batch=MessageBatch([envelope]))[
+        0
+    ].error
     assert (type(error), error.reason, error.service_code) == (
         SqsServiceError,
         "unknown",
@@ -283,46 +274,56 @@ def test_unknown_entry_code_is_unknown_regardless_of_sender_fault(
     )
 
 
-@pytest.mark.parametrize("count", [1, 2])
-@pytest.mark.parametrize("extra", [0, 1])
-def test_message_and_batch_byte_limits(envelope, count, extra, small_message_limit):
-    """個別超過はイベント失敗、正常な本文の合計超過は呼び出し違反とする。"""
-    events = [
-        _sized(
-            replace(envelope, event_id=UUID(int=i + 1)),
-            LIMIT // count + (extra if i == 0 else 0),
-        )
-        for i in range(count)
+def test_message_at_byte_limit_is_sent(envelope, small_message_limit):
+    """本文1件がUTF-8バイト数の上限ちょうどなら送信する。"""
+    message = replace(envelope, body="あ" * (LIMIT // 3) + "x" * (LIMIT % 3))
+    sender, _, _ = _sender(response={"Successful": [_success(message)]})
+
+    results = sender.send_batch(queue_url=QUEUE_URL, batch=MessageBatch([message]))
+
+    assert results == (PublishSucceeded(message.event_id),)
+
+
+def test_all_oversized_messages_skip_client_creation(envelope, small_message_limit):
+    """全件が個別サイズ超過なら、クライアントを生成せず各件の失敗を返す。"""
+    messages = [
+        _sized(replace(envelope, event_id=UUID(int=i)), LIMIT + 1) for i in (1, 2)
     ]
-    assert sum(len(_body(e).encode("utf-8")) for e in events) == LIMIT + extra
-    sender, client, factory = _sender(
-        response={"Successful": [_success(e) for e in events]}
-    )
-    if extra and count == 2:
-        with pytest.raises(ValueError):
-            sender.send_batch(
-                queue_url=QUEUE_URL,
-                send_requests=[(message, message) for message in events],
-            )
-        factory.assert_not_called()
-    elif extra:
-        assert isinstance(
-            sender.send_batch(
-                queue_url=QUEUE_URL,
-                send_requests=[(message, message) for message in events],
-            )[0][1].error,
-            MessageTooLargeError,
-        )
-        factory.assert_not_called()
-    else:
-        assert all(
-            isinstance(r, PublishSucceeded)
-            for _, r in sender.send_batch(
-                queue_url=QUEUE_URL,
-                send_requests=[(message, message) for message in events],
-            )
-        )
-        client.send_message_batch.assert_called_once()
+    sender, _, factory = _sender()
+
+    results = sender.send_batch(queue_url=QUEUE_URL, batch=MessageBatch(messages))
+
+    assert [result.event_id for result in results] == [m.event_id for m in messages]
+    assert all(isinstance(result.error, MessageTooLargeError) for result in results)
+    factory.assert_not_called()
+
+
+def test_batch_at_combined_byte_limit_is_sent(envelope, small_message_limit):
+    """送信する本文の合計が上限ちょうどなら、全件を送信する。"""
+    messages = [
+        _sized(replace(envelope, event_id=UUID(int=i)), LIMIT // 2) for i in (1, 2)
+    ]
+    sender, _, _ = _sender(response={"Successful": [_success(m) for m in messages]})
+
+    results = sender.send_batch(queue_url=QUEUE_URL, batch=MessageBatch(messages))
+
+    assert results == tuple(PublishSucceeded(m.event_id) for m in messages)
+
+
+def test_combined_byte_limit_violation_prevents_client_creation(
+    envelope, small_message_limit
+):
+    """各本文が上限内でも合計が超過すれば、クライアントを生成せず例外を伝える。"""
+    messages = [
+        _sized(envelope, LIMIT // 2),
+        _sized(replace(envelope, event_id=UUID(int=2)), LIMIT // 2 + 1),
+    ]
+    sender, _, factory = _sender()
+
+    with pytest.raises(ValueError, match="batch message bodies exceed the size limit"):
+        sender.send_batch(queue_url=QUEUE_URL, batch=MessageBatch(messages))
+
+    factory.assert_not_called()
 
 
 @pytest.mark.parametrize(
@@ -357,16 +358,16 @@ def test_whole_request_failure_preserves_local_failure_and_cleanup(
     )
     result = sender.send_batch(
         queue_url=QUEUE_URL,
-        send_requests=[(envelope, envelope), (good, good), (bad, bad)],
+        batch=MessageBatch([envelope, good, bad]),
     )
-    assert [item.event_id for _, item in result] == [
+    assert [item.event_id for item in result] == [
         envelope.event_id,
         good.event_id,
         bad.event_id,
     ]
-    for _, outcome in result[:2]:
+    for outcome in result[:2]:
         assert type(outcome.error) is expected
-    assert isinstance(result[2][1].error, MessageTooLargeError)
+    assert isinstance(result[2].error, MessageTooLargeError)
     assert [log["event"] for log in read_logs()] == [
         "outbox_publish_cleanup_failed"
     ] * int(close_fails)
@@ -385,10 +386,8 @@ def test_cleanup_failure_preserves_success(
         response={"Successful": [_success(envelope)]},
         close_error=RuntimeError("close failed"),
     )
-    result = sender.send_batch(
-        queue_url=QUEUE_URL, send_requests=[(envelope, envelope)]
-    )
-    assert result == ((envelope, PublishSucceeded(envelope.event_id)),)
+    result = sender.send_batch(queue_url=QUEUE_URL, batch=MessageBatch([envelope]))
+    assert result == (PublishSucceeded(envelope.event_id),)
     if not logging_failure:
         assert read_logs() == [
             {
@@ -448,13 +447,13 @@ def test_malformed_response_invalidates_all_sent_results(envelope, case):
         response["Failed"][0]["SenderFault"] = "true"
     sender, client, _ = _sender(response=response)
     result = sender.send_batch(
-        queue_url=QUEUE_URL, send_requests=[(envelope, envelope), (second, second)]
+        queue_url=QUEUE_URL, batch=MessageBatch([envelope, second])
     )
-    assert [item.event_id for _, item in result] == [
+    assert [item.event_id for item in result] == [
         envelope.event_id,
         second.event_id,
     ]
-    for _, outcome in result:
+    for outcome in result:
         expected = {
             "root": ("invalid_type", "response"),
             "list": ("invalid_type", "failed_entries"),
@@ -482,7 +481,7 @@ def test_process_exit_is_not_wrapped_or_replaced_by_cleanup(envelope, exc, monke
     monkeypatch.setattr(sys, "stdout", _BrokenOutput(OSError("log sink failed")))
     sender, client, _ = _sender(error=exc, close_error=ValueError("cleanup"))
     with pytest.raises(type(exc)) as caught:
-        sender.send_batch(queue_url=QUEUE_URL, send_requests=[(envelope, envelope)])
+        sender.send_batch(queue_url=QUEUE_URL, batch=MessageBatch([envelope]))
     assert caught.value is exc
     client.close.assert_called_once()
 
@@ -500,8 +499,8 @@ def test_each_batch_creates_and_closes_its_own_client(envelope):
     )
     for _ in range(2):
         assert sender.send_batch(
-            queue_url=QUEUE_URL, send_requests=[(envelope, envelope)]
-        ) == ((envelope, PublishSucceeded(envelope.event_id)),)
+            queue_url=QUEUE_URL, batch=MessageBatch([envelope])
+        ) == (PublishSucceeded(envelope.event_id),)
     assert session.create_client.call_count == 2
     session.get_credentials.assert_not_called()
     assert (
@@ -534,9 +533,9 @@ def test_missing_credentials_fail_at_signing_without_sending(envelope, monkeypat
     monkeypatch.setattr(session, "create_client", create_and_watch)
     sender = SqsSender.from_session(session=session, region="ap-northeast-1")
 
-    error = sender.send_batch(
-        queue_url=QUEUE_URL, send_requests=[(envelope, envelope)]
-    )[0][1].error
+    error = sender.send_batch(queue_url=QUEUE_URL, batch=MessageBatch([envelope]))[
+        0
+    ].error
 
     assert (type(error), error.reason) == (
         MessageSendConfigurationError,
@@ -549,9 +548,9 @@ def test_unexpected_client_creation_failure_keeps_only_its_type(envelope):
     """想定外のクライアント生成の失敗は、型名だけを持つ想定外の送信の失敗になる。"""
     sender, _, factory = _sender()
     factory.side_effect = RuntimeError("private")
-    error = sender.send_batch(
-        queue_url=QUEUE_URL, send_requests=[(envelope, envelope)]
-    )[0][1].error
+    error = sender.send_batch(queue_url=QUEUE_URL, batch=MessageBatch([envelope]))[
+        0
+    ].error
     assert (type(error), error.exception_type) == (
         MessageSendUnexpectedError,
         "RuntimeError",
@@ -568,14 +567,12 @@ def test_results_are_frozen_and_do_not_expose_diagnostics(envelope, read_logs):
         },
         close_error=RuntimeError("close failed"),
     )
-    result = sender.send_batch(
-        queue_url=QUEUE_URL, send_requests=[(envelope, envelope)]
-    )
+    result = sender.send_batch(queue_url=QUEUE_URL, batch=MessageBatch([envelope]))
     assert marker not in repr(result)
-    assert marker not in str(result[0][1].error)
+    assert marker not in str(result[0].error)
     assert marker not in json.dumps(read_logs())
     for obj, attr, value in [
-        (result[0][1], "event_id", UUID(int=2)),
+        (result[0], "event_id", UUID(int=2)),
         (PublishSucceeded(envelope.event_id), "event_id", UUID(int=2)),
     ]:
         with pytest.raises(FrozenInstanceError):
@@ -596,8 +593,8 @@ def test_oversized_event_stops_without_configuration_alarm(
     sender, _, _ = _sender()
     error = sender.send_batch(
         queue_url=QUEUE_URL,
-        send_requests=[(_sized(envelope, LIMIT + 1), _sized(envelope, LIMIT + 1))],
-    )[0][1].error
+        batch=MessageBatch([_sized(envelope, LIMIT + 1)]),
+    )[0].error
     assert decide_publish_retry(error, attempt_count=1, jitter=0.5) == NonRetryable(
         NonRetryableReason.NON_RETRYABLE_FAILURE
     )
@@ -618,10 +615,10 @@ def test_all_entries_can_fail_with_missing_metadata(envelope, metadata):
         }
     )
     result = sender.send_batch(
-        queue_url=QUEUE_URL, send_requests=[(envelope, envelope), (second, second)]
+        queue_url=QUEUE_URL, batch=MessageBatch([envelope, second])
     )
-    assert [r.event_id for _, r in result] == [envelope.event_id, second.event_id]
-    assert [(type(r.error), r.error.reason) for _, r in result] == [
+    assert [r.event_id for r in result] == [envelope.event_id, second.event_id]
+    assert [(type(r.error), r.error.reason) for r in result] == [
         (SqsServiceError, "access_denied"),
         (SqsServiceError, "throttled"),
     ]
@@ -632,15 +629,13 @@ def test_initialization_failure_preserves_oversized_event(envelope):
     bad = replace(envelope, event_id=UUID(int=2), body="x" * (1024 * 1024 + 1))
     sender, _, factory = _sender()
     factory.side_effect = NoCredentialsError()
-    result = sender.send_batch(
-        queue_url=QUEUE_URL, send_requests=[(bad, bad), (envelope, envelope)]
-    )
-    assert [item.event_id for _, item in result] == [
+    result = sender.send_batch(queue_url=QUEUE_URL, batch=MessageBatch([bad, envelope]))
+    assert [item.event_id for item in result] == [
         bad.event_id,
         envelope.event_id,
     ]
-    assert isinstance(result[0][1].error, MessageTooLargeError)
-    error = result[1][1].error
+    assert isinstance(result[0].error, MessageTooLargeError)
+    error = result[1].error
     assert (type(error), error.reason) == (
         MessageSendConfigurationError,
         "missing_credentials",
@@ -673,9 +668,9 @@ def test_checksum_uses_exact_transmitted_body(
         }
     )
     envelope = EventMessage(envelope.event_id, body)
-    assert sender.send_batch(
-        queue_url=QUEUE_URL, send_requests=[(envelope, envelope)]
-    ) == ((envelope, PublishSucceeded(envelope.event_id)),)
+    assert sender.send_batch(queue_url=QUEUE_URL, batch=MessageBatch([envelope])) == (
+        PublishSucceeded(envelope.event_id),
+    )
     assert client.send_message_batch.call_args.kwargs["Entries"] == [
         {"Id": str(envelope.event_id), "MessageBody": body}
     ]
@@ -697,13 +692,11 @@ def test_mixed_integrity_and_service_failures_keep_success_and_cleanup(
         },
         close_error=close_error,
     )
-    result = sender.send_batch(
-        queue_url=QUEUE_URL, send_requests=[(message, message) for message in events]
-    )
-    assert [r.event_id for _, r in result] == [e.event_id for e in events]
-    assert result[0][1] == PublishSucceeded(events[0].event_id)
-    assert isinstance(result[1][1].error, MessageBodyMismatchError)
-    assert (type(result[2][1].error), result[2][1].error.reason) == (
+    result = sender.send_batch(queue_url=QUEUE_URL, batch=MessageBatch(events))
+    assert [r.event_id for r in result] == [e.event_id for e in events]
+    assert result[0] == PublishSucceeded(events[0].event_id)
+    assert isinstance(result[1].error, MessageBodyMismatchError)
+    assert (type(result[2].error), result[2].error.reason) == (
         SqsServiceError,
         "throttled",
     )
@@ -734,14 +727,14 @@ def test_response_invalid_preserves_local_failure_and_cleanup_without_raw_values
         response=response, close_error=RuntimeError("close failed")
     )
     result = sender.send_batch(
-        queue_url=QUEUE_URL, send_requests=[(invalid, invalid), (envelope, envelope)]
+        queue_url=QUEUE_URL, batch=MessageBatch([invalid, envelope])
     )
-    assert [item.event_id for _, item in result] == [
+    assert [item.event_id for item in result] == [
         invalid.event_id,
         envelope.event_id,
     ]
-    assert isinstance(result[0][1].error, MessageTooLargeError)
-    error = result[1][1].error
+    assert isinstance(result[0].error, MessageTooLargeError)
+    error = result[1].error
     assert isinstance(error, SqsResponseInvalidError)
     logs = read_logs()
     assert logs == [
@@ -800,13 +793,11 @@ def test_client_closes_and_records_diagnostic_before_return(envelope, monkeypatc
     client.send_message_batch.side_effect = send
     client.close.side_effect = close
     monkeypatch.setattr(sys, "stdout", TracingOutput())
-    result = sender.send_batch(
-        queue_url=QUEUE_URL, send_requests=[(envelope, envelope)]
-    )
+    result = sender.send_batch(queue_url=QUEUE_URL, batch=MessageBatch([envelope]))
     trace.append("returned")
 
     assert trace == ["send", "close", "diagnostic", "returned"]
-    assert result == ((envelope, PublishSucceeded(envelope.event_id)),)
+    assert result == (PublishSucceeded(envelope.event_id),)
     assert [json.loads(text)["event"] for text in written] == [
         "outbox_publish_cleanup_failed"
     ]
@@ -829,21 +820,17 @@ def test_invalid_response_diagnostic_is_once_per_sent_batch(
 
     result = sender.send_batch(
         queue_url=QUEUE_URL,
-        send_requests=[
-            (events[0], events[0]),
-            (invalid, invalid),
-            (events[1], events[1]),
-        ],
+        batch=MessageBatch([events[0], invalid, events[1]]),
     )
 
-    assert [r.event_id for _, r in result] == [
+    assert [r.event_id for r in result] == [
         events[0].event_id,
         invalid.event_id,
         events[1].event_id,
     ]
-    assert isinstance(result[1][1].error, MessageTooLargeError)
+    assert isinstance(result[1].error, MessageTooLargeError)
     for index in (0, 2):
-        assert isinstance(result[index][1].error, SqsResponseInvalidError)
+        assert isinstance(result[index].error, SqsResponseInvalidError)
     if not logging_failure:
         logs = read_logs()
         assert logs == [
@@ -871,10 +858,8 @@ def test_valid_response_shape_does_not_log_response_violation(
     if mismatch:
         entry["MD5OfMessageBody"] = "0" * 32
     sender, _, _ = _sender(response={"Successful": [entry]})
-    result = sender.send_batch(
-        queue_url=QUEUE_URL, send_requests=[(envelope, envelope)]
-    )
-    assert isinstance(result[0][1], PublishFailed if mismatch else PublishSucceeded)
+    result = sender.send_batch(queue_url=QUEUE_URL, batch=MessageBatch([envelope]))
+    assert isinstance(result[0], PublishFailed if mismatch else PublishSucceeded)
     assert read_logs() == []
 
 
@@ -884,7 +869,7 @@ def test_response_diagnostic_process_exit_is_not_swallowed(envelope, monkeypatch
     monkeypatch.setattr(sys, "stdout", _BrokenOutput(exit_error))
     sender, client, _ = _sender(response=None)
     with pytest.raises(KeyboardInterrupt) as caught:
-        sender.send_batch(queue_url=QUEUE_URL, send_requests=[(envelope, envelope)])
+        sender.send_batch(queue_url=QUEUE_URL, batch=MessageBatch([envelope]))
     assert caught.value is exit_error
     client.close.assert_called_once()
 
@@ -903,19 +888,19 @@ def test_publisher_passes_diagnostics_to_injected_failure_handler(envelope):
     invalid = replace(envelope, event_id=UUID(int=2), body="x" * (1024 * 1024 + 1))
 
     result = publisher.send_batch(
-        queue_url=QUEUE_URL, send_requests=[(invalid, invalid), (envelope, envelope)]
+        queue_url=QUEUE_URL, batch=MessageBatch([invalid, envelope])
     )
 
-    assert [outcome.event_id for _, outcome in result] == [
+    assert [outcome.event_id for outcome in result] == [
         invalid.event_id,
         envelope.event_id,
     ]
-    assert isinstance(result[0][1].error, MessageTooLargeError)
-    assert isinstance(result[1][1].error, SqsResponseInvalidError)
+    assert isinstance(result[0].error, MessageTooLargeError)
+    assert isinstance(result[1].error, SqsResponseInvalidError)
     handler.handle_invalid_response.assert_called_once()
     diagnostic = handler.handle_invalid_response.call_args.kwargs
     assert diagnostic["event_ids"] == (envelope.event_id,)
-    assert diagnostic["error"] is result[1][1].error
+    assert diagnostic["error"] is result[1].error
     handler.handle_cleanup_failure.assert_called_once_with(close_error)
 
 
@@ -931,10 +916,10 @@ def test_cleanup_diagnostic_failure_preserves_original_outcome(envelope, primary
     sender = SqsSender(client_factory=lambda: client, failure_handler=handler)
     if primary_error is None:
         assert sender.send_batch(
-            queue_url=QUEUE_URL, send_requests=[(envelope, envelope)]
-        ) == ((envelope, PublishSucceeded(envelope.event_id)),)
+            queue_url=QUEUE_URL, batch=MessageBatch([envelope])
+        ) == (PublishSucceeded(envelope.event_id),)
     else:
         with pytest.raises(KeyboardInterrupt) as caught:
-            sender.send_batch(queue_url=QUEUE_URL, send_requests=[(envelope, envelope)])
+            sender.send_batch(queue_url=QUEUE_URL, batch=MessageBatch([envelope]))
         assert caught.value is primary_error
     client.close.assert_called_once()

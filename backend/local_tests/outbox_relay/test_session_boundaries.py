@@ -39,10 +39,10 @@ async def test_preparation_sessions_are_closed_before_send(
     """停止・確保の接続は、送信時点では貸し出されていない。"""
     ready = await seed_event(owner_sessions)
 
-    def send(*, queue_url, send_requests):
+    def send(*, queue_url, batch):
         assert relay_engine.pool.checkedout() == 0
-        assert [message.event_id for _, message in send_requests] == [ready.event_id]
-        return ((send_requests[0][0], PublishSucceeded(ready.event_id)),)
+        assert [message.event_id for message in batch.messages] == [ready.event_id]
+        return (PublishSucceeded(ready.event_id),)
 
     sender = Mock(send_batch=Mock(side_effect=send))
     await make_relay(relay_sessions, sender).run_once()

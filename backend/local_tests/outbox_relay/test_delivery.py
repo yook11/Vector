@@ -64,7 +64,7 @@ async def test_conversion_failure_send_failure_and_success_keep_event_correspond
     owner_sessions,
     relay_sessions,
 ):
-    """変換失敗・送信失敗・成功が同居しても、各イベントの配信結果を取り違えない。"""
+    """変換失敗を除外して結果が入力と異なる順で返っても、イベントIDで配信結果を対応付ける。"""
     invalid, failed, successful = await seed_events(owner_sessions, count=3)
     async with owner_sessions() as session:
         await session.execute(
@@ -81,15 +81,15 @@ async def test_conversion_failure_send_failure_and_success_keep_event_correspond
     )
     sender = Mock(
         send_batch=Mock(
-            side_effect=lambda *, queue_url, send_requests: (
-                (send_requests[0][0], PublishFailed(failed.event_id, timeout)),
-                (send_requests[1][0], PublishSucceeded(successful.event_id)),
+            side_effect=lambda *, queue_url, batch: (
+                PublishSucceeded(successful.event_id),
+                PublishFailed(failed.event_id, timeout),
             )
         )
     )
     await make_relay(relay_sessions, sender).run_once()
     assert [
-        m.event_id for _, m in sender.send_batch.call_args.kwargs["send_requests"]
+        m.event_id for m in sender.send_batch.call_args.kwargs["batch"].messages
     ] == [
         failed.event_id,
         successful.event_id,
@@ -138,8 +138,8 @@ async def test_only_retryable_event_is_published_when_processed_with_exhausted(
     retryable = await seed_event(owner_sessions)
     sender = Mock(
         send_batch=Mock(
-            side_effect=lambda *, queue_url, send_requests: (
-                (send_requests[0][0], PublishSucceeded(retryable.event_id)),
+            side_effect=lambda *, queue_url, batch: (
+                PublishSucceeded(retryable.event_id),
             )
         )
     )
@@ -149,7 +149,7 @@ async def test_only_retryable_event_is_published_when_processed_with_exhausted(
     sender.send_batch.assert_called_once()
     sent_ids = [
         message.event_id
-        for _, message in sender.send_batch.call_args.kwargs["send_requests"]
+        for message in sender.send_batch.call_args.kwargs["batch"].messages
     ]
     assert sent_ids == [retryable.event_id]
     saved_retryable = await read_saved(owner_sessions, retryable)
@@ -177,13 +177,10 @@ async def test_mixed_results_preserve_success_retry_and_stop(
     )
     sender = Mock(
         send_batch=Mock(
-            side_effect=lambda *, queue_url, send_requests: (
-                (send_requests[0][0], PublishSucceeded(successful.event_id)),
-                (send_requests[1][0], PublishFailed(retryable.event_id, timeout)),
-                (
-                    send_requests[2][0],
-                    PublishFailed(permanent.event_id, configuration_error()),
-                ),
+            side_effect=lambda *, queue_url, batch: (
+                PublishSucceeded(successful.event_id),
+                PublishFailed(retryable.event_id, timeout),
+                PublishFailed(permanent.event_id, configuration_error()),
             )
         )
     )
@@ -250,9 +247,7 @@ async def test_leased_event_is_not_resent_by_another_relay(
 
     first_sender = Mock(
         send_batch=Mock(
-            side_effect=lambda *, queue_url, send_requests: (
-                (send_requests[0][0], PublishSucceeded(event.event_id)),
-            )
+            side_effect=lambda *, queue_url, batch: (PublishSucceeded(event.event_id),)
         )
     )
     second_sender = Mock()
@@ -312,9 +307,9 @@ async def test_skipped_update_does_not_block_later_results(
     )
     sender = Mock(
         send_batch=Mock(
-            side_effect=lambda *, queue_url, send_requests: (
-                (send_requests[0][0], first_publish),
-                (send_requests[1][0], PublishSucceeded(second.event_id)),
+            side_effect=lambda *, queue_url, batch: (
+                first_publish,
+                PublishSucceeded(second.event_id),
             )
         )
     )
@@ -397,9 +392,8 @@ async def test_result_fault_keeps_earlier_publish_and_does_not_resend(
 
     sender = Mock(
         send_batch=Mock(
-            side_effect=lambda *, queue_url, send_requests: tuple(
-                (original, PublishSucceeded(message.event_id))
-                for original, message in send_requests
+            side_effect=lambda *, queue_url, batch: tuple(
+                PublishSucceeded(message.event_id) for message in batch.messages
             )
         )
     )

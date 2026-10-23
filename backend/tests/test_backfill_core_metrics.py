@@ -98,16 +98,13 @@ def _backlog(case: _MetricCase, *, count: int, targets: list[BackfillEventTarget
 def _sender(*, failed_positions: frozenset[int] = frozenset()) -> MagicMock:
     """入力順の指定位置だけ送信失敗にする sender。"""
     sender = MagicMock()
-    sender.send_batch.side_effect = lambda *, queue_url, send_requests: tuple(
-        (
-            original,
-            PublishFailed(
-                item.event_id, MessageSendUnexpectedError(exception_type="RuntimeError")
-            )
-            if position in failed_positions
-            else PublishSucceeded(item.event_id),
+    sender.send_batch.side_effect = lambda *, queue_url, batch: tuple(
+        PublishFailed(
+            item.event_id, MessageSendUnexpectedError(exception_type="RuntimeError")
         )
-        for position, (original, item) in enumerate(send_requests)
+        if position in failed_positions
+        else PublishSucceeded(item.event_id)
+        for position, item in enumerate(batch.messages)
     )
     return sender
 

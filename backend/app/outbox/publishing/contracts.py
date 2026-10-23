@@ -1,13 +1,13 @@
 from __future__ import annotations
 
-from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Protocol
 from uuid import UUID
 
 from app.aws.sqs.errors import MessageSendError
-from app.outbox.publishing.route import EventMessage, EventRouteMismatchError
+from app.outbox.publishing.message_batch import MessageBatch
+from app.outbox.publishing.route import EventRouteMismatchError
 from app.shared.event_contract import EventInvalidError
 
 # 型注釈とisinstanceの両方に使うため、TypeAliasやtype文ではなくUnionTypeの値として持つ。
@@ -51,8 +51,8 @@ class PublishFailed:
 
 
 class MessageSender(Protocol):
-    def send_batch[T](
-        self, *, queue_url: str, send_requests: Sequence[tuple[T, EventMessage]]
-    ) -> tuple[tuple[T, PublishSucceeded | PublishFailed], ...]:
-        """送信と応答検証を行い、元の対象の同一インスタンスと本文に対応する受付結果を入力順で1組ずつ返す。"""
+    def send_batch(
+        self, *, queue_url: str, batch: MessageBatch
+    ) -> tuple[PublishSucceeded | PublishFailed, ...]:
+        """送信と応答検証を行い、各メッセージのイベントIDに対応する受付結果を入力順で返す。"""
         ...
