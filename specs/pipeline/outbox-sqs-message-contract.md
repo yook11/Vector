@@ -322,8 +322,8 @@ delivery.retry_policy.decide_publish_retry(error, attempt_count, jitter)は、�
 結果は不変のRetryable(delay)またはNonRetryable(reason)で返す。
 Retryableは原因と回数上限を確認済みの最終判断であり、次回の配信試行までの待ち時間をRetryDelayとして必ず持つ。Retryableは生成時にdelayがRetryDelay、NonRetryableはreasonがNonRetryableReasonであることを検証し、それ以外をTypeErrorとする。Handlerはこれらの値を型のままRepositoryへ渡す。RetryScheduledのdelayは従来どおりtimedeltaを返す。
 RetryableとNonRetryableは確定した判断だけを保持し、原因の判定メソッドを持たない。decide_publish_retryが入力検証、原因判定、回数上限の確認、待ち時間計算と結果の生成を取りまとめる。
-再試行対象外の原因は原因別の停止理由を優先し、再試行対象でも回数上限に達した場合はretry_exhaustedを返す。それ以外は計算した待ち時間を持つRetryableを返す。原因判定と停止理由の分類はポリシー内の非公開関数が担い、待ち時間の計算関数はtimedeltaだけを返す。中間分類専用の結果型や、Noneによる再試行可否の表現は使用しない。
-再試行しない理由はNonRetryableReasonのnon_retryable_failure、retry_exhausted、unclassified_failure、unexpected_failureとし、元の失敗情報はPublishErrorに保持する。
+再試行対象外の原因は原因別の停止理由を優先し、再試行対象でも回数上限に達した場合はretry_exhaustedを返す。それ以外は計算した待ち時間を持つRetryableを返す。原因判定はポリシー内の非公開関数が担い、待ち時間の計算関数はtimedeltaだけを返す。中間分類専用の結果型や、Noneによる再試行可否の表現は使用しない。
+再試行しない理由はNonRetryableReasonのnon_retryable_failure、retry_exhaustedとし、元の失敗情報はPublishFailedのerrorに保持する。
 
 | 失敗 | 方針 |
 |---|---|
@@ -332,11 +332,11 @@ RetryableとNonRetryableは確定した判断だけを保持し、原因の判�
 | proxyのstatusなし・429・500〜599 | 上限付き再試行 |
 | proxyのその他のstatus | non_retryable_failureで停止 |
 | serviceのthrottled・service_unavailable | 上限付き再試行 |
-| serviceのunclassified | unclassified_failureで停止 |
+| serviceのunclassified | non_retryable_failureで停止 |
 | serviceのその他のreason（request_expiredを含む） | non_retryable_failureで停止 |
 | configuration・event invalidの全reason | non_retryable_failureで停止 |
 | integrityのbody_checksum_mismatch | non_retryable_failureで停止 |
-| unexpected・未対応のPublishError | unexpected_failureで停止 |
+| unexpected・未対応の送信の失敗 | non_retryable_failureで停止 |
 
 再試行対象は初回を含め最大5回とし、1〜4回目の失敗後の基準待ち時間を30秒・2分・10分・30分とする。
 実際の待ち時間は基準時間 × (0.8 + 0.4 × jitter)で、jitterは呼び出し元が渡す0〜1の有限値とする。
@@ -392,7 +392,7 @@ Done: 別sessionから予約・停止の確定を確認し、更新不能・再�
 Problem: 人の設定修復が必要な送信停止だけを、ログとメトリクスへ書く。
 Evidence: 既存EMF出力とCloudWatch Alarm → SNS → Amazon Q → Slackの通知経路は記録の先にあり、モジュールの仕事ではない。
 
-requires_publish_configuration_fixは、configurationのmissing_credentials・incomplete_credentials・missing_regionと、serviceのauthentication_failed・access_denied・destination_not_foundだけをメトリクス対象にする。
+aws/sqsのrequires_configuration_fixは、configurationのmissing_credentials・incomplete_credentials・missing_regionと、serviceのauthentication_failed・access_denied・destination_not_foundだけをメトリクス対象にする。
 credentials_retrieval_failed、暗号化関連、通信失敗、イベント不正、未分類・想定外はメトリクスを書かない。
 NonRetryableReasonだけでは設定修復が必要か判断しない。
 
