@@ -324,7 +324,6 @@ def test_stop_log_fields_and_metric_by_failure(
 ):
     """停止を失敗ごとに決まった項目で記録し、設定修復の6理由だけメトリクスを出し、SQSの生のコード・自由文・元例外は出さない。"""
     error.__cause__ = RuntimeError(PRIVATE)
-    assert recording.requires_publish_configuration_fix(error) is requires_fix
     with capture_logs() as logs:
         recording.record_publish_failure(
             leased_event=leased_event, error=error, stop_reason=STOP_REASON

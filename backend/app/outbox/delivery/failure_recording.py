@@ -3,14 +3,14 @@
 import structlog
 
 from app.audit.error_fields import exception_fqn
+from app.aws.sqs.configuration_fix import requires_configuration_fix
 from app.aws.sqs.errors import (
     MessageSendConfigurationError,
-    MessageSendConfigurationReason,
     MessageSendCredentialsError,
+    MessageSendError,
     MessageSendTransportError,
     MessageSendUnexpectedError,
     SqsServiceError,
-    SqsServiceErrorReason,
 )
 from app.aws.sqs.outgoing_message import MessageBodyMismatchError
 from app.cloudwatch.emf import emit_metric
@@ -25,23 +25,6 @@ _BODY_CHECKSUM_MISMATCH_MESSAGE = (
     "送信した本文と、送信先が受け取った本文のチェックサムが一致しません。"
     "送信先には受付済みの可能性があるため、このイベントの自動再試行を停止しました。"
 )
-
-
-def requires_publish_configuration_fix(error: PublishFailure) -> bool:
-    """設定修復が必要な停止だけ、メトリクスも書く。"""
-    if isinstance(error, MessageSendConfigurationError):
-        return error.reason in (
-            MessageSendConfigurationReason.MISSING_CREDENTIALS,
-            MessageSendConfigurationReason.INCOMPLETE_CREDENTIALS,
-            MessageSendConfigurationReason.MISSING_REGION,
-        )
-    if isinstance(error, SqsServiceError):
-        return error.reason in (
-            SqsServiceErrorReason.AUTHENTICATION_FAILED,
-            SqsServiceErrorReason.ACCESS_DENIED,
-            SqsServiceErrorReason.DESTINATION_NOT_FOUND,
-        )
-    return False
 
 
 def _record_output_failure(exc: Exception) -> None:
@@ -61,7 +44,9 @@ def record_publish_failure(
     stop_reason: NonRetryableReason,
 ) -> None:
     """停止確定後に呼び、記録の通常失敗を配信処理へ戻さない。"""
-    requires_fix = requires_publish_configuration_fix(error)
+    requires_fix = isinstance(error, MessageSendError) and requires_configuration_fix(
+        error
+    )
     try:
         fields: dict[str, object] = {
             "event_id": str(leased_event.envelope.event_id),
