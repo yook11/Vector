@@ -13,14 +13,10 @@ from sqlalchemy.exc import SQLAlchemyError
 from structlog.testing import capture_logs
 
 from app.analysis.assessment.events import (
-    AssessedEventInvalid,
     AssessedEventInvalidError,
-    AssessedEventInvalidReason,
 )
 from app.analysis.curation.events import (
-    CuratedEventInvalid,
     CuratedEventInvalidError,
-    CuratedEventInvalidReason,
 )
 from app.aws.sqs.errors import (
     MessageSendConfigurationError,
@@ -40,14 +36,10 @@ from app.aws.sqs.outgoing_message import (
 )
 from app.cloudwatch.emf import PIPELINE_NAMESPACE
 from app.collection.article_acquisition.events import (
-    IncompleteArticleEventInvalid,
     IncompleteArticleEventInvalidError,
-    IncompleteArticleEventInvalidReason,
 )
 from app.collection.events import (
-    AnalyzableEventInvalid,
     AnalyzableEventInvalidError,
-    AnalyzableEventInvalidReason,
 )
 from app.http.failure import (
     HttpTransportFailure,
@@ -65,6 +57,10 @@ from app.outbox.delivery.repository import LeasedOutboxEvent
 from app.outbox.delivery.retry_policy import NonRetryableReason
 from app.outbox.publishing.contracts import EventEnvelope, PublishFailed
 from app.outbox.publishing.route import EventRouteMismatchError
+from app.shared.event_contract import (
+    EventInvalid,
+    EventInvalidReason,
+)
 from tests.cloudwatch.records import emf_records
 from tests.outbox.helpers import FUTURE, PAST, insert_event, read_event
 
@@ -264,9 +260,7 @@ def leased_event():
         ),
         (
             AnalyzableEventInvalidError(
-                AnalyzableEventInvalid(
-                    reason=AnalyzableEventInvalidReason.INVALID_PAYLOAD, issues=()
-                )
+                EventInvalid(reason=EventInvalidReason.INVALID_PAYLOAD, issues=())
             ),
             False,
             {
@@ -276,8 +270,8 @@ def leased_event():
         ),
         (
             IncompleteArticleEventInvalidError(
-                IncompleteArticleEventInvalid(
-                    reason=IncompleteArticleEventInvalidReason.INVALID_ENVELOPE,
+                EventInvalid(
+                    reason=EventInvalidReason.INVALID_ENVELOPE,
                     issues=(),
                 )
             ),
@@ -292,8 +286,8 @@ def leased_event():
         ),
         (
             AssessedEventInvalidError(
-                AssessedEventInvalid(
-                    reason=AssessedEventInvalidReason.UNSUPPORTED_EVENT_TYPE,
+                EventInvalid(
+                    reason=EventInvalidReason.UNSUPPORTED_EVENT_TYPE,
                     issues=(),
                 )
             ),
@@ -307,8 +301,8 @@ def leased_event():
         ),
         (
             CuratedEventInvalidError(
-                CuratedEventInvalid(
-                    reason=CuratedEventInvalidReason.UNSUPPORTED_SCHEMA_VERSION,
+                EventInvalid(
+                    reason=EventInvalidReason.UNSUPPORTED_SCHEMA_VERSION,
                     issues=(),
                 )
             ),

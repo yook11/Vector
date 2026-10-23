@@ -2,18 +2,8 @@
 
 from typing import Literal, TypedDict
 
-from app.analysis.assessment.events import AssessedEventInvalidError
-from app.analysis.curation.events import CuratedEventInvalidError
-from app.collection.article_acquisition.events import IncompleteArticleEventInvalidError
-from app.collection.events import AnalyzableEventInvalidError
 from app.log_policy.exceptions.types import ConvertedException
-
-EVENT_VALIDATION_ERRORS = (
-    AnalyzableEventInvalidError,
-    IncompleteArticleEventInvalidError,
-    CuratedEventInvalidError,
-    AssessedEventInvalidError,
-)
+from app.shared.event_contract import EventInvalidError
 
 
 class EventValidationIssue(TypedDict):
@@ -31,12 +21,7 @@ class EventValidationDetails(TypedDict):
     issues: list[EventValidationIssue]
 
 
-def convert_event_validation_exception(
-    exc: AnalyzableEventInvalidError
-    | IncompleteArticleEventInvalidError
-    | CuratedEventInvalidError
-    | AssessedEventInvalidError,
-) -> ConvertedException:
+def convert_event_validation_exception(exc: EventInvalidError) -> ConvertedException:
     """入力を含む元のメッセージを使わず、検証境界の理由と項目別診断から組み立てる。"""
     try:
         invalid = exc.invalid

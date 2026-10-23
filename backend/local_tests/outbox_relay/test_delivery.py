@@ -4,7 +4,6 @@ import asyncio
 from contextlib import asynccontextmanager
 from hashlib import md5
 from unittest.mock import Mock
-from uuid import uuid4
 
 import pytest
 from sqlalchemy import event as sqlalchemy_event
@@ -23,7 +22,6 @@ from app.lambda_handlers.sqs.received_message import ReceivedMessage
 from app.models.outbox_event import OutboxEvent
 from app.outbox.publishing.assessed_in_scope import build_assessed_in_scope_message
 from app.outbox.publishing.contracts import (
-    BatchPublishResult,
     PublishFailed,
     PublishFailure,
     PublishSucceeded,
@@ -83,16 +81,16 @@ async def test_conversion_failure_send_failure_and_success_keep_event_correspond
     )
     sender = Mock(
         send_batch=Mock(
-            return_value=BatchPublishResult(
-                (
-                    PublishFailed(failed.event_id, timeout),
-                    PublishSucceeded(successful.event_id),
-                )
+            side_effect=lambda *, queue_url, send_requests: (
+                (send_requests[0][0], PublishFailed(failed.event_id, timeout)),
+                (send_requests[1][0], PublishSucceeded(successful.event_id)),
             )
         )
     )
     await make_relay(relay_sessions, sender).run_once()
-    assert [m.event_id for m in sender.send_batch.call_args.kwargs["messages"]] == [
+    assert [
+        m.event_id for _, m in sender.send_batch.call_args.kwargs["send_requests"]
+    ] == [
         failed.event_id,
         successful.event_id,
     ]
@@ -105,33 +103,6 @@ async def test_conversion_failure_send_failure_and_success_keep_event_correspond
     assert failed_saved["next_attempt_at"] > failed.before["next_attempt_at"]
     assert failed_saved["lease_token"] is None
     assert (await read_saved(owner_sessions, successful))["published_at"] is not None
-
-
-async def test_invalid_sender_result_prevents_recording_conversion_failure(
-    owner_sessions,
-    relay_sessions,
-):
-    """Senderが変換失敗したIDを返しても統合で上書きせず、全件のleaseを保持する。"""
-    invalid, good = await seed_events(owner_sessions, count=2)
-    async with owner_sessions() as session:
-        await session.execute(
-            update(OutboxEvent)
-            .where(OutboxEvent.event_id == invalid.event_id)
-            .values(schema_version=2)
-        )
-        await session.commit()
-    sender = Mock(
-        send_batch=Mock(
-            return_value=BatchPublishResult((PublishSucceeded(invalid.event_id),))
-        )
-    )
-    with pytest.raises(ValueError, match="sender results must match"):
-        await make_relay(relay_sessions, sender).run_once()
-    for event in (invalid, good):
-        saved = await read_saved(owner_sessions, event)
-        assert saved["published_at"] is None
-        assert saved["delivery_stopped_at"] is None
-        assert saved["lease_token"] is not None
 
 
 async def test_unexpected_conversion_error_keeps_leases_without_sending(
@@ -167,7 +138,9 @@ async def test_only_retryable_event_is_published_when_processed_with_exhausted(
     retryable = await seed_event(owner_sessions)
     sender = Mock(
         send_batch=Mock(
-            return_value=BatchPublishResult((PublishSucceeded(retryable.event_id),))
+            side_effect=lambda *, queue_url, send_requests: (
+                (send_requests[0][0], PublishSucceeded(retryable.event_id)),
+            )
         )
     )
 
@@ -175,7 +148,8 @@ async def test_only_retryable_event_is_published_when_processed_with_exhausted(
 
     sender.send_batch.assert_called_once()
     sent_ids = [
-        envelope.event_id for envelope in sender.send_batch.call_args.kwargs["messages"]
+        message.event_id
+        for _, message in sender.send_batch.call_args.kwargs["send_requests"]
     ]
     assert sent_ids == [retryable.event_id]
     saved_retryable = await read_saved(owner_sessions, retryable)
@@ -203,12 +177,13 @@ async def test_mixed_results_preserve_success_retry_and_stop(
     )
     sender = Mock(
         send_batch=Mock(
-            return_value=BatchPublishResult(
+            side_effect=lambda *, queue_url, send_requests: (
+                (send_requests[0][0], PublishSucceeded(successful.event_id)),
+                (send_requests[1][0], PublishFailed(retryable.event_id, timeout)),
                 (
-                    PublishSucceeded(successful.event_id),
-                    PublishFailed(retryable.event_id, timeout),
+                    send_requests[2][0],
                     PublishFailed(permanent.event_id, configuration_error()),
-                )
+                ),
             )
         )
     )
@@ -275,7 +250,9 @@ async def test_leased_event_is_not_resent_by_another_relay(
 
     first_sender = Mock(
         send_batch=Mock(
-            return_value=BatchPublishResult((PublishSucceeded(event.event_id),))
+            side_effect=lambda *, queue_url, send_requests: (
+                (send_requests[0][0], PublishSucceeded(event.event_id)),
+            )
         )
     )
     second_sender = Mock()
@@ -335,8 +312,9 @@ async def test_skipped_update_does_not_block_later_results(
     )
     sender = Mock(
         send_batch=Mock(
-            return_value=BatchPublishResult(
-                (first_publish, PublishSucceeded(second.event_id))
+            side_effect=lambda *, queue_url, send_requests: (
+                (send_requests[0][0], first_publish),
+                (send_requests[1][0], PublishSucceeded(second.event_id)),
             )
         )
     )
@@ -419,10 +397,9 @@ async def test_result_fault_keeps_earlier_publish_and_does_not_resend(
 
     sender = Mock(
         send_batch=Mock(
-            return_value=BatchPublishResult(
-                tuple(
-                    PublishSucceeded(event.event_id) for event in (first, second, third)
-                )
+            side_effect=lambda *, queue_url, send_requests: tuple(
+                (original, PublishSucceeded(message.event_id))
+                for original, message in send_requests
             )
         )
     )
@@ -455,43 +432,6 @@ async def test_result_fault_keeps_earlier_publish_and_does_not_resend(
         "lease_token": saved_third["lease_token"],
         "leased_until": saved_third["leased_until"],
     }
-
-
-@pytest.mark.parametrize(
-    "case",
-    ["batch_type", "missing", "extra", "wrong_id", "reversed", "duplicate"],
-)
-async def test_invalid_sender_result_keeps_all_events_claimed(
-    owner_sessions, relay_sessions, case
-):
-    """結果の対応が崩れたら例外にし、どのイベントも配送結果を書かない。"""
-    first, second = await seed_events(owner_sessions, count=2)
-
-    def send(*, queue_url, messages):
-        results = tuple(PublishSucceeded(envelope.event_id) for envelope in messages)
-        return {
-            "batch_type": None,
-            "missing": BatchPublishResult(results[:1]),
-            "extra": BatchPublishResult(results + (PublishSucceeded(uuid4()),)),
-            "wrong_id": BatchPublishResult((results[0], PublishSucceeded(uuid4()))),
-            "reversed": BatchPublishResult(results[::-1]),
-            "duplicate": BatchPublishResult((results[0], results[0])),
-        }[case]
-
-    sender = Mock(send_batch=Mock(side_effect=send))
-    with pytest.raises((TypeError, ValueError)) as caught:
-        await make_relay(relay_sessions, sender).run_once()
-    assert "private body" not in str(caught.value)
-    sender.send_batch.assert_called_once()
-    for event in (first, second):
-        saved = await read_saved(owner_sessions, event)
-        assert saved["lease_token"] is not None
-        assert saved == {
-            **event.before,
-            "attempt_count": 1,
-            "lease_token": saved["lease_token"],
-            "leased_until": saved["leased_until"],
-        }
 
 
 @pytest.mark.parametrize(

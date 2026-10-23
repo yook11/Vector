@@ -7,8 +7,6 @@ from datetime import timedelta
 from enum import StrEnum
 from math import isfinite
 
-from app.analysis.assessment.events import AssessedEventInvalidError
-from app.analysis.curation.events import CuratedEventInvalidError
 from app.aws.sqs.errors import (
     MessageSendConfigurationError,
     MessageSendCredentialsError,
@@ -23,12 +21,11 @@ from app.aws.sqs.outgoing_message import (
     SqsResponseInvalidError,
 )
 from app.aws.sqs.retry_prospect import is_resolvable_by_retry
-from app.collection.article_acquisition.events import IncompleteArticleEventInvalidError
-from app.collection.events import AnalyzableEventInvalidError
 from app.http.failure import HttpTransportFailureReason
 from app.outbox.delivery.values import RetryDelay
 from app.outbox.publishing.contracts import PublishFailure
 from app.outbox.publishing.route import EventRouteMismatchError
+from app.shared.event_contract import EventInvalidError
 
 
 class NonRetryableReason(StrEnum):
@@ -90,10 +87,7 @@ def _non_retryable_reason(error: PublishFailure) -> NonRetryableReason:
             | MessageTooLargeError
             | SqsResponseInvalidError
             | MessageBodyMismatchError
-            | AnalyzableEventInvalidError
-            | IncompleteArticleEventInvalidError
-            | AssessedEventInvalidError
-            | CuratedEventInvalidError
+            | EventInvalidError
             | EventRouteMismatchError
         ),
     ):

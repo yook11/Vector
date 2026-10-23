@@ -14,7 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.lambda_handlers.outbox_relay import handler
 from app.models.outbox_event import OutboxEvent
-from app.outbox.publishing.contracts import BatchPublishResult, PublishSucceeded
+from app.outbox.publishing.contracts import PublishSucceeded
 from tests.iam_fixtures import inject_test_db_signer
 
 pytestmark = [pytest.mark.integration, pytest.mark.asyncio]
@@ -36,8 +36,9 @@ def relay_environment(monkeypatch: pytest.MonkeyPatch, test_database_url: str) -
 @pytest.fixture
 def sender(monkeypatch):
     sender = Mock()
-    sender.send_batch.side_effect = lambda *, queue_url, messages: BatchPublishResult(
-        results=tuple(PublishSucceeded(e.event_id) for e in messages)
+    sender.send_batch.side_effect = lambda *, queue_url, send_requests: tuple(
+        (original, PublishSucceeded(message.event_id))
+        for original, message in send_requests
     )
     monkeypatch.setattr(
         import_module("app.lambda_handlers.outbox_relay.execution"),
@@ -70,9 +71,9 @@ async def test_repeated_invocations_record_delivery_without_resending(
         assert saved is not None
         assert saved.published_at is not None
     sender.send_batch.assert_called_once()
-    assert [e.event_id for e in sender.send_batch.call_args.kwargs["messages"]] == [
-        event_id
-    ]
+    assert [
+        e.event_id for _, e in sender.send_batch.call_args.kwargs["send_requests"]
+    ] == [event_id]
 
 
 async def test_repeated_invocations_release_database_connections(

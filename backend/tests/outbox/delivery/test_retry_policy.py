@@ -5,14 +5,10 @@ from datetime import timedelta
 import pytest
 
 from app.analysis.assessment.events import (
-    AssessedEventInvalid,
     AssessedEventInvalidError,
-    AssessedEventInvalidReason,
 )
 from app.analysis.curation.events import (
-    CuratedEventInvalid,
     CuratedEventInvalidError,
-    CuratedEventInvalidReason,
 )
 from app.aws.sqs.errors import (
     MessageSendConfigurationError,
@@ -32,14 +28,10 @@ from app.aws.sqs.outgoing_message import (
     SqsResponseInvalidReason,
 )
 from app.collection.article_acquisition.events import (
-    IncompleteArticleEventInvalid,
     IncompleteArticleEventInvalidError,
-    IncompleteArticleEventInvalidReason,
 )
 from app.collection.events import (
-    AnalyzableEventInvalid,
     AnalyzableEventInvalidError,
-    AnalyzableEventInvalidReason,
 )
 from app.db.errors import DatabaseUnexpectedError
 from app.http.failure import (
@@ -55,6 +47,10 @@ from app.outbox.delivery.retry_policy import (
 )
 from app.outbox.delivery.values import RetryDelay
 from app.outbox.publishing.route import EventRouteMismatchError
+from app.shared.event_contract import (
+    EventInvalid,
+    EventInvalidReason,
+)
 
 
 def _throttled():
@@ -122,16 +118,14 @@ def test_resolvable_sqs_failure_is_retried_after_first_delay(error):
         (MessageBodyMismatchError(), NonRetryableReason.NON_RETRYABLE_FAILURE),
         (
             AnalyzableEventInvalidError(
-                AnalyzableEventInvalid(
-                    reason=AnalyzableEventInvalidReason.INVALID_PAYLOAD, issues=()
-                )
+                EventInvalid(reason=EventInvalidReason.INVALID_PAYLOAD, issues=())
             ),
             NonRetryableReason.NON_RETRYABLE_FAILURE,
         ),
         (
             IncompleteArticleEventInvalidError(
-                IncompleteArticleEventInvalid(
-                    reason=IncompleteArticleEventInvalidReason.INVALID_PAYLOAD,
+                EventInvalid(
+                    reason=EventInvalidReason.INVALID_PAYLOAD,
                     issues=(),
                 )
             ),
@@ -139,17 +133,13 @@ def test_resolvable_sqs_failure_is_retried_after_first_delay(error):
         ),
         (
             AssessedEventInvalidError(
-                AssessedEventInvalid(
-                    reason=AssessedEventInvalidReason.INVALID_PAYLOAD, issues=()
-                )
+                EventInvalid(reason=EventInvalidReason.INVALID_PAYLOAD, issues=())
             ),
             NonRetryableReason.NON_RETRYABLE_FAILURE,
         ),
         (
             CuratedEventInvalidError(
-                CuratedEventInvalid(
-                    reason=CuratedEventInvalidReason.INVALID_PAYLOAD, issues=()
-                )
+                EventInvalid(reason=EventInvalidReason.INVALID_PAYLOAD, issues=())
             ),
             NonRetryableReason.NON_RETRYABLE_FAILURE,
         ),

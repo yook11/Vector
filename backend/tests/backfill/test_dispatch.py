@@ -4,7 +4,6 @@ import json
 from dataclasses import replace
 from datetime import UTC, datetime
 from unittest.mock import Mock
-from uuid import uuid4
 
 import pytest
 
@@ -27,7 +26,6 @@ from app.collection.events import (
 from app.outbox.publishing.analyzable_created import build_analyzable_created_message
 from app.outbox.publishing.assessed_in_scope import build_assessed_in_scope_message
 from app.outbox.publishing.contracts import (
-    BatchPublishResult,
     PublishFailed,
     PublishSucceeded,
 )
@@ -82,16 +80,19 @@ async def test_disabled_entry_never_opens_resources(entry):
 async def test_dispatch_splits_batches_and_preserves_order():
     """10件ずつ送信し、末尾の端数も入力順を保つ。"""
     sender = Mock()
-    sender.send_batch.side_effect = lambda *, queue_url, messages: BatchPublishResult(
-        tuple(PublishSucceeded(item.event_id) for item in messages)
+    sender.send_batch.side_effect = lambda *, queue_url, send_requests: tuple(
+        (original, PublishSucceeded(message.event_id))
+        for original, message in send_requests
     )
     await dispatch(sender, targets(23))
-    batches = [call.kwargs["messages"] for call in sender.send_batch.call_args_list]
+    batches = [
+        call.kwargs["send_requests"] for call in sender.send_batch.call_args_list
+    ]
     assert [len(batch) for batch in batches] == [10, 10, 3]
     assert [
         json.loads(item.body)["payload"]["analyzable_article_id"]
         for batch in batches
-        for item in batch
+        for _, item in batch
     ] == list(range(1, 24))
 
 
@@ -101,46 +102,17 @@ async def test_failed_items_do_not_stop_later_batches(failed_ids):
     """受付失敗があっても、残りのバッチを一度ずつ送信する。"""
     error = MessageSendUnexpectedError(exception_type="RuntimeError")
     sender = Mock()
-    sender.send_batch.side_effect = lambda *, queue_url, messages: BatchPublishResult(
-        tuple(
+    sender.send_batch.side_effect = lambda *, queue_url, send_requests: tuple(
+        (
+            original,
             PublishFailed(item.event_id, error)
             if json.loads(item.body)["payload"]["analyzable_article_id"] in failed_ids
-            else PublishSucceeded(item.event_id)
-            for item in messages
+            else PublishSucceeded(item.event_id),
         )
+        for original, item in send_requests
     )
     await dispatch(sender, targets(23))
     assert sender.send_batch.call_count == 3
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "fault", ["type", "missing", "extra", "reversed", "unknown", "duplicate"]
-)
-async def test_invalid_result_correspondence_is_rejected(fault):
-    """不正な応答で実行を失敗させ、後続のバッチを送らない。"""
-
-    def respond(*, queue_url, messages):
-        values = [PublishSucceeded(item.event_id) for item in messages]
-        if fault == "type":
-            return None
-        if fault == "missing":
-            values.pop()
-        elif fault == "extra":
-            values.append(PublishSucceeded(uuid4()))
-        elif fault == "reversed":
-            values.reverse()
-        elif fault == "unknown":
-            values[0] = PublishSucceeded(uuid4())
-        elif fault == "duplicate":
-            values[1] = values[0]
-        return BatchPublishResult(tuple(values))
-
-    sender = Mock()
-    sender.send_batch.side_effect = respond
-    with pytest.raises((TypeError, ValueError)):
-        await dispatch(sender, targets(12))
-    assert sender.send_batch.call_count == 1
 
 
 @pytest.mark.asyncio
@@ -174,8 +146,9 @@ async def test_reconstructed_event_is_accepted_by_consumer_contract(
 ):
     """実際の本文生成関数で作ったメッセージをconsumerと共有する型で受理できる。"""
     sender = Mock()
-    sender.send_batch.side_effect = lambda **kwargs: BatchPublishResult(
-        tuple(PublishSucceeded(message.event_id) for message in kwargs["messages"])
+    sender.send_batch.side_effect = lambda *, queue_url, send_requests: tuple(
+        (original, PublishSucceeded(message.event_id))
+        for original, message in send_requests
     )
     await service._dispatch(
         sender,
@@ -184,7 +157,7 @@ async def test_reconstructed_event_is_accepted_by_consumer_contract(
         build_message=builder,
         stage="test",
     )
-    body = sender.send_batch.call_args.kwargs["messages"][0].body
+    body = sender.send_batch.call_args.kwargs["send_requests"][0][1].body
     event = event_model.from_input(json.loads(body))
     assert event.payload == payload
     assert event.occurred_at == NOW
@@ -199,11 +172,43 @@ async def test_empty_targets_do_not_publish():
 
 
 @pytest.mark.asyncio
+async def test_send_requests_retain_envelopes_used_to_build_messages():
+    """本文生成に使った元のEnvelopeを、その本文と組にしてSenderへ渡す。"""
+    built = []
+
+    def build_message(envelope):
+        message = build_analyzable_created_message(envelope)
+        built.append((envelope, message))
+        return message
+
+    sender = Mock()
+    sender.send_batch.side_effect = lambda *, queue_url, send_requests: tuple(
+        (original, PublishSucceeded(message.event_id))
+        for original, message in send_requests
+    )
+    await service._dispatch(
+        sender,
+        targets(2),
+        route=delivery_arguments("curation")["route"],
+        build_message=build_message,
+        stage="curation",
+    )
+
+    send_requests = sender.send_batch.call_args.kwargs["send_requests"]
+    for (envelope, message), (original, sent_message) in zip(
+        built, send_requests, strict=True
+    ):
+        assert original is envelope
+        assert sent_message is message
+
+
+@pytest.mark.asyncio
 async def test_all_conversion_failures_skip_send_and_continue_next_batch(monkeypatch):
     """全件変換失敗のバッチは送らず、次の正常バッチの受付件数だけを集計する。"""
     sender = Mock()
-    sender.send_batch.side_effect = lambda **kwargs: BatchPublishResult(
-        tuple(PublishSucceeded(message.event_id) for message in kwargs["messages"])
+    sender.send_batch.side_effect = lambda *, queue_url, send_requests: tuple(
+        (original, PublishSucceeded(message.event_id))
+        for original, message in send_requests
     )
     recorded = Mock()
     monkeypatch.setattr(service, "record_dispatched", recorded)
@@ -223,7 +228,7 @@ async def test_all_conversion_failures_skip_send_and_continue_next_batch(monkeyp
     sender.send_batch.assert_called_once()
     assert [
         json.loads(m.body)["payload"]["analyzable_article_id"]
-        for m in sender.send_batch.call_args.kwargs["messages"]
+        for _, m in sender.send_batch.call_args.kwargs["send_requests"]
     ] == [11, 12]
     assert [call.args for call in recorded.call_args_list] == [
         ("curation", 0),
@@ -237,15 +242,14 @@ async def test_conversion_failure_and_send_failure_count_only_success(monkeypatc
     sender = Mock()
     error = MessageSendUnexpectedError(exception_type="RuntimeError")
 
-    def send(*, queue_url, messages):
+    def send(*, queue_url, send_requests):
         assert [
-            json.loads(m.body)["payload"]["analyzable_article_id"] for m in messages
+            json.loads(m.body)["payload"]["analyzable_article_id"]
+            for _, m in send_requests
         ] == [2, 3]
-        return BatchPublishResult(
-            (
-                PublishFailed(messages[0].event_id, error),
-                PublishSucceeded(messages[1].event_id),
-            )
+        return (
+            (send_requests[0][0], PublishFailed(send_requests[0][1].event_id, error)),
+            (send_requests[1][0], PublishSucceeded(send_requests[1][1].event_id)),
         )
 
     sender.send_batch.side_effect = send
