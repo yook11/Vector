@@ -555,9 +555,7 @@ def test_oversized_event_stops_without_configuration_alarm(
     envelope, small_message_limit
 ):
     """サイズ超過を再試行対象外とし、設定修復アラームにしない。"""
-    from app.outbox.delivery.failure_recording import (
-        requires_publish_configuration_fix,
-    )
+    from app.aws.sqs.configuration_fix import requires_configuration_fix
     from app.outbox.delivery.retry_policy import (
         NonRetryable,
         NonRetryableReason,
@@ -572,7 +570,7 @@ def test_oversized_event_stops_without_configuration_alarm(
     assert decide_publish_retry(error, attempt_count=1, jitter=0.5) == NonRetryable(
         NonRetryableReason.NON_RETRYABLE_FAILURE
     )
-    assert not requires_publish_configuration_fix(error)
+    assert not requires_configuration_fix(error)
 
 
 @pytest.mark.parametrize("metadata", [None, "private", {}, {"RequestId": 123}])

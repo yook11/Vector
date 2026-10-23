@@ -75,124 +75,79 @@ def test_resolvable_sqs_failure_is_retried_after_first_delay(error):
 
 
 @pytest.mark.parametrize(
-    ("error", "reason"),
+    "error",
     [
-        (
-            SqsServiceError(
-                reason=SqsServiceErrorReason.ACCESS_DENIED, service_code="AccessDenied"
-            ),
-            NonRetryableReason.NON_RETRYABLE_FAILURE,
+        SqsServiceError(
+            reason=SqsServiceErrorReason.ACCESS_DENIED, service_code="AccessDenied"
         ),
-        (
-            SqsServiceError(
-                reason=SqsServiceErrorReason.UNKNOWN, service_code="FutureError"
-            ),
-            NonRetryableReason.UNCLASSIFIED_FAILURE,
+        SqsServiceError(
+            reason=SqsServiceErrorReason.UNKNOWN, service_code="FutureError"
         ),
-        (
-            _transport(HttpTransportFailureReason.CERTIFICATE_VERIFICATION),
-            NonRetryableReason.NON_RETRYABLE_FAILURE,
+        _transport(HttpTransportFailureReason.CERTIFICATE_VERIFICATION),
+        _transport(HttpTransportFailureReason.UNKNOWN),
+        MessageSendConfigurationError(
+            reason=MessageSendConfigurationReason.MISSING_CREDENTIALS
         ),
-        (
-            _transport(HttpTransportFailureReason.UNKNOWN),
-            NonRetryableReason.UNCLASSIFIED_FAILURE,
+        MessageSendCredentialsError(exception_type="CredentialRetrievalError"),
+        MessageTooLargeError(),
+        SqsResponseInvalidError(
+            reason=SqsResponseInvalidReason.MISSING,
+            field=SqsResponseField.MESSAGE_ID,
         ),
-        (
-            MessageSendConfigurationError(
-                reason=MessageSendConfigurationReason.MISSING_CREDENTIALS
-            ),
-            NonRetryableReason.NON_RETRYABLE_FAILURE,
+        MessageBodyMismatchError(),
+        AnalyzableEventInvalidError(
+            EventInvalid(reason=EventInvalidReason.INVALID_PAYLOAD, issues=())
         ),
-        (
-            MessageSendCredentialsError(exception_type="CredentialRetrievalError"),
-            NonRetryableReason.NON_RETRYABLE_FAILURE,
+        IncompleteArticleEventInvalidError(
+            EventInvalid(
+                reason=EventInvalidReason.INVALID_PAYLOAD,
+                issues=(),
+            )
         ),
-        (MessageTooLargeError(), NonRetryableReason.NON_RETRYABLE_FAILURE),
-        (
-            SqsResponseInvalidError(
-                reason=SqsResponseInvalidReason.MISSING,
-                field=SqsResponseField.MESSAGE_ID,
-            ),
-            NonRetryableReason.NON_RETRYABLE_FAILURE,
+        AssessedEventInvalidError(
+            EventInvalid(reason=EventInvalidReason.INVALID_PAYLOAD, issues=())
         ),
-        (MessageBodyMismatchError(), NonRetryableReason.NON_RETRYABLE_FAILURE),
-        (
-            AnalyzableEventInvalidError(
-                EventInvalid(reason=EventInvalidReason.INVALID_PAYLOAD, issues=())
-            ),
-            NonRetryableReason.NON_RETRYABLE_FAILURE,
+        CuratedEventInvalidError(
+            EventInvalid(reason=EventInvalidReason.INVALID_PAYLOAD, issues=())
         ),
-        (
-            IncompleteArticleEventInvalidError(
-                EventInvalid(
-                    reason=EventInvalidReason.INVALID_PAYLOAD,
-                    issues=(),
-                )
-            ),
-            NonRetryableReason.NON_RETRYABLE_FAILURE,
-        ),
-        (
-            AssessedEventInvalidError(
-                EventInvalid(reason=EventInvalidReason.INVALID_PAYLOAD, issues=())
-            ),
-            NonRetryableReason.NON_RETRYABLE_FAILURE,
-        ),
-        (
-            CuratedEventInvalidError(
-                EventInvalid(reason=EventInvalidReason.INVALID_PAYLOAD, issues=())
-            ),
-            NonRetryableReason.NON_RETRYABLE_FAILURE,
-        ),
-        (EventRouteMismatchError(), NonRetryableReason.NON_RETRYABLE_FAILURE),
-        (
-            MessageSendUnexpectedError(exception_type="ParamValidationError"),
-            NonRetryableReason.UNEXPECTED_FAILURE,
-        ),
+        EventRouteMismatchError(),
+        MessageSendUnexpectedError(exception_type="ParamValidationError"),
     ],
 )
-def test_non_resolvable_failure_stops_with_its_reason(error, reason):
-    """送り直しても直らない失敗は止め、未分類のSQSの拒否・通信の失敗は未分類、想定外は想定外、それ以外は再試行しない失敗を理由にする。"""
+def test_non_resolvable_failure_stops_as_non_retryable(error):
+    """送り直しても直らない失敗は、未分類のSQSの拒否・通信の失敗や想定外も含め、再試行しない失敗として止める。"""
     assert decide_publish_retry(error, attempt_count=1, jitter=0.5) == NonRetryable(
-        reason
+        NonRetryableReason.NON_RETRYABLE_FAILURE
     )
 
 
-def test_unrecognized_send_failure_stops_as_unexpected():
-    """今後追加される未対応の送信の失敗を、暗黙に再試行せず想定外として止める。"""
+def test_unrecognized_send_failure_is_not_retried():
+    """今後追加される未対応の送信の失敗を、暗黙に再試行せず再試行しない失敗として止める。"""
 
     class FutureSendError(MessageSendError):
         pass
 
     assert decide_publish_retry(
         FutureSendError("future"), attempt_count=1, jitter=0
-    ) == NonRetryable(NonRetryableReason.UNEXPECTED_FAILURE)
+    ) == NonRetryable(NonRetryableReason.NON_RETRYABLE_FAILURE)
 
 
 @pytest.mark.parametrize(
-    ("error", "reason"),
+    "error",
     [
-        (
-            MessageSendConfigurationError(
-                reason=MessageSendConfigurationReason.MISSING_CREDENTIALS
-            ),
-            NonRetryableReason.NON_RETRYABLE_FAILURE,
+        MessageSendConfigurationError(
+            reason=MessageSendConfigurationReason.MISSING_CREDENTIALS
         ),
-        (
-            SqsServiceError(
-                reason=SqsServiceErrorReason.UNKNOWN, service_code="FutureError"
-            ),
-            NonRetryableReason.UNCLASSIFIED_FAILURE,
+        SqsServiceError(
+            reason=SqsServiceErrorReason.UNKNOWN, service_code="FutureError"
         ),
-        (
-            MessageSendUnexpectedError(exception_type="ParamValidationError"),
-            NonRetryableReason.UNEXPECTED_FAILURE,
-        ),
+        MessageSendUnexpectedError(exception_type="ParamValidationError"),
     ],
 )
-def test_stop_reason_is_kept_at_retry_limit(error, reason):
-    """上限の5回目でも、送り直しても直らない失敗は上限到達ではなく元の理由で止める。"""
+def test_non_resolvable_failure_at_retry_limit_is_not_exhaustion(error):
+    """上限の5回目でも、送り直しても直らない失敗は上限到達ではなく再試行しない失敗として止める。"""
     assert decide_publish_retry(error, attempt_count=5, jitter=0.5) == NonRetryable(
-        reason
+        NonRetryableReason.NON_RETRYABLE_FAILURE
     )
 
 
