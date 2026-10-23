@@ -22,6 +22,11 @@ PIPELINE_CONTROL_LOG_RULES = LogPolicyRules(
             "source_name",
             "raw_source_name",
             "resource",
+            "event_id",
+            "event_ids",
+            "attempt_count",
+            "stop_reason",
+            "requires_configuration_fix",
         }
     ),
 )

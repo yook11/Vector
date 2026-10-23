@@ -67,7 +67,10 @@ class MessageBodyMismatchError(MessageSendError):
     """SQSが受け取った本文のMD5が、送った本文のMD5と一致しない。"""
 
     def __init__(self) -> None:
-        super().__init__("SQSが受け取った本文が送信した本文と一致しません")
+        super().__init__(
+            "SQSが受け取った本文が送信した本文と一致しません。"
+            "SQSには受け付けられている可能性があります"
+        )
 
 
 def _required_string(

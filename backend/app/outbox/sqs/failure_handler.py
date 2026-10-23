@@ -1,11 +1,8 @@
 from uuid import UUID
 
-import structlog
-
-from app.audit.error_fields import exception_fqn
 from app.aws.sqs.outgoing_message import SqsResponseInvalidError
-
-logger = structlog.get_logger(__name__)
+from app.log_policy.policies.pipeline_control import PIPELINE_CONTROL_LOG_RULES
+from app.log_policy.runtime import create_policy_json_logger
 
 
 class SqsPublishFailureHandler:
@@ -14,20 +11,13 @@ class SqsPublishFailureHandler:
     def handle_invalid_response(
         self, *, error: SqsResponseInvalidError, event_ids: tuple[UUID, ...]
     ) -> None:
-        try:
-            logger.warning(
-                "outbox_sqs_response_invalid",
-                error_reason=error.reason.value,
-                response_field=error.field.value,
-                event_ids=[str(event_id) for event_id in event_ids],
-            )
-        except Exception:  # noqa: S110 — 診断出力を再帰させず送信結果を維持する。
-            pass
+        create_policy_json_logger(__name__, PIPELINE_CONTROL_LOG_RULES).warning(
+            "outbox_sqs_response_invalid",
+            event_ids=[str(event_id) for event_id in event_ids],
+            exc_info=error,
+        )
 
     def handle_cleanup_failure(self, error: Exception) -> None:
-        try:
-            logger.warning(
-                "outbox_publish_cleanup_failed", error_class=exception_fqn(error)
-            )
-        except Exception:  # noqa: S110 — 診断出力を再帰させず元の結果を維持する。
-            pass
+        create_policy_json_logger(__name__, PIPELINE_CONTROL_LOG_RULES).warning(
+            "outbox_publish_cleanup_failed", exc_info=error
+        )
