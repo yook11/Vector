@@ -15,7 +15,6 @@ from app.lambda_handlers.backfill import resources
 from app.lambda_handlers.backfill.settings import CurationBackfillSettings
 from app.outbox.publishing.analyzable_created import build_analyzable_created_message
 from app.outbox.publishing.route import EventDeliveryRoute
-from app.outbox.sqs import sender
 from tests.iam_fixtures import inject_test_db_signer
 
 
@@ -70,7 +69,7 @@ def delivery(backfill_connection, monkeypatch):
         }
 
     monkeypatch.setattr(
-        sender,
+        resources,
         "create_sqs_client",
         lambda **kwargs: Mock(send_message_batch=Mock(side_effect=send)),
     )

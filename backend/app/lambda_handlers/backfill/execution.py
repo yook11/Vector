@@ -9,15 +9,16 @@ from app.db.session import SessionFactory
 from app.lambda_handlers.backfill.failure_recorder import record_failure
 from app.lambda_handlers.backfill.resources import open_backfill_resources
 from app.lambda_handlers.backfill.settings import BackfillConnectionSettings
-from app.outbox.publishing.contracts import EventEnvelope, MessageSender
+from app.outbox.publishing.contracts import EventEnvelope
 from app.outbox.publishing.route import EventDeliveryRoute, EventMessage
+from app.outbox.publishing.sender import MessageSenderFactory
 
 
 class BackfillOperation(Protocol):
     def __call__(
         self,
         session_factory: SessionFactory,
-        sender: MessageSender,
+        sender_factory: MessageSenderFactory,
         *,
         route: EventDeliveryRoute,
         build_message: Callable[[EventEnvelope], EventMessage],
@@ -35,11 +36,13 @@ async def run_backfill(
     operation: BackfillOperation,
     now: datetime,
 ) -> None:
-    async with open_backfill_resources(settings, stage=stage) as resources:
+    async with open_backfill_resources(
+        settings, stage=stage, queue_url=route.queue_url
+    ) as resources:
         try:
             await operation(
                 session_factory=resources.session_factory,
-                sender=resources.sender,
+                sender_factory=resources.sender_factory,
                 route=route,
                 build_message=build_message,
                 enabled=True,

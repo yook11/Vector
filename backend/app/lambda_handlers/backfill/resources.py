@@ -7,19 +7,20 @@ from dataclasses import dataclass
 from botocore.config import Config
 from botocore.session import Session
 
+from app.aws.sqs.message_sender import create_sqs_client
 from app.db.engine import BackfillStage, create_backfill_engine
 from app.db.iam import build_iam_password_provider
 from app.db.session import SessionFactory, caller_managed_session_factory
 from app.lambda_handlers.backfill.failure_recorder import record_failure
 from app.lambda_handlers.backfill.settings import BackfillConnectionSettings
-from app.outbox.publishing.contracts import MessageSender
-from app.outbox.sqs.sender import SqsSender
+from app.outbox.publishing.sender import MessageSenderFactory
+from app.outbox.publishing.sqs_sender import open_sqs_event_message_sender
 
 
 @dataclass(frozen=True)
 class BackfillResources:
     session_factory: SessionFactory
-    sender: MessageSender
+    sender_factory: MessageSenderFactory
 
 
 @asynccontextmanager
@@ -27,6 +28,7 @@ async def open_backfill_resources(
     settings: BackfillConnectionSettings,
     *,
     stage: BackfillStage,
+    queue_url: str,
 ) -> AsyncIterator[BackfillResources]:
     cleanup_errors: list[BaseException] = []
     async with AsyncExitStack() as stack:
@@ -66,10 +68,18 @@ async def open_backfill_resources(
             stack.push_async_callback(dispose_engine)
             session_factory = caller_managed_session_factory(engine)
             phase = "publisher"
-            sender = SqsSender.from_session(
-                session=Session(), region=settings.aws_region
+            sqs_session = Session()
+            resources = BackfillResources(
+                session_factory,
+                lambda: open_sqs_event_message_sender(
+                    client_factory=lambda: create_sqs_client(
+                        session=sqs_session,
+                        region=settings.aws_region,
+                        max_attempts=1,
+                    ),
+                    queue_url=queue_url,
+                ),
             )
-            resources = BackfillResources(session_factory, sender)
         except BaseException as exc:
             record_failure(stage, phase, exc)
             raise

@@ -1,11 +1,11 @@
 """Relayが準備用sessionを閉じてから送信することを確認する。"""
 
 from contextlib import asynccontextmanager
-from unittest.mock import Mock
+from unittest.mock import AsyncMock, Mock
 
 import pytest
 
-from app.outbox.publishing.contracts import PublishSucceeded
+from app.aws.sqs.outgoing_message import AcceptedSqsMessage
 from local_tests.outbox_relay.support import (
     make_relay,
     read_saved,
@@ -39,11 +39,12 @@ async def test_preparation_sessions_are_closed_before_send(
     """停止・確保の接続は、送信時点では貸し出されていない。"""
     ready = await seed_event(owner_sessions)
 
-    def send(*, queue_url, batch):
+    def send(sendable):
         assert relay_engine.pool.checkedout() == 0
-        assert [message.event_id for message in batch.messages] == [ready.event_id]
-        return (PublishSucceeded(ready.event_id),)
+        [(leased_event, message)] = sendable
+        assert message.event_id == ready.event_id
+        return [(leased_event, AcceptedSqsMessage("sqs-id"))]
 
-    sender = Mock(send_batch=Mock(side_effect=send))
+    sender = Mock(send_batch=AsyncMock(side_effect=send))
     await make_relay(relay_sessions, sender).run_once()
     sender.send_batch.assert_called_once()

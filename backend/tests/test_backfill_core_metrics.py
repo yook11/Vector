@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Awaitable, Callable
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, nullcontext
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
@@ -19,13 +19,10 @@ import pytest
 from logfire.testing import CaptureLogfire
 
 from app.aws.sqs.errors import MessageSendUnexpectedError
+from app.aws.sqs.outgoing_message import AcceptedSqsMessage
 from app.backfill import service
 from app.backfill.targets import BackfillEventTarget
 from app.collection.events import AnalyzableArticleCreated
-from app.outbox.publishing.contracts import (
-    PublishFailed,
-    PublishSucceeded,
-)
 from tests.backfill.helpers import delivery_arguments
 
 NOW = datetime(2026, 9, 14, 12, tzinfo=UTC)
@@ -98,13 +95,16 @@ def _backlog(case: _MetricCase, *, count: int, targets: list[BackfillEventTarget
 def _sender(*, failed_positions: frozenset[int] = frozenset()) -> MagicMock:
     """入力順の指定位置だけ送信失敗にする sender。"""
     sender = MagicMock()
-    sender.send_batch.side_effect = lambda *, queue_url, batch: tuple(
-        PublishFailed(
-            item.event_id, MessageSendUnexpectedError(exception_type="RuntimeError")
-        )
-        if position in failed_positions
-        else PublishSucceeded(item.event_id)
-        for position, item in enumerate(batch.messages)
+    sender.send_batch = AsyncMock(
+        side_effect=lambda sendable: [
+            (
+                target,
+                MessageSendUnexpectedError(exception_type="RuntimeError")
+                if position in failed_positions
+                else AcceptedSqsMessage(f"sqs-{message.event_id}"),
+            )
+            for position, (target, message) in enumerate(sendable)
+        ]
     )
     return sender
 
@@ -127,7 +127,7 @@ async def _run(
     ):
         await case.entry(
             _session_factory(),
-            sender or _sender(),
+            lambda: nullcontext(sender or _sender()),
             **delivery_arguments("curation"),
             enabled=enabled,
             now=NOW,

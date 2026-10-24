@@ -3,7 +3,7 @@
 import asyncio
 from contextlib import asynccontextmanager
 from hashlib import md5
-from unittest.mock import Mock
+from unittest.mock import AsyncMock, Mock
 
 import pytest
 from sqlalchemy import event as sqlalchemy_event
@@ -11,7 +11,12 @@ from sqlalchemy import update
 from sqlalchemy.exc import SQLAlchemyError
 
 from app.analysis.assessment.events import ArticleAssessedInScopeEvent
-from app.aws.sqs.errors import MessageSendTransportError
+from app.aws.sqs.errors import (
+    MessageSendConfigurationError,
+    MessageSendConfigurationReason,
+    MessageSendTransportError,
+)
+from app.aws.sqs.outgoing_message import AcceptedSqsMessage
 from app.db.errors import DatabaseError
 from app.http.failure import (
     HttpTransportFailure,
@@ -21,15 +26,11 @@ from app.http.failure import (
 from app.lambda_handlers.sqs.received_message import ReceivedMessage
 from app.models.outbox_event import OutboxEvent
 from app.outbox.publishing.assessed_in_scope import build_assessed_in_scope_message
-from app.outbox.publishing.contracts import (
-    PublishFailed,
-    PublishFailure,
-    PublishSucceeded,
-)
-from app.outbox.sqs.failure_handler import SqsPublishFailureHandler
-from app.outbox.sqs.sender import SqsSender
+from app.outbox.publishing.contracts import PublishFailure
+from app.outbox.publishing.sqs_sender import open_sqs_event_message_sender
 from local_tests.outbox_relay.support import (
     ClaimHold,
+    answer_by_event_id,
     configuration_error,
     make_relay,
     read_saved,
@@ -42,7 +43,7 @@ pytestmark = pytest.mark.asyncio
 
 
 async def test_all_invalid_events_stop_without_sending(owner_sessions, relay_sessions):
-    """全件の本文が不正ならSenderを呼ばず、対象の配信を停止する。"""
+    """全件の本文が不正なら送信者を呼ばず、対象の配信を停止する。"""
     invalid = await seed_event(owner_sessions)
     async with owner_sessions() as session:
         await session.execute(
@@ -80,17 +81,17 @@ async def test_conversion_failure_send_failure_and_success_keep_event_correspond
         exception_type="ReadTimeoutError",
     )
     sender = Mock(
-        send_batch=Mock(
-            side_effect=lambda *, queue_url, batch: (
-                PublishSucceeded(successful.event_id),
-                PublishFailed(failed.event_id, timeout),
+        send_batch=AsyncMock(
+            side_effect=answer_by_event_id(
+                {
+                    successful.event_id: AcceptedSqsMessage("sqs-id"),
+                    failed.event_id: timeout,
+                }
             )
         )
     )
     await make_relay(relay_sessions, sender).run_once()
-    assert [
-        m.event_id for m in sender.send_batch.call_args.kwargs["batch"].messages
-    ] == [
+    assert [message.event_id for _, message in sender.send_batch.call_args.args[0]] == [
         failed.event_id,
         successful.event_id,
     ]
@@ -137,9 +138,9 @@ async def test_only_retryable_event_is_published_when_processed_with_exhausted(
     exhausted = await seed_event(owner_sessions, attempt_count=5)
     retryable = await seed_event(owner_sessions)
     sender = Mock(
-        send_batch=Mock(
-            side_effect=lambda *, queue_url, batch: (
-                PublishSucceeded(retryable.event_id),
+        send_batch=AsyncMock(
+            side_effect=answer_by_event_id(
+                {retryable.event_id: AcceptedSqsMessage("sqs-id")}
             )
         )
     )
@@ -147,11 +148,9 @@ async def test_only_retryable_event_is_published_when_processed_with_exhausted(
     await make_relay(relay_sessions, sender).run_once()
 
     sender.send_batch.assert_called_once()
-    sent_ids = [
-        message.event_id
-        for message in sender.send_batch.call_args.kwargs["batch"].messages
+    assert [message.event_id for _, message in sender.send_batch.call_args.args[0]] == [
+        retryable.event_id
     ]
-    assert sent_ids == [retryable.event_id]
     saved_retryable = await read_saved(owner_sessions, retryable)
     assert saved_retryable["published_at"] is not None
     assert saved_retryable == {
@@ -176,11 +175,13 @@ async def test_mixed_results_preserve_success_retry_and_stop(
         exception_type="ReadTimeoutError",
     )
     sender = Mock(
-        send_batch=Mock(
-            side_effect=lambda *, queue_url, batch: (
-                PublishSucceeded(successful.event_id),
-                PublishFailed(retryable.event_id, timeout),
-                PublishFailed(permanent.event_id, configuration_error()),
+        send_batch=AsyncMock(
+            side_effect=answer_by_event_id(
+                {
+                    successful.event_id: AcceptedSqsMessage("sqs-id"),
+                    retryable.event_id: timeout,
+                    permanent.event_id: configuration_error(),
+                }
             )
         )
     )
@@ -246,8 +247,10 @@ async def test_leased_event_is_not_resent_by_another_relay(
             await asyncio.wait_for(hold.allow.wait(), 10)
 
     first_sender = Mock(
-        send_batch=Mock(
-            side_effect=lambda *, queue_url, batch: (PublishSucceeded(event.event_id),)
+        send_batch=AsyncMock(
+            side_effect=answer_by_event_id(
+                {event.event_id: AcceptedSqsMessage("sqs-id")}
+            )
         )
     )
     second_sender = Mock()
@@ -300,16 +303,18 @@ async def test_skipped_update_does_not_block_later_results(
         async with relay_sessions() as session:
             yield session
 
-    first_publish = (
-        PublishFailed(first.event_id, configuration_error())
+    first_outcome = (
+        configuration_error()
         if first_result == "failure"
-        else PublishSucceeded(first.event_id)
+        else AcceptedSqsMessage("sqs-first")
     )
     sender = Mock(
-        send_batch=Mock(
-            side_effect=lambda *, queue_url, batch: (
-                first_publish,
-                PublishSucceeded(second.event_id),
+        send_batch=AsyncMock(
+            side_effect=answer_by_event_id(
+                {
+                    first.event_id: first_outcome,
+                    second.event_id: AcceptedSqsMessage("sqs-second"),
+                }
             )
         )
     )
@@ -391,10 +396,10 @@ async def test_result_fault_keeps_earlier_publish_and_does_not_resend(
             yield session
 
     sender = Mock(
-        send_batch=Mock(
-            side_effect=lambda *, queue_url, batch: tuple(
-                PublishSucceeded(message.event_id) for message in batch.messages
-            )
+        send_batch=AsyncMock(
+            side_effect=lambda sendable: [
+                (target, AcceptedSqsMessage("sqs-id")) for target, _ in sendable
+            ]
         )
     )
     with pytest.raises(DatabaseError) as caught:
@@ -437,7 +442,7 @@ async def test_call_failure_keeps_claimed_event_and_propagates(
 ):
     """senderの呼び出しの例外を配送失敗へ変換せず、確保を残す。"""
     event = await seed_event(owner_sessions)
-    sender = Mock(send_batch=Mock(side_effect=error))
+    sender = Mock(send_batch=AsyncMock(side_effect=error))
     with pytest.raises(type(error)) as caught:
         await make_relay(relay_sessions, sender).run_once()
     assert caught.value is error
@@ -493,11 +498,13 @@ async def test_invalid_event_is_stopped_and_valid_event_is_delivered(
 
     client = Mock()
     client.send_message_batch.side_effect = send
-    sender = SqsSender(
-        failure_handler=SqsPublishFailureHandler(),
-        client_factory=lambda: client,
-    )
-    await make_relay(relay_sessions, sender).run_once()
+
+    def open_sender():
+        return open_sqs_event_message_sender(
+            client_factory=lambda: client, queue_url="https://sqs.invalid/embedding"
+        )
+
+    await make_relay(relay_sessions, None, sender_factory=open_sender).run_once()
     saved_bad = await read_saved(owner_sessions, bad)
     assert saved_bad["delivery_stopped_at"] is not None
     assert saved_bad == {
@@ -518,7 +525,35 @@ async def test_invalid_event_is_stopped_and_valid_event_is_delivered(
         "leased_until": None,
     }
     client.send_message_batch.assert_called_once()
-    await make_relay(relay_sessions, sender).run_once()
+    await make_relay(relay_sessions, None, sender_factory=open_sender).run_once()
     client.send_message_batch.assert_called_once()
     assert await read_saved(owner_sessions, bad) == saved_bad
     assert await read_saved(owner_sessions, good) == saved_good
+
+
+async def test_sender_open_failure_is_recorded_for_each_event(
+    owner_sessions, relay_sessions
+):
+    """送信者を開けない失敗は、送る予定だった各イベントの送信失敗として配信状態に記録する。"""
+    first, second = await seed_events(owner_sessions, count=2)
+
+    @asynccontextmanager
+    async def failing_open():
+        raise MessageSendConfigurationError(
+            reason=MessageSendConfigurationReason.MISSING_REGION
+        )
+        yield
+
+    await make_relay(relay_sessions, None, sender_factory=failing_open).run_once()
+
+    for event in (first, second):
+        saved = await read_saved(owner_sessions, event)
+        assert saved["delivery_stopped_at"] is not None
+        assert saved == {
+            **event.before,
+            "delivery_stopped_at": saved["delivery_stopped_at"],
+            "delivery_stop_reason": "non_retryable_failure",
+            "attempt_count": 1,
+            "lease_token": None,
+            "leased_until": None,
+        }

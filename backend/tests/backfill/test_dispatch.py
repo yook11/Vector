@@ -1,9 +1,10 @@
 """再投入の受付結果・バッチ分割・イベント契約をDBなしで検証する。"""
 
 import json
+from contextlib import asynccontextmanager, nullcontext
 from dataclasses import replace
 from datetime import UTC, datetime
-from unittest.mock import Mock
+from unittest.mock import AsyncMock, Mock
 
 import pytest
 
@@ -12,7 +13,12 @@ from app.analysis.assessment.events import (
     ArticleAssessedInScopeEvent,
 )
 from app.analysis.curation.events import ArticleCuratedSignal, ArticleCuratedSignalEvent
-from app.aws.sqs.errors import MessageSendUnexpectedError
+from app.aws.sqs.errors import (
+    MessageSendConfigurationError,
+    MessageSendConfigurationReason,
+    MessageSendUnexpectedError,
+)
+from app.aws.sqs.outgoing_message import AcceptedSqsMessage
 from app.backfill import service
 from app.backfill.targets import BackfillEventTarget
 from app.collection.article_acquisition.events import (
@@ -25,10 +31,6 @@ from app.collection.events import (
 )
 from app.outbox.publishing.analyzable_created import build_analyzable_created_message
 from app.outbox.publishing.assessed_in_scope import build_assessed_in_scope_message
-from app.outbox.publishing.contracts import (
-    PublishFailed,
-    PublishSucceeded,
-)
 from app.outbox.publishing.curated_signal import build_curated_signal_message
 from app.outbox.publishing.incomplete_recorded import build_incomplete_recorded_message
 from app.outbox.publishing.route import EventDeliveryRoute
@@ -47,9 +49,37 @@ def targets(count):
     ]
 
 
+def opened(sender):
+    """送信者を開く関数として、渡した送信者をそのまま開く関数を返す。"""
+    return lambda: nullcontext(sender)
+
+
+def accepting_sender():
+    return Mock(
+        send_batch=AsyncMock(
+            side_effect=lambda sendable: [
+                (target, AcceptedSqsMessage(f"sqs-{message.event_id}"))
+                for target, message in sendable
+            ]
+        )
+    )
+
+
+def sent_bodies(sender):
+    """送信者が呼ばれるたびに受け取ったメッセージの本文を、呼ばれた順に返す。"""
+    return [
+        [message.body for _, message in call.args[0]]
+        for call in sender.send_batch.call_args_list
+    ]
+
+
+def analyzable_ids(bodies):
+    return [json.loads(body)["payload"]["analyzable_article_id"] for body in bodies]
+
+
 async def dispatch(sender, items):
     await service._dispatch(
-        sender, items, **delivery_arguments("curation"), stage="curation"
+        opened(sender), items, **delivery_arguments("curation"), stage="curation"
     )
 
 
@@ -65,33 +95,30 @@ async def dispatch(sender, items):
 )
 async def test_disabled_entry_never_opens_resources(entry):
     """無効ならDB・送信先に触れず正常終了する。"""
-    factory, sender = Mock(), Mock()
+    factory, sender_factory = Mock(), Mock()
     assert (
         await entry(
-            factory, sender, **delivery_arguments("curation"), enabled=False, now=NOW
+            factory,
+            sender_factory,
+            **delivery_arguments("curation"),
+            enabled=False,
+            now=NOW,
         )
         is None
     )
     factory.assert_not_called()
-    sender.send_batch.assert_not_called()
+    sender_factory.assert_not_called()
 
 
 @pytest.mark.asyncio
 async def test_dispatch_splits_batches_and_preserves_order():
     """10件ずつ送信し、末尾の端数も入力順を保つ。"""
-    sender = Mock()
-    sender.send_batch.side_effect = lambda *, queue_url, batch: tuple(
-        PublishSucceeded(message.event_id) for message in batch.messages
-    )
+    sender = accepting_sender()
     await dispatch(sender, targets(23))
-    batches = [
-        call.kwargs["batch"].messages for call in sender.send_batch.call_args_list
-    ]
+    batches = sent_bodies(sender)
     assert [len(batch) for batch in batches] == [10, 10, 3]
     assert [
-        json.loads(item.body)["payload"]["analyzable_article_id"]
-        for batch in batches
-        for item in batch
+        article_id for batch in batches for article_id in analyzable_ids(batch)
     ] == list(range(1, 24))
 
 
@@ -100,12 +127,18 @@ async def test_dispatch_splits_batches_and_preserves_order():
 async def test_failed_items_do_not_stop_later_batches(failed_ids):
     """受付失敗があっても、残りのバッチを一度ずつ送信する。"""
     error = MessageSendUnexpectedError(exception_type="RuntimeError")
-    sender = Mock()
-    sender.send_batch.side_effect = lambda *, queue_url, batch: tuple(
-        PublishFailed(item.event_id, error)
-        if json.loads(item.body)["payload"]["analyzable_article_id"] in failed_ids
-        else PublishSucceeded(item.event_id)
-        for item in batch.messages
+    sender = Mock(
+        send_batch=AsyncMock(
+            side_effect=lambda sendable: [
+                (
+                    target,
+                    error
+                    if analyzable_ids([message.body])[0] in failed_ids
+                    else AcceptedSqsMessage(f"sqs-{message.event_id}"),
+                )
+                for target, message in sendable
+            ]
+        )
     )
     await dispatch(sender, targets(23))
     assert sender.send_batch.call_count == 3
@@ -141,18 +174,15 @@ async def test_reconstructed_event_is_accepted_by_consumer_contract(
     payload, builder, event_model
 ):
     """実際の本文生成関数で作ったメッセージをconsumerと共有する型で受理できる。"""
-    sender = Mock()
-    sender.send_batch.side_effect = lambda *, queue_url, batch: tuple(
-        PublishSucceeded(message.event_id) for message in batch.messages
-    )
+    sender = accepting_sender()
     await service._dispatch(
-        sender,
+        opened(sender),
         [BackfillEventTarget(NOW, payload)],
         route=EventDeliveryRoute(payload.EVENT_TYPE, "queue-url"),
         build_message=builder,
         stage="test",
     )
-    body = sender.send_batch.call_args.kwargs["batch"].messages[0].body
+    [body] = sent_bodies(sender)[0]
     event = event_model.from_input(json.loads(body))
     assert event.payload == payload
     assert event.occurred_at == NOW
@@ -168,7 +198,7 @@ async def test_empty_targets_do_not_publish():
 
 @pytest.mark.asyncio
 async def test_batch_preserves_built_messages():
-    """本文生成で得たメッセージを、そのまま入力順でバッチにしてSenderへ渡す。"""
+    """本文生成で得たメッセージを、そのまま入力順で送信者へ渡す。"""
     built = []
 
     def build_message(envelope):
@@ -176,30 +206,24 @@ async def test_batch_preserves_built_messages():
         built.append(message)
         return message
 
-    sender = Mock()
-    sender.send_batch.side_effect = lambda *, queue_url, batch: tuple(
-        PublishSucceeded(message.event_id) for message in batch.messages
-    )
+    sender = accepting_sender()
     await service._dispatch(
-        sender,
+        opened(sender),
         targets(2),
         route=delivery_arguments("curation")["route"],
         build_message=build_message,
         stage="curation",
     )
 
-    batch = sender.send_batch.call_args.kwargs["batch"]
-    for message, sent_message in zip(built, batch.messages, strict=True):
+    sent = [message for _, message in sender.send_batch.call_args.args[0]]
+    for message, sent_message in zip(built, sent, strict=True):
         assert sent_message is message
 
 
 @pytest.mark.asyncio
 async def test_all_conversion_failures_skip_send_and_continue_next_batch(monkeypatch):
     """全件変換失敗のバッチは送らず、次の正常バッチの受付件数だけを集計する。"""
-    sender = Mock()
-    sender.send_batch.side_effect = lambda *, queue_url, batch: tuple(
-        PublishSucceeded(message.event_id) for message in batch.messages
-    )
+    sender = accepting_sender()
     recorded = Mock()
     monkeypatch.setattr(service, "record_dispatched", recorded)
 
@@ -209,17 +233,14 @@ async def test_all_conversion_failures_skip_send_and_continue_next_batch(monkeyp
         return build_analyzable_created_message(envelope)
 
     await service._dispatch(
-        sender,
+        opened(sender),
         targets(12),
         route=delivery_arguments("curation")["route"],
         build_message=build_message,
         stage="curation",
     )
     sender.send_batch.assert_called_once()
-    assert [
-        json.loads(m.body)["payload"]["analyzable_article_id"]
-        for m in sender.send_batch.call_args.kwargs["batch"].messages
-    ] == [11, 12]
+    assert analyzable_ids(sent_bodies(sender)[0]) == [11, 12]
     assert [call.args for call in recorded.call_args_list] == [
         ("curation", 0),
         ("curation", 2),
@@ -229,20 +250,14 @@ async def test_all_conversion_failures_skip_send_and_continue_next_batch(monkeyp
 @pytest.mark.asyncio
 async def test_conversion_failure_and_send_failure_count_only_success(monkeypatch):
     """変換失敗と送信失敗が同居しても、送信対象の順序と成功件数を保つ。"""
-    sender = Mock()
     error = MessageSendUnexpectedError(exception_type="RuntimeError")
 
-    def send(*, queue_url, batch):
-        assert [
-            json.loads(m.body)["payload"]["analyzable_article_id"]
-            for m in batch.messages
-        ] == [2, 3]
-        return (
-            PublishFailed(batch.messages[0].event_id, error),
-            PublishSucceeded(batch.messages[1].event_id),
-        )
+    def send(sendable):
+        assert analyzable_ids([message.body for _, message in sendable]) == [2, 3]
+        (first, _), (second, _) = sendable
+        return [(first, error), (second, AcceptedSqsMessage("sqs-id"))]
 
-    sender.send_batch.side_effect = send
+    sender = Mock(send_batch=AsyncMock(side_effect=send))
     recorded = Mock()
     monkeypatch.setattr(service, "record_dispatched", recorded)
 
@@ -252,7 +267,7 @@ async def test_conversion_failure_and_send_failure_count_only_success(monkeypatc
         return build_analyzable_created_message(envelope)
 
     await service._dispatch(
-        sender,
+        opened(sender),
         targets(3),
         route=delivery_arguments("curation")["route"],
         build_message=build_message,
@@ -274,7 +289,7 @@ async def test_unexpected_conversion_error_prevents_entire_batch_send():
 
     with pytest.raises(RuntimeError) as caught:
         await service._dispatch(
-            sender,
+            opened(sender),
             targets(12),
             route=delivery_arguments("curation")["route"],
             build_message=build_message,
@@ -288,11 +303,40 @@ async def test_unexpected_conversion_error_prevents_entire_batch_send():
 async def test_unexpected_sender_error_prevents_later_batches():
     """Senderの想定外例外をそのまま伝播し、後続バッチは送らない。"""
     error = RuntimeError("unexpected send")
-    sender = Mock(send_batch=Mock(side_effect=error))
+    sender = Mock(send_batch=AsyncMock(side_effect=error))
     with pytest.raises(RuntimeError) as caught:
         await dispatch(sender, targets(12))
     assert caught.value is error
     sender.send_batch.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_sender_open_failure_counts_no_success_and_continues_next_batch(
+    monkeypatch,
+):
+    """送信者を開けないバッチは受付0件として記録し、次のバッチは開き直して送る。"""
+
+    @asynccontextmanager
+    async def failing_open():
+        raise MessageSendConfigurationError(
+            reason=MessageSendConfigurationReason.MISSING_REGION
+        )
+        yield
+
+    sender = accepting_sender()
+    sender_factory = Mock(side_effect=[failing_open(), nullcontext(sender)])
+    recorded = Mock()
+    monkeypatch.setattr(service, "record_dispatched", recorded)
+
+    await service._dispatch(
+        sender_factory, targets(12), **delivery_arguments("curation"), stage="curation"
+    )
+
+    assert analyzable_ids(sent_bodies(sender)[0]) == [11, 12]
+    assert [call.args for call in recorded.call_args_list] == [
+        ("curation", 0),
+        ("curation", 2),
+    ]
 
 
 def test_backfill_imports_without_taskiq_initialization():

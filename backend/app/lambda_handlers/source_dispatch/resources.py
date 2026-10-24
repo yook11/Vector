@@ -77,7 +77,7 @@ async def open_source_dispatcher(
                 ),
                 sender_factory=lambda: open_sqs_message_sender(
                     client_factory=lambda: create_sqs_client(
-                        session=Session(), region=settings.aws_region
+                        session=Session(), region=settings.aws_region, max_attempts=3
                     ),
                     queue_url=settings.sqs_source_acquisition_queue_url,
                 ),
