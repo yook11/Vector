@@ -1,6 +1,7 @@
 """Relay配送テストのイベント準備と実行入口。"""
 
 import asyncio
+from contextlib import nullcontext
 from dataclasses import dataclass, field
 from datetime import timedelta
 from uuid import UUID
@@ -43,6 +44,15 @@ def configuration_error():
     )
 
 
+def answer_by_event_id(results):
+    """送られた組ごとに、メッセージのevent_idに対応する結果を組の対象とともに返す送信を作る。"""
+
+    def send_batch(sendable):
+        return [(target, results[message.event_id]) for target, message in sendable]
+
+    return send_batch
+
+
 async def seed_events(owner_sessions, count=1, **fields):
     async with owner_sessions() as session:
         ids = [
@@ -81,10 +91,12 @@ def make_relay(
     *,
     event_type=EVENT_TYPE,
     build_message=build_assessed_in_scope_message,
+    sender_factory=None,
 ):
+    """送信者を開く関数を渡さなければ、渡した送信者をそのまま開くRelayを作る。"""
     return OutboxRelay(
         sessions,
-        sender,
+        sender_factory or (lambda: nullcontext(sender)),
         OutboxDeliveryFailureHandler(sessions, jitter=lambda: 0.5),
         route=EventDeliveryRoute(event_type, "https://sqs.invalid/embedding"),
         build_message=build_message,

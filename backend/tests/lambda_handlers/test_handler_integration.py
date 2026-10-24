@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from hashlib import md5
 from importlib import import_module
 from unittest.mock import Mock
 
@@ -14,7 +15,6 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.lambda_handlers.outbox_relay import handler
 from app.models.outbox_event import OutboxEvent
-from app.outbox.publishing.contracts import PublishSucceeded
 from tests.iam_fixtures import inject_test_db_signer
 
 pytestmark = [pytest.mark.integration, pytest.mark.asyncio]
@@ -34,23 +34,36 @@ def relay_environment(monkeypatch: pytest.MonkeyPatch, test_database_url: str) -
 
 
 @pytest.fixture
-def sender(monkeypatch):
-    sender = Mock()
-    sender.send_batch.side_effect = lambda *, queue_url, batch: tuple(
-        PublishSucceeded(message.event_id) for message in batch.messages
-    )
+def sqs_client(monkeypatch):
+    """送った本文をすべて受け付けたと返すSQSクライアントを、relayの入口に渡す。"""
+
+    def send(**request):
+        return {
+            "Successful": [
+                {
+                    "Id": entry["Id"],
+                    "MessageId": f"sqs-{entry['Id']}",
+                    "MD5OfMessageBody": md5(
+                        entry["MessageBody"].encode(), usedforsecurity=False
+                    ).hexdigest(),
+                }
+                for entry in request["Entries"]
+            ]
+        }
+
+    client = Mock(send_message_batch=Mock(side_effect=send))
     monkeypatch.setattr(
         import_module("app.lambda_handlers.outbox_relay.execution"),
-        "SqsSender",
-        Mock(from_session=Mock(return_value=sender)),
+        "create_sqs_client",
+        lambda **kwargs: client,
     )
-    return sender
+    return client
 
 
 async def test_repeated_invocations_record_delivery_without_resending(
     relay_environment: str,
     session_factory: async_sessionmaker[AsyncSession],
-    sender,
+    sqs_client,
 ) -> None:
     """入口から配信を確定し、次回起動では配信済みイベントを再送しない。"""
     async with session_factory() as writer:
@@ -69,16 +82,17 @@ async def test_repeated_invocations_record_delivery_without_resending(
         saved = await reader.get(OutboxEvent, event_id)
         assert saved is not None
         assert saved.published_at is not None
-    sender.send_batch.assert_called_once()
+    sqs_client.send_message_batch.assert_called_once()
     assert [
-        e.event_id for e in sender.send_batch.call_args.kwargs["batch"].messages
-    ] == [event_id]
+        entry["Id"]
+        for entry in sqs_client.send_message_batch.call_args.kwargs["Entries"]
+    ] == [str(event_id)]
 
 
 async def test_repeated_invocations_release_database_connections(
     relay_environment: str,
     session_factory: async_sessionmaker[AsyncSession],
-    sender,
+    sqs_client,
 ) -> None:
     """繰り返しの起動が終わった後、relayのDB接続を残さない。"""
     for _ in range(2):
@@ -104,7 +118,7 @@ async def test_repeated_invocations_release_database_connections(
 async def test_database_failure_propagates_and_next_invocation_can_connect(
     relay_environment: str,
     monkeypatch: pytest.MonkeyPatch,
-    sender,
+    sqs_client,
 ) -> None:
     """接続失敗を成功扱いせず、次の呼び出しで接続し直せる。"""
     missing_database = make_url(relay_environment).set(

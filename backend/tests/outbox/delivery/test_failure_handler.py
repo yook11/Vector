@@ -36,7 +36,6 @@ from app.outbox.publishing.contracts import (
     EventEnvelope,
     PublishFailed,
     PublishFailure,
-    PublishSucceeded,
 )
 from tests.outbox.helpers import FUTURE, PAST, insert_event, read_event
 
@@ -349,14 +348,13 @@ async def test_jitter_generation_failure_is_not_reclassified(failure, record_sto
     factory.assert_not_called()
 
 
-@pytest.mark.parametrize("case", ["success", "raw_error", "none", "wrong_id"])
+@pytest.mark.parametrize("case", ["raw_error", "none", "wrong_id"])
 async def test_invalid_failure_is_rejected_before_jitter_session_or_record(
     case, record_stop
 ):
     """別イベントの失敗や失敗結果以外の入力で副作用を起こさない。"""
     leased_event = _leased_event()
     failure = {
-        "success": PublishSucceeded(leased_event.envelope.event_id),
         "raw_error": _configuration(),
         "none": None,
         "wrong_id": PublishFailed(uuid4(), _configuration()),

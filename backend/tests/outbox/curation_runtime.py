@@ -2,10 +2,10 @@
 
 from copy import deepcopy
 from hashlib import md5
+from importlib import import_module
 from types import SimpleNamespace
 from unittest.mock import Mock
 
-from app.outbox.sqs import sender
 from tests.iam_fixtures import inject_test_db_signer
 
 CURATION_QUEUE_URL = (
@@ -45,5 +45,9 @@ def configure_curation_relay(monkeypatch, database_url):
     def create_client(**kwargs):
         return Mock(send_message_batch=Mock(side_effect=send))
 
-    monkeypatch.setattr(sender, "create_sqs_client", create_client)
+    monkeypatch.setattr(
+        import_module("app.lambda_handlers.outbox_relay.execution"),
+        "create_sqs_client",
+        create_client,
+    )
     return state

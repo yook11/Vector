@@ -20,10 +20,7 @@ from app.collection.events import (
     AnalyzableEventInvalidError,
 )
 from app.db.errors import DatabaseUnexpectedError
-from app.outbox.publishing.contracts import (
-    PublishFailed,
-    PublishSucceeded,
-)
+from app.outbox.publishing.contracts import PublishFailed
 from app.outbox.publishing.route import EventRouteMismatchError
 from app.shared.event_contract import (
     EventInvalid,
@@ -36,14 +33,10 @@ def _send_failure():
 
 
 @pytest.mark.parametrize("event_id", [None, 1, True, "private-event-id"])
-@pytest.mark.parametrize("failed", [False, True])
-def test_individual_result_rejects_non_uuid(event_id, failed):
-    """成功・失敗ともにIDの暗黙変換をせず、不正値を文面へ出さない。"""
+def test_failed_result_rejects_non_uuid(event_id):
+    """IDの暗黙変換をせず、不正値を文面へ出さない。"""
     with pytest.raises(TypeError, match="event_id must be a UUID") as caught:
-        if failed:
-            PublishFailed(event_id, _send_failure())
-        else:
-            PublishSucceeded(event_id)
+        PublishFailed(event_id, _send_failure())
     assert str(event_id) not in str(caught.value)
 
 
@@ -87,11 +80,10 @@ def test_failed_result_rejects_non_publish_failure(error):
 
 
 def test_results_preserve_values():
-    """送信結果の参照を維持し、結果のフィールドは変更できない。"""
+    """送信失敗の参照を維持し、結果のフィールドは変更できない。"""
     error = _send_failure()
-    success = PublishSucceeded(UUID(int=1))
     failure = PublishFailed(UUID(int=2), error)
     assert failure.error is error
-    for value, field in ((success, "event_id"), (failure, "error")):
+    for field in ("event_id", "error"):
         with pytest.raises(FrozenInstanceError):
-            setattr(value, field, None)
+            setattr(failure, field, None)

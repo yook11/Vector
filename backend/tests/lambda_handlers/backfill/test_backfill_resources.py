@@ -92,6 +92,7 @@ async def test_rds_signer_uses_region_without_external_endpoint_settings(
         async with resources.open_backfill_resources(
             settings,
             stage="curation",
+            queue_url=settings.sqs_article_curation_queue_url,
         ):
             pytest.fail("must not acquire resources")
     assert client.call_args.args == ("rds",)

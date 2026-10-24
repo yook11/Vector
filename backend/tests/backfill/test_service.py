@@ -1,5 +1,6 @@
 """実DBを使って工程別の救済対象と再投入の振る舞いを確認する。"""
 
+from contextlib import nullcontext
 from datetime import UTC, datetime, timedelta
 
 import pytest
@@ -210,7 +211,10 @@ async def test_cleanup_commits_before_sending(
     )
 
     class FailingSender:
-        def send_batch(self, *, queue_url, batch):
+        def __call__(self):
+            return nullcontext(self)
+
+        async def send_batch(self, sendable):
             raise RuntimeError("send failed")
 
     with pytest.raises(RuntimeError, match="send failed"):
