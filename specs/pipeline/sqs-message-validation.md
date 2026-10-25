@@ -20,7 +20,7 @@ SQSメッセージの形式検証を共通で使い、各工程の処理をそ�
 
 ## Design
 
-- ReceivedMessageBatch.from_sqs_eventは配送構造と全IDを検証し、IDで1件を特定できるReceivedMessageを保持する。ReceivedMessage.parse_jsonは本文の存在・文字列型を検証してからJSONとして解析し、receipt_handle_textは可視性変更のときだけ受信ハンドルを検証する。
+- parse_sqs_lambda_inputは配送構造と全IDを検証し、IDで1件を特定できるSqsMessageの並びを返す。SqsMessage.parse_jsonは本文の存在・文字列型を検証してからJSONとして解析し、receipt_handle_textは可視性変更のときだけ受信ハンドルを検証する。
 - 各_run_*はこれらを直接呼び、forループ内にイベント解析・Consumer実行・診断・失敗ID集約を記述する。
 - process_sqs_batch、SqsBatchDiagnostics、partial、コールバック用の_process_messageは設けない。応答のTypedDictは従来どおり各handlerが持つ。
 - Consumerの準備・解放は工程別compositionが所有する。Embeddingのopen_embedding_consumerは既存のresources・gemini_client・consumerの初期化順、診断段階と通常例外・キャンセルの扱いを維持する。

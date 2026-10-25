@@ -76,7 +76,7 @@ consumer Lambdaは既存Taskiq workerへ依頼を中継せず、自身で業務�
 
 発行元のpayload検証・Outbox保存を維持し、relayのSQS publisherで保存済みの5項目を`ArticleAssessedInScopeEvent`として検証する。共通型はUUID・タイムゾーン付き日時・対象イベント種別・整数バージョン1・型付きpayloadを保証し、未知項目や数値文字列・真偽値・小数から整数への変換を拒否する。UUIDと日時のJSON文字列は明示的に復元する。記事存在やID同士の対応のDB照合は行わない。
 
-受信メッセージは`EventReader(ArticleAssessedInScopeEvent.from_input)`で読み、`ReceivedMessage.parse_json()`で本文の文字列型を検証してJSONとして解析した結果を同じ共通型に復元する。後続のハンドラーはevent_id・occurred_atを追跡情報として保持し、payloadだけをConsumerへ渡す。JSONの重複キーとNaN・Infinityを拒否する。
+受信メッセージは`EventReader(ArticleAssessedInScopeEvent.from_input)`で読み、`SqsMessage.parse_json()`で本文の文字列型を検証してJSONとして解析した結果を同じ共通型に復元する。後続のハンドラーはevent_id・occurred_atを追跡情報として保持し、payloadだけをConsumerへ渡す。JSONの重複キーとNaN・Infinityを拒否する。
 
 不正本文は`EmbeddingEventInvalidError`で伝える。理由はJSON解析の`invalid_json`、外側の構造・項目型の`invalid_envelope`、対象外種別の`unsupported_event_type`、未対応版の`unsupported_schema_version`、payload内部の`invalid_payload`の順で優先する。payload自体の欠落や非オブジェクトは外側の構造不正に含む。共有のassessed_event_validation_failureは、大分類と重複のない不変の検証詳細を返す。詳細は既知の項目名と固定コードだけとし、未知キーはeventまたはpayloadのunknown_fieldへ置き換える。本文・入力値・検証自由文を属性や原因・contextに保持せず、本文解析関数内ではログ・監査・通知を行わない。JSON解析失敗はinvalid_jsonと空の詳細一覧で返す。
 
@@ -88,11 +88,11 @@ consumer Lambdaは既存Taskiq workerへ依頼を中継せず、自身で業務�
 
 `app/lambda_handlers/embedding/handler.py`の`_run_embedding(lambda_event, settings)`は、資源とConsumerの組み立て、バッチ検証、レコードの逐次処理、失敗IDの集約、資源終了までを進める。ループ内でレコードの構築、parse_jsonによるJSON解析、ArticleAssessedInScopeEvent.from_inputによる業務イベント検証、consumer.consumeの実行と結果記録を順に行う。SQSへの直接操作は行わない。
 
-最初に入力がオブジェクト、Recordsが配列、各レコードがオブジェクトであることを確認する。全messageIdの存在・文字列型・空白だけでないこと・重複がないことをConsumer実行前に確定する。構造不正はReceivedMessageBatchInvalidErrorとして呼び出し全体へ伝え、ログには固定の項目名・理由・0始まりのレコード位置だけを記録する。不正なIDそのものは記録しない。
+最初に入力がオブジェクト、Recordsが配列、各レコードがオブジェクトであることを確認する。全messageIdの存在・文字列型・空白だけでないこと・重複がないことをConsumer実行前に確定する。構造不正はSqsLambdaInputInvalidErrorとして呼び出し全体へ伝え、ログには固定の項目名・理由・0始まりのレコード位置だけを記録する。不正なIDそのものは記録しない。
 
 有効なmessageIdは加工せず保持し、入力順に1件ずつbodyを検証してConsumerへpayloadを渡す。使用しないSQSフィールドは許容する。bodyの欠落・非文字列・本文不正・Consumerの通常例外は個別失敗として後続処理を続ける。ConsumerはEmbeddingCompletionのSAVED・ALREADY_EMBEDDED、またはReady側のEmbeddingReadyBuildRejectedを返し、ハンドラーはその契約に従って結果を記録する。キャンセル・プロセス終了は伝播する。
 
-_run_embeddingは再配信させるメッセージのIDを入力順に集め、redelivery_responseでAWSの部分バッチ応答（RedeliveryResponse）にして返す。全件成功・空のRecordsは`{"batchItemFailures": []}`、再配信させるときは`{"batchItemFailures": [{"itemIdentifier": "再配信させるmessageId"}]}`とする。複数件という理由では拒否せず、内部並列処理は追加しない。
+_run_embeddingは再配信させるメッセージのIDを入力順に集め、partial_batch_responseでAWSの部分バッチ応答（PartialBatchResponse）にして返す。全件成功・空のRecordsは`{"batchItemFailures": []}`、再配信させるときは`{"batchItemFailures": [{"itemIdentifier": "再配信させるmessageId"}]}`とする。複数件という理由では拒否せず、内部並列処理は追加しない。
 
 ログは次の固定イベントを用い、通常のログ障害で結果や後続処理を変更しない。
 
