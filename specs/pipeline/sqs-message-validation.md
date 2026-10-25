@@ -14,13 +14,13 @@ SQSメッセージの形式検証を共通で使い、各工程の処理をそ�
 
 - 全IDを本文より先に検証し、配送構造・ID不正は全件未処理のまま伝播する。
 - bodyの欠落・型不正は該当メッセージだけの失敗とする。
-- レコード構築は本文の存在・文字列型までを検証する。JSON解析はparse_jsonが担当し、イベント種別・payloadの検証は工程の契約へ委ねる。
+- `SqsMessage`の構築は本文の存在・文字列型までを検証する。JSON解析はparse_jsonが担当し、イベント種別・payloadの検証は工程の契約へ委ねる。
 - 工程別の逐次実行・失敗IDの原文と入力順・空バッチ応答・診断・キャンセル伝播を維持する。
 - 資源の初期化後に入力を検証し、同一呼び出し内でConsumerを共有する。取得済み資源は逆順に解放し、利用側の例外を初期化失敗として再記録しない。
 
 ## Design
 
-- parse_sqs_lambda_inputは配送構造と全IDを検証し、IDで1件を特定できるSqsMessageの並びを返す。SqsMessage.parse_jsonは本文の存在・文字列型を検証してからJSONとして解析し、receipt_handle_textは可視性変更のときだけ受信ハンドルを検証する。
+- parse_sqs_lambda_inputは配送構造と全IDを検証し、IDで1件を特定できるSqsLambdaRecordの並びを返す。SqsLambdaRecord.read_messageは本文の存在・文字列型を検証してSqsMessageにし、SqsMessage.parse_jsonがJSONとして解析する。read_receipt_handleは可視性変更のときだけ受信ハンドルを検証する。
 - 各_run_*はこれらを直接呼び、forループ内にイベント解析・Consumer実行・診断・失敗ID集約を記述する。
 - process_sqs_batch、SqsBatchDiagnostics、partial、コールバック用の_process_messageは設けない。応答のTypedDictは従来どおり各handlerが持つ。
 - Consumerの準備・解放は工程別compositionが所有する。Embeddingのopen_embedding_consumerは既存のresources・gemini_client・consumerの初期化順、診断段階と通常例外・キャンセルの扱いを維持する。
