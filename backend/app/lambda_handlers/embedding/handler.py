@@ -58,7 +58,7 @@ async def _run_embedding(
         # 失敗はメッセージIDで1件ずつ返すため、
         # IDを特定できないレコードがあれば全件を処理せず再配信させる。
         try:
-            messages = parse_sqs_lambda_input(sqs_input)
+            records = parse_sqs_lambda_input(sqs_input)
         except SqsLambdaInputInvalidError as exc:
             logger.warning(
                 "embedding_sqs_input_invalid",
@@ -70,18 +70,18 @@ async def _run_embedding(
         message_recorder = EmbeddingMessageRecorder(logger)
         redelivery_message_ids: list[str] = []
 
-        for message in messages:
-            with bound_contextvars(message_id=message.message_id):
+        for record in records:
+            with bound_contextvars(message_id=record.message_id):
                 started_at_seconds = perf_counter()
                 message_recorder.record_started()
 
-                match event_reader.read(message):
+                match event_reader.read(record):
                     case EventReadFailed() as read_failed:
                         message_recorder.record_read_failed(
                             read_failed,
                             duration_ms=elapsed_ms_since(started_at_seconds),
                         )
-                        redelivery_message_ids.append(message.message_id)
+                        redelivery_message_ids.append(record.message_id)
 
                     case ArticleAssessedInScopeEvent() as assessed_event:
                         with bound_contextvars(
@@ -99,12 +99,12 @@ async def _run_embedding(
                                     exc,
                                     duration_ms=elapsed_ms_since(started_at_seconds),
                                 )
-                                redelivery_message_ids.append(message.message_id)
+                                redelivery_message_ids.append(record.message_id)
                                 continue
                             message_recorder.record_consumed(
                                 consume_result,
                                 duration_ms=elapsed_ms_since(started_at_seconds),
                             )
                             if isinstance(consume_result, RetryEmbedding):
-                                redelivery_message_ids.append(message.message_id)
+                                redelivery_message_ids.append(record.message_id)
         return partial_batch_response(redelivery_message_ids)

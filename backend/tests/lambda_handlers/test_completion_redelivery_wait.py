@@ -285,8 +285,8 @@ async def test_invalid_receipt_skips_only_its_wait(delivery, read_logs):
         "message_id": "first",
         "retry_at": "2026-09-14T00:02:00+00:00",
         "result": "invalid_receipt_handle",
-        "error_class": ("app.aws.sqs.message.SqsMessageInvalidError"),
-        "error_message": "Received message validation failed: invalid_type",
+        "error_class": ("app.aws.lambda_.sqs_input.ReceiptHandleInvalidError"),
+        "error_message": "Receipt handle validation failed: invalid_type",
         "error_details": {"reason": "invalid_type", "field": "receiptHandle"},
     }
 

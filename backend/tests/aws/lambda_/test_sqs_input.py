@@ -7,11 +7,14 @@ from pathlib import Path
 import pytest
 
 from app.aws.lambda_.sqs_input import (
+    ReceiptHandleInvalidError,
+    ReceiptHandleInvalidReason,
     SqsLambdaInputInvalidError,
     SqsLambdaInputInvalidReason,
     parse_sqs_lambda_input,
 )
 from app.aws.sqs.message import (
+    SqsMessage,
     SqsMessageInvalidError,
     SqsMessageInvalidReason,
 )
@@ -22,7 +25,7 @@ pytestmark = pytest.mark.unit
 @pytest.mark.parametrize("body", ["", "not-json", '{"event_type":"other.event"}'])
 def test_batch_preserves_body_without_interpreting_business_event(body):
     """イベントの意味や本文の妥当性を解釈せず、受信順と本文を保持する。"""
-    messages = parse_sqs_lambda_input(
+    records = parse_sqs_lambda_input(
         {
             "Records": [
                 {"messageId": " second ", "body": body},
@@ -30,11 +33,11 @@ def test_batch_preserves_body_without_interpreting_business_event(body):
             ]
         }
     )
-    assert [message.message_id for message in messages] == [
+    assert [record.message_id for record in records] == [
         " second ",
         "first",
     ]
-    assert [message.body for message in messages] == [
+    assert [record.read_message().body for record in records] == [
         body,
         "another-body",
     ]
@@ -42,10 +45,10 @@ def test_batch_preserves_body_without_interpreting_business_event(body):
 
 def test_missing_body_is_rejected_when_reading_message():
     """本文欠落は全IDの確認後に当該メッセージを読むときだけ拒否する。"""
-    messages = parse_sqs_lambda_input({"Records": [{"messageId": "missing-body"}]})
+    records = parse_sqs_lambda_input({"Records": [{"messageId": "missing-body"}]})
 
     with pytest.raises(SqsMessageInvalidError) as caught:
-        messages[0].parse_json()
+        records[0].read_message()
 
     assert caught.value.reason is SqsMessageInvalidReason.MISSING_REQUIRED_FIELD
     assert caught.value.field == "body"
@@ -54,7 +57,7 @@ def test_missing_body_is_rejected_when_reading_message():
 @pytest.mark.parametrize("body", [None, 3, True, {}, [], b"private-body"])
 def test_non_string_body_does_not_prevent_following_message(body):
     """本文の型不正を個別に拒否し、後続メッセージの読み取りを妨げない。"""
-    messages = parse_sqs_lambda_input(
+    records = parse_sqs_lambda_input(
         {
             "Records": [
                 {"messageId": "bad", "body": body},
@@ -63,10 +66,10 @@ def test_non_string_body_does_not_prevent_following_message(body):
         }
     )
     with pytest.raises(SqsMessageInvalidError) as caught:
-        messages[0].parse_json()
+        records[0].read_message()
     assert caught.value.reason is SqsMessageInvalidReason.INVALID_TYPE
     assert caught.value.field == "body"
-    assert messages[1].parse_json() == {"usable": True}
+    assert records[1].read_message().parse_json() == {"usable": True}
 
 
 def test_duplicate_id_precedes_invalid_body_and_error_does_not_expose_input():
@@ -146,34 +149,41 @@ def test_invalid_message_id_reports_record_position(invalid_record):
 @pytest.mark.parametrize(
     "handle,reason",
     [
-        (None, SqsMessageInvalidReason.INVALID_TYPE),
-        (123, SqsMessageInvalidReason.INVALID_TYPE),
-        ("", SqsMessageInvalidReason.EMPTY_RECEIPT_HANDLE),
-        (" \t", SqsMessageInvalidReason.EMPTY_RECEIPT_HANDLE),
+        (None, ReceiptHandleInvalidReason.INVALID_TYPE),
+        (123, ReceiptHandleInvalidReason.INVALID_TYPE),
+        ("", ReceiptHandleInvalidReason.EMPTY_RECEIPT_HANDLE),
+        (" \t", ReceiptHandleInvalidReason.EMPTY_RECEIPT_HANDLE),
     ],
 )
 def test_receipt_handle_validation_is_deferred(handle, reason):
     """受信情報の不正はバッチ生成時でなく操作情報の取得時に拒否する。"""
-    messages = parse_sqs_lambda_input(
+    records = parse_sqs_lambda_input(
         {"Records": [{"messageId": "id", "body": "{}", "receiptHandle": handle}]}
     )
-    with pytest.raises(SqsMessageInvalidError) as caught:
-        messages[0].receipt_handle_text()
+    with pytest.raises(ReceiptHandleInvalidError) as caught:
+        records[0].read_receipt_handle()
     assert caught.value.reason is reason
-    assert caught.value.field == "receiptHandle"
 
 
 def test_missing_receipt_handle_is_distinct_from_invalid_type():
     """receiptHandleの欠落は型不正と区別する。"""
-    messages = parse_sqs_lambda_input({"Records": [{"messageId": "id", "body": "{}"}]})
-    with pytest.raises(SqsMessageInvalidError) as caught:
-        messages[0].receipt_handle_text()
-    assert caught.value.reason is SqsMessageInvalidReason.MISSING_REQUIRED_FIELD
+    records = parse_sqs_lambda_input({"Records": [{"messageId": "id", "body": "{}"}]})
+    with pytest.raises(ReceiptHandleInvalidError) as caught:
+        records[0].read_receipt_handle()
+    assert caught.value.reason is ReceiptHandleInvalidReason.MISSING_REQUIRED_FIELD
+
+
+def test_invalid_receipt_handle_does_not_prevent_reading_message():
+    """受信ハンドルが不正でも、本文はSQSメッセージとして読める。"""
+    records = parse_sqs_lambda_input(
+        {"Records": [{"messageId": "id", "body": "{}", "receiptHandle": None}]}
+    )
+    assert records[0].read_message() == SqsMessage(message_id="id", body="{}")
 
 
 def test_receipt_handle_preserves_original_text():
     """AWSから渡された操作情報の有効な文字列を加工しない。"""
-    messages = parse_sqs_lambda_input(
+    records = parse_sqs_lambda_input(
         {"Records": [{"messageId": "id", "body": "{}", "receiptHandle": " handle "}]}
     )
-    assert messages[0].receipt_handle_text() == " handle "
+    assert records[0].read_receipt_handle() == " handle "

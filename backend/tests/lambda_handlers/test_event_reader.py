@@ -1,18 +1,15 @@
-"""SQSの受信メッセージ1件をイベントとして読み、失敗は原因の例外を持つ値で返すことを検証する。"""
+"""Lambdaが渡したSQSのレコード1件をイベントとして読み、失敗は原因の例外を持つ値で返すことを検証する。"""
 
 import pytest
 
-from app.aws.lambda_.sqs_input import parse_sqs_lambda_input
-from app.aws.sqs.message import (
-    SqsMessage,
-    SqsMessageInvalidReason,
-)
+from app.aws.lambda_.sqs_input import SqsLambdaRecord, parse_sqs_lambda_input
+from app.aws.sqs.message import SqsMessageInvalidReason
 from app.lambda_handlers.event_reader import EventReader, EventReadFailed
 
 pytestmark = pytest.mark.unit
 
 
-def _received_message(record: dict[str, object]) -> SqsMessage:
+def _received_record(record: dict[str, object]) -> SqsLambdaRecord:
     return parse_sqs_lambda_input({"Records": [record]})[0]
 
 
@@ -21,7 +18,7 @@ def test_parsed_body_is_passed_to_parser_and_its_event_returned():
     event_reader = EventReader(lambda data: ("event", data))
 
     read_result = event_reader.read(
-        _received_message({"messageId": "id", "body": '{"key": [1, true]}'})
+        _received_record({"messageId": "id", "body": '{"key": [1, true]}'})
     )
 
     assert read_result == ("event", {"key": [1, True]})
@@ -53,7 +50,7 @@ def test_body_and_json_failures_are_returned_as_read_failure(record, reason):
     def parse_event(data: object) -> object:
         raise AssertionError("parser must not be called")
 
-    read_result = EventReader(parse_event).read(_received_message(record))
+    read_result = EventReader(parse_event).read(_received_record(record))
 
     assert isinstance(read_result, EventReadFailed)
     assert getattr(read_result.error, "reason", None) is reason
@@ -67,7 +64,7 @@ def test_parser_exception_is_returned_as_read_failure():
         raise original
 
     read_result = EventReader(parse_event).read(
-        _received_message({"messageId": "id", "body": "{}"})
+        _received_record({"messageId": "id", "body": "{}"})
     )
 
     assert read_result == EventReadFailed(original)

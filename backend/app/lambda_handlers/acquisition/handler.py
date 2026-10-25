@@ -10,13 +10,13 @@ from structlog.contextvars import bound_contextvars
 from structlog.typing import FilteringBoundLogger
 
 from app.aws.lambda_.sqs_input import (
+    SqsLambdaRecord,
     parse_sqs_lambda_input,
 )
 from app.aws.lambda_.sqs_response import (
     PartialBatchResponse,
     partial_batch_response,
 )
-from app.aws.sqs.message import SqsMessage
 from app.collection.article_acquisition.consumer_result import (
     RetryAcquisition,
 )
@@ -37,7 +37,7 @@ from app.shared.time import elapsed_ms_since
 def handler(sqs_input: object, context: object) -> PartialBatchResponse:
     with _open_invocation(context) as (logger, failure_recorder):
         try:
-            messages = parse_sqs_lambda_input(sqs_input)
+            records = parse_sqs_lambda_input(sqs_input)
             settings = AcquisitionConsumerSettings()  # type: ignore[call-arg]
         except Exception as exc:
             failure_recorder.record_initialization_failure("input_or_settings", exc)
@@ -46,7 +46,7 @@ def handler(sqs_input: object, context: object) -> PartialBatchResponse:
         try:
             return asyncio.run(
                 _run(
-                    messages,
+                    records,
                     settings,
                     logger=logger,
                     failure_recorder=failure_recorder,
@@ -79,7 +79,7 @@ def _open_invocation(
 
 
 async def _run(
-    messages: tuple[SqsMessage, ...],
+    records: tuple[SqsLambdaRecord, ...],
     settings: AcquisitionConsumerSettings,
     *,
     logger: FilteringBoundLogger,
@@ -91,17 +91,17 @@ async def _run(
     ) as consumer:
         event_reader = EventReader(acquisition_request_from_message)
         message_recorder = AcquisitionMessageRecorder(logger)
-        for message in messages:
-            with bound_contextvars(message_id=message.message_id):
+        for record in records:
+            with bound_contextvars(message_id=record.message_id):
                 started_at_seconds = perf_counter()
                 message_recorder.record_started()
-                match event_reader.read(message):
+                match event_reader.read(record):
                     case EventReadFailed() as read_failed:
                         message_recorder.record_read_failed(
                             read_failed,
                             duration_ms=elapsed_ms_since(started_at_seconds),
                         )
-                        redelivery_message_ids.append(message.message_id)
+                        redelivery_message_ids.append(record.message_id)
 
                     case SourceAcquisitionRequest() as request:
                         with bound_contextvars(
@@ -116,10 +116,10 @@ async def _run(
                                     exc,
                                     duration_ms=elapsed_ms_since(started_at_seconds),
                                 )
-                                redelivery_message_ids.append(message.message_id)
+                                redelivery_message_ids.append(record.message_id)
                                 continue
                             if isinstance(result, RetryAcquisition):
-                                redelivery_message_ids.append(message.message_id)
+                                redelivery_message_ids.append(record.message_id)
                             message_recorder.record_consumed(
                                 result,
                                 duration_ms=elapsed_ms_since(started_at_seconds),

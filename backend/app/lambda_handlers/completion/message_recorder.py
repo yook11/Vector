@@ -14,8 +14,10 @@ from app.collection.article_completion.consumer import (
 )
 
 if TYPE_CHECKING:
-    from app.aws.lambda_.sqs_input import SqsLambdaInputInvalidError
-    from app.aws.sqs.message import SqsMessageInvalidError
+    from app.aws.lambda_.sqs_input import (
+        ReceiptHandleInvalidError,
+        SqsLambdaInputInvalidError,
+    )
     from app.collection.retry_at import RetryAt
     from app.lambda_handlers.completion.redelivery_wait import VisibilityTimeout
     from app.lambda_handlers.event_reader import EventReadFailed
@@ -136,7 +138,7 @@ class CompletionMessageRecorder:
     def record_receipt_handle_invalid(
         self,
         retry_at: RetryAt,
-        error: SqsMessageInvalidError,
+        error: ReceiptHandleInvalidError,
         *,
         message_id: str,
     ) -> None:
