@@ -24,11 +24,11 @@ from app.analysis.embedding.domain.ready import (
 from app.analysis.embedding.errors import EmbeddingAnalyzedArticleMissingError
 from app.analysis.embedding.service import EmbeddingCompletion
 from app.analysis.logging import create_article_analysis_logger
-from app.lambda_handlers.sqs.received_message import (
-    ReceivedMessage,
-    ReceivedMessageBatchInvalidError,
-    ReceivedMessageBatchInvalidReason,
+from app.aws.lambda_.sqs_input import (
+    SqsLambdaInputInvalidError,
+    SqsLambdaInputInvalidReason,
 )
+from app.aws.sqs.message import SqsMessage
 
 module = import_module("app.lambda_handlers.embedding.handler")
 pytestmark = pytest.mark.unit
@@ -325,9 +325,7 @@ def test_consumer_exception_is_logged_as_call_failure_and_redelivered(
             {"messageId": "invalid"},
             {
                 "operation": "parse_message",
-                "error_class": (
-                    "app.lambda_handlers.sqs.received_message.ReceivedMessageInvalidError"
-                ),
+                "error_class": ("app.aws.sqs.message.SqsMessageInvalidError"),
                 "error_message": (
                     "Received message validation failed: missing_required_field"
                 ),
@@ -339,9 +337,7 @@ def test_consumer_exception_is_logged_as_call_failure_and_redelivered(
             {"messageId": "invalid", "body": "private-invalid-json"},
             {
                 "operation": "parse_message",
-                "error_class": (
-                    "app.lambda_handlers.sqs.received_message.ReceivedMessageInvalidError"
-                ),
+                "error_class": ("app.aws.sqs.message.SqsMessageInvalidError"),
                 "error_message": "Received message validation failed: invalid_json",
                 "error_details": {"reason": "invalid_json", "field": "body"},
             },
@@ -425,7 +421,7 @@ def test_invalid_message_id_is_logged_and_rejects_batch(wiring, read_logs):
     body = valid_body()
     messages = [{"messageId": "valid", "body": body}, {"body": body}]
 
-    with pytest.raises(ReceivedMessageBatchInvalidError):
+    with pytest.raises(SqsLambdaInputInvalidError):
         module.handler({"Records": messages}, _CONTEXT)
 
     wiring.consumer.consume.assert_not_awaited()
@@ -440,9 +436,7 @@ def test_invalid_message_id_is_logged_and_rejects_batch(wiring, read_logs):
             "stage": "embedding",
             "request_id": "request-001",
             "environment": "test",
-            "error_class": (
-                "app.lambda_handlers.sqs.received_message.ReceivedMessageBatchInvalidError"
-            ),
+            "error_class": ("app.aws.lambda_.sqs_input.SqsLambdaInputInvalidError"),
             "error_message": (
                 "Received message batch validation failed: missing_required_field"
             ),
@@ -625,10 +619,10 @@ def test_duplicate_id_is_rejected_before_reading_bodies(wiring):
         {"messageId": "duplicate", "body": valid_body()},
     ]
 
-    with pytest.raises(ReceivedMessageBatchInvalidError) as caught:
+    with pytest.raises(SqsLambdaInputInvalidError) as caught:
         module.handler({"Records": messages}, None)
 
-    assert caught.value.reason is ReceivedMessageBatchInvalidReason.DUPLICATE_MESSAGE_ID
+    assert caught.value.reason is SqsLambdaInputInvalidReason.DUPLICATE_MESSAGE_ID
     wiring.consumer.consume.assert_not_awaited()
 
 
@@ -646,10 +640,10 @@ def test_failed_message_id_is_not_trimmed(wiring):
 def test_unexpected_parser_failure_does_not_stop_batch(wiring, monkeypatch):
     """想定外の解析障害も、そのメッセージだけの失敗として後続を処理する。"""
     body = valid_body()
-    parsed_body = ReceivedMessage(message_id="id", body=body).parse_json()
+    parsed_body = SqsMessage(message_id="id", body=body).parse_json()
     parsed = module.ArticleAssessedInScopeEvent.from_input(parsed_body)
     monkeypatch.setattr(
-        ReceivedMessage,
+        SqsMessage,
         "parse_json",
         Mock(side_effect=[RuntimeError("private-parser"), parsed_body]),
     )

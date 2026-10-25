@@ -260,9 +260,7 @@ def test_read_failure_is_logged_before_following_message_is_consumed(
             "operation": "parse_message",
             "duration_ms": 125.0,
             "message_disposition": "batch_item_failure",
-            "error_class": (
-                "app.lambda_handlers.sqs.received_message.ReceivedMessageInvalidError"
-            ),
+            "error_class": ("app.aws.sqs.message.SqsMessageInvalidError"),
             "error_message": "Received message validation failed: invalid_json",
             "error_details": {"reason": "invalid_json", "field": "body"},
         },

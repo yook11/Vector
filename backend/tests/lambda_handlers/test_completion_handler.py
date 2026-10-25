@@ -12,6 +12,7 @@ from unittest.mock import AsyncMock, Mock, call
 
 import pytest
 
+from app.aws.lambda_.sqs_input import SqsLambdaInputInvalidError
 from app.collection.article_completion.consumer import (
     CompletionSucceeded,
     NoRetryCompletion,
@@ -21,7 +22,6 @@ from app.collection.article_completion.errors import ArticleCompletionError
 from app.collection.retry_at import RetryAt
 from app.http.errors import HttpResponseError
 from app.lambda_handlers.article_fetch_lifecycle import ArticleFetchLifecycleRecorder
-from app.lambda_handlers.sqs.received_message import ReceivedMessageBatchInvalidError
 from app.log_policy.policies.external_content import EXTERNAL_CONTENT_LOG_RULES
 from app.log_policy.runtime import create_policy_json_logger
 from tests.collection.test_incomplete_article_recorded_event import valid_event
@@ -245,7 +245,7 @@ def test_invalid_message_does_not_stop_next_article(runtime):
 
 def test_batch_identity_failure_precedes_any_consumption(runtime):
     """後続のID重複を、先頭の記事に着手する前に検出する。"""
-    with pytest.raises(ReceivedMessageBatchInvalidError):
+    with pytest.raises(SqsLambdaInputInvalidError):
         module.handler(
             {"Records": [record("same"), record("same", 102)]}, runtime.context
         )
@@ -593,7 +593,7 @@ def test_insufficient_time_precedes_body_parsing(runtime, read_logs):
 def test_all_ids_are_checked_before_remaining_time(runtime):
     """時間不足でも後続のID不正を呼び出し全体の失敗にする。"""
     runtime.context.get_remaining_time_in_millis.return_value = 0
-    with pytest.raises(ReceivedMessageBatchInvalidError):
+    with pytest.raises(SqsLambdaInputInvalidError):
         module.handler({"Records": [record(), {"body": "invalid"}]}, runtime.context)
     runtime.context.get_remaining_time_in_millis.assert_not_called()
 

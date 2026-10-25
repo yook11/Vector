@@ -12,6 +12,14 @@ from app.analysis.assessment.service import (
     AssessmentCompletionKind,
 )
 from app.analysis.curation.events import ArticleCuratedSignalEvent
+from app.aws.lambda_.sqs_input import (
+    SqsLambdaInputInvalidError,
+    parse_sqs_lambda_input,
+)
+from app.aws.lambda_.sqs_response import (
+    RedeliveryResponse,
+    redelivery_response,
+)
 from app.lambda_handlers.article_analysis_invocation import (
     open_article_analysis_invocation,
 )
@@ -29,18 +37,10 @@ from app.lambda_handlers.assessment.settings import (
     AssessmentLambdaSettings,
 )
 from app.lambda_handlers.event_reader import EventReader, EventReadFailed
-from app.lambda_handlers.sqs.received_message import (
-    ReceivedMessageBatch,
-    ReceivedMessageBatchInvalidError,
-)
-from app.lambda_handlers.sqs.response import (
-    RedeliveryResponse,
-    redelivery_response,
-)
 from app.shared.time import elapsed_ms_since
 
 
-def handler(sqs_event: object, context: object) -> RedeliveryResponse:
+def handler(sqs_input: object, context: object) -> RedeliveryResponse:
     """呼び出しの文脈と設定を用意し、資源解放まで同じロガーを渡す。"""
     with open_article_analysis_invocation(
         "assessment", context, AssessmentLambdaSettings.load
@@ -51,7 +51,7 @@ def handler(sqs_event: object, context: object) -> RedeliveryResponse:
         )
         return asyncio.run(
             _run_assessment(
-                sqs_event,
+                sqs_input,
                 settings.consumer,
                 notifier,
                 logger=invocation.logger,
@@ -61,7 +61,7 @@ def handler(sqs_event: object, context: object) -> RedeliveryResponse:
 
 
 async def _run_assessment(
-    sqs_event: object,
+    sqs_input: object,
     settings: AssessmentConsumerSettings,
     notifier: ArticleListUpdateNotifier,
     *,
@@ -75,8 +75,8 @@ async def _run_assessment(
         # 失敗はメッセージIDで1件ずつ返すため、
         # IDを特定できないレコードがあれば全件を処理せず再配信させる。
         try:
-            message_batch = ReceivedMessageBatch.from_sqs_event(sqs_event)
-        except ReceivedMessageBatchInvalidError as exc:
+            messages = parse_sqs_lambda_input(sqs_input)
+        except SqsLambdaInputInvalidError as exc:
             logger.warning(
                 "assessment_sqs_input_invalid",
                 exc_info=exc,
@@ -87,7 +87,7 @@ async def _run_assessment(
         message_recorder = AssessmentMessageRecorder(logger)
         redelivery_message_ids: list[str] = []
 
-        for message in message_batch.messages:
+        for message in messages:
             with bound_contextvars(message_id=message.message_id):
                 started_at_seconds = perf_counter()
                 message_recorder.record_started()

@@ -14,13 +14,11 @@ from app.collection.article_completion.consumer import (
 )
 
 if TYPE_CHECKING:
+    from app.aws.lambda_.sqs_input import SqsLambdaInputInvalidError
+    from app.aws.sqs.message import SqsMessageInvalidError
     from app.collection.retry_at import RetryAt
     from app.lambda_handlers.completion.redelivery_wait import VisibilityTimeout
     from app.lambda_handlers.event_reader import EventReadFailed
-    from app.lambda_handlers.sqs.received_message import (
-        ReceivedMessageBatchInvalidError,
-        ReceivedMessageInvalidError,
-    )
 
 
 class CompletionMessageRecorder:
@@ -120,9 +118,7 @@ class CompletionMessageRecorder:
             message_disposition="batch_item_failure",
         )
 
-    def record_invalid_message_batch(
-        self, error: ReceivedMessageBatchInvalidError
-    ) -> None:
+    def record_invalid_message_batch(self, error: SqsLambdaInputInvalidError) -> None:
         self._logger.error("completion_sqs_input_invalid", exc_info=error)
 
     def record_retry_at_passed(self, retry_at: RetryAt, *, message_id: str) -> None:
@@ -140,7 +136,7 @@ class CompletionMessageRecorder:
     def record_receipt_handle_invalid(
         self,
         retry_at: RetryAt,
-        error: ReceivedMessageInvalidError,
+        error: SqsMessageInvalidError,
         *,
         message_id: str,
     ) -> None:

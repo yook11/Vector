@@ -6,9 +6,9 @@ import pytest
 
 from app.analysis.assessment.events import ArticleAssessedInScopeEvent
 from app.analysis.curation.events import ArticleCuratedSignalEvent
+from app.aws.sqs.message import SqsMessage
 from app.collection.article_acquisition.events import IncompleteArticleRecordedEvent
 from app.collection.events import AnalyzableArticleCreatedEvent
-from app.lambda_handlers.sqs.received_message import ReceivedMessage
 from local_tests.backfill.support import (
     AGED_CREATED_AT,
     ANALYZED_AT,
@@ -36,7 +36,7 @@ async def test_curation_deletes_aged_out_article_and_delivers_saved_article(
     assert batch["QueueUrl"] == "https://sqs.invalid/curation"
     assert len(batch["Entries"]) == 1
     event = AnalyzableArticleCreatedEvent.from_input(
-        ReceivedMessage(
+        SqsMessage(
             message_id="id", body=batch["Entries"][0]["MessageBody"]
         ).parse_json()
     )
@@ -66,7 +66,7 @@ async def test_assessment_excludes_aged_out_curation_and_delivers_saved_curation
     assert batch["QueueUrl"] == "https://sqs.invalid/assessment"
     assert len(batch["Entries"]) == 1
     event = ArticleCuratedSignalEvent.from_input(
-        ReceivedMessage(
+        SqsMessage(
             message_id="id", body=batch["Entries"][0]["MessageBody"]
         ).parse_json()
     )
@@ -104,7 +104,7 @@ async def test_embedding_excludes_aged_out_analysis_and_delivers_saved_assessmen
     assert batch["QueueUrl"] == "https://sqs.invalid/embedding"
     assert len(batch["Entries"]) == 1
     event = ArticleAssessedInScopeEvent.from_input(
-        ReceivedMessage(
+        SqsMessage(
             message_id="id", body=batch["Entries"][0]["MessageBody"]
         ).parse_json()
     )
@@ -140,7 +140,7 @@ async def test_completion_closes_aged_out_row_and_delivers_saved_incomplete_arti
     assert batch["QueueUrl"] == "https://sqs.invalid/completion"
     assert len(batch["Entries"]) == 1
     event = IncompleteArticleRecordedEvent.from_input(
-        ReceivedMessage(
+        SqsMessage(
             message_id="id", body=batch["Entries"][0]["MessageBody"]
         ).parse_json()
     )
@@ -161,14 +161,14 @@ async def test_next_invocation_replays_unfinished_article(system_database, deliv
     article_id = await seed_article(system_database, "https://example.com/replay")
     await asyncio.to_thread(delivery.handler.curation_handler, {}, None)
     first = AnalyzableArticleCreatedEvent.from_input(
-        ReceivedMessage(
+        SqsMessage(
             message_id="id", body=delivery.batches[0]["Entries"][0]["MessageBody"]
         ).parse_json()
     )
     await asyncio.to_thread(delivery.handler.curation_handler, {}, None)
     assert len(delivery.batches) == 2
     second = AnalyzableArticleCreatedEvent.from_input(
-        ReceivedMessage(
+        SqsMessage(
             message_id="id", body=delivery.batches[1]["Entries"][0]["MessageBody"]
         ).parse_json()
     )

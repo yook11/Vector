@@ -3,7 +3,7 @@
 from collections.abc import Callable
 from dataclasses import dataclass
 
-from app.lambda_handlers.sqs.received_message import ReceivedMessage
+from app.aws.sqs.message import SqsMessage
 
 
 @dataclass(frozen=True, slots=True)
@@ -19,7 +19,7 @@ class EventReader[EventT]:
 
     parse_event: Callable[[object], EventT]
 
-    def read(self, message: ReceivedMessage) -> EventT | EventReadFailed:
+    def read(self, message: SqsMessage) -> EventT | EventReadFailed:
         """本文・JSON・イベント契約のどこで失敗しても、原因の例外を値で返す。"""
         try:
             return self.parse_event(message.parse_json())

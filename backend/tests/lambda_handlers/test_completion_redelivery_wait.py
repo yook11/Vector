@@ -9,6 +9,7 @@ from unittest.mock import Mock, call
 
 import pytest
 
+from app.aws.lambda_.sqs_input import parse_sqs_lambda_input
 from app.collection.retry_at import RetryAt
 from app.lambda_handlers.completion.message_recorder import CompletionMessageRecorder
 from app.lambda_handlers.completion.redelivery_wait import (
@@ -16,7 +17,6 @@ from app.lambda_handlers.completion.redelivery_wait import (
     VisibilityTimeout,
     apply_visibility_timeouts,
 )
-from app.lambda_handlers.sqs.received_message import ReceivedMessageBatch
 from app.log_policy.policies.external_content import EXTERNAL_CONTENT_LOG_RULES
 from app.log_policy.runtime import create_policy_json_logger
 
@@ -42,7 +42,7 @@ def delivery():
         context=SimpleNamespace(get_remaining_time_in_millis=Mock(return_value=20_000)),
         sqs=Mock(),
     )
-    state.first, state.second = ReceivedMessageBatch.from_sqs_event(
+    state.first, state.second = parse_sqs_lambda_input(
         {
             "Records": [
                 {
@@ -57,7 +57,7 @@ def delivery():
                 },
             ]
         }
-    ).messages
+    )
     return state
 
 
@@ -255,7 +255,7 @@ async def test_insufficient_time_stops_remaining_waits(delivery, read_logs):
 @pytest.mark.asyncio
 async def test_invalid_receipt_skips_only_its_wait(delivery, read_logs):
     """receiptHandle不正は当該設定だけを省略する。"""
-    delivery.first, delivery.second = ReceivedMessageBatch.from_sqs_event(
+    delivery.first, delivery.second = parse_sqs_lambda_input(
         {
             "Records": [
                 {
@@ -266,7 +266,7 @@ async def test_invalid_receipt_skips_only_its_wait(delivery, read_logs):
                 {"messageId": "second", "body": "{}", "receiptHandle": "valid"},
             ]
         }
-    ).messages
+    )
     retry = RetryAt(delivery.now + timedelta(seconds=120))
     await apply(
         delivery,
@@ -285,9 +285,7 @@ async def test_invalid_receipt_skips_only_its_wait(delivery, read_logs):
         "message_id": "first",
         "retry_at": "2026-09-14T00:02:00+00:00",
         "result": "invalid_receipt_handle",
-        "error_class": (
-            "app.lambda_handlers.sqs.received_message.ReceivedMessageInvalidError"
-        ),
+        "error_class": ("app.aws.sqs.message.SqsMessageInvalidError"),
         "error_message": "Received message validation failed: invalid_type",
         "error_details": {"reason": "invalid_type", "field": "receiptHandle"},
     }

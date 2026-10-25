@@ -1,22 +1,24 @@
 """補完の待機指示を、受信したSQSメッセージの可視性変更へ接続する。"""
 
-import asyncio
 import math
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Self
 
+from app.aws.sqs.message import (
+    SqsMessage,
+    SqsMessageInvalidError,
+)
+from app.aws.sqs.visibility import (
+    SqsMessageVisibilityClient,
+    change_message_visibility,
+)
 from app.collection.retry_at import RetryAt
-from app.lambda_handlers.completion.composition import SqsMessageVisibilityClient
 from app.lambda_handlers.completion.message_recorder import CompletionMessageRecorder
 from app.lambda_handlers.completion.processing_start_deadline import (
     LambdaContext,
     ProcessingStartDeadline,
-)
-from app.lambda_handlers.sqs.received_message import (
-    ReceivedMessage,
-    ReceivedMessageInvalidError,
 )
 
 # SQSの可視性は受信から12時間までのため、Lambdaの実行時間を残して11時間で切る。
@@ -27,7 +29,7 @@ MAX_VISIBILITY_SECONDS = 39_600
 class RedeliveryMessage:
     """再配信させるメッセージで、retry_atがなければキューの通常の可視性で再配信される。"""
 
-    message: ReceivedMessage
+    message: SqsMessage
     retry_at: RetryAt | None = None
 
 
@@ -84,14 +86,14 @@ async def apply_visibility_timeouts(
 
         try:
             receipt_handle = message.receipt_handle_text()
-        except ReceivedMessageInvalidError as exc:
+        except SqsMessageInvalidError as exc:
             recorder.record_receipt_handle_invalid(
                 retry_at, exc, message_id=message.message_id
             )
             continue
 
         try:
-            await _change_visibility(
+            await change_message_visibility(
                 sqs_client,
                 queue_url=queue_url,
                 receipt_handle=receipt_handle,
@@ -105,34 +107,3 @@ async def apply_visibility_timeouts(
             recorder.record_visibility_changed(
                 retry_at, visibility_timeout, message_id=message.message_id
             )
-
-
-async def _change_visibility(
-    client: SqsMessageVisibilityClient,
-    *,
-    queue_url: str,
-    receipt_handle: str,
-    seconds: int,
-) -> None:
-    operation = asyncio.create_task(
-        asyncio.to_thread(
-            client.change_message_visibility,
-            QueueUrl=queue_url,
-            ReceiptHandle=receipt_handle,
-            VisibilityTimeout=seconds,
-        )
-    )
-    try:
-        await asyncio.shield(operation)
-    except asyncio.CancelledError:
-        # 実行中のSDK通信は中断できないため、重なるキャンセルからも回収を守る。
-        while not operation.done():
-            try:
-                await asyncio.shield(operation)
-            except asyncio.CancelledError:
-                continue
-            except Exception:
-                break
-        if not operation.cancelled():
-            operation.exception()
-        raise

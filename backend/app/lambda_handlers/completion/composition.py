@@ -3,12 +3,14 @@
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
-from typing import Protocol
 
-from botocore.config import Config
 from botocore.session import Session
 from sqlalchemy.ext.asyncio import AsyncEngine
 
+from app.aws.sqs.visibility import (
+    SqsMessageVisibilityClient,
+    create_sqs_visibility_client,
+)
 from app.collection.article_completion.consumer import ArticleCompletionConsumer
 from app.db.engine import create_article_fetch_engine
 from app.lambda_handlers.article_fetch_lifecycle import (
@@ -18,18 +20,6 @@ from app.lambda_handlers.article_fetch_lifecycle import (
     open_article_fetch_consumer,
 )
 from app.lambda_handlers.completion.settings import CompletionConsumerSettings
-
-
-class SqsMessageVisibilityClient(Protocol):
-    """配送処理が必要とするメッセージの可視性変更だけを表す。"""
-
-    def change_message_visibility(
-        self,
-        *,
-        QueueUrl: str,
-        ReceiptHandle: str,
-        VisibilityTimeout: int,
-    ) -> object: ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -66,16 +56,8 @@ async def open_completion_resources(
         failure_recorder=failure_recorder,
     ) as consumer:
         try:
-            sqs = Session().create_client(
-                "sqs",
-                region_name=settings.aws_region,
-                config=Config(
-                    proxies={},
-                    ignore_configured_endpoint_urls=True,
-                    connect_timeout=5,
-                    read_timeout=5,
-                    retries={"mode": "standard", "total_max_attempts": 1},
-                ),
+            sqs = create_sqs_visibility_client(
+                session=Session(), region=settings.aws_region
             )
         except Exception as exc:
             failure_recorder.record_initialization_failure("sqs", exc)

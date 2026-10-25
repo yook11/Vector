@@ -2,17 +2,18 @@
 
 import pytest
 
-from app.lambda_handlers.event_reader import EventReader, EventReadFailed
-from app.lambda_handlers.sqs.received_message import (
-    ReceivedMessage,
-    ReceivedMessageInvalidReason,
+from app.aws.lambda_.sqs_input import parse_sqs_lambda_input
+from app.aws.sqs.message import (
+    SqsMessage,
+    SqsMessageInvalidReason,
 )
+from app.lambda_handlers.event_reader import EventReader, EventReadFailed
 
 pytestmark = pytest.mark.unit
 
 
-def _received_message(record: dict[str, object]) -> ReceivedMessage:
-    return ReceivedMessage.from_sqs_record(record, record_index=0)
+def _received_message(record: dict[str, object]) -> SqsMessage:
+    return parse_sqs_lambda_input({"Records": [record]})[0]
 
 
 def test_parsed_body_is_passed_to_parser_and_its_event_returned():
@@ -31,17 +32,17 @@ def test_parsed_body_is_passed_to_parser_and_its_event_returned():
     [
         pytest.param(
             {"messageId": "id"},
-            ReceivedMessageInvalidReason.MISSING_REQUIRED_FIELD,
+            SqsMessageInvalidReason.MISSING_REQUIRED_FIELD,
             id="missing-body",
         ),
         pytest.param(
             {"messageId": "id", "body": 1},
-            ReceivedMessageInvalidReason.INVALID_TYPE,
+            SqsMessageInvalidReason.INVALID_TYPE,
             id="non-str-body",
         ),
         pytest.param(
             {"messageId": "id", "body": "{"},
-            ReceivedMessageInvalidReason.INVALID_JSON,
+            SqsMessageInvalidReason.INVALID_JSON,
             id="invalid-json",
         ),
     ],
