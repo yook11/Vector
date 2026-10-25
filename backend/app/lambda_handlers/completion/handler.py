@@ -15,8 +15,8 @@ from app.aws.lambda_.sqs_input import (
     parse_sqs_lambda_input,
 )
 from app.aws.lambda_.sqs_response import (
-    RedeliveryResponse,
-    redelivery_response,
+    PartialBatchResponse,
+    partial_batch_response,
 )
 from app.collection.article_acquisition.events import IncompleteArticleRecordedEvent
 from app.collection.article_completion.consumer import (
@@ -40,7 +40,7 @@ from app.log_policy.runtime import create_policy_json_logger
 from app.shared.time import elapsed_ms_since
 
 
-def handler(sqs_input: object, context: LambdaContext) -> RedeliveryResponse:
+def handler(sqs_input: object, context: LambdaContext) -> PartialBatchResponse:
     """設定と資源を呼び出し単位で準備し、再配信させるメッセージだけを返す。"""
     with _open_invocation(context) as (settings, logger, failure_recorder):
         return asyncio.run(
@@ -95,7 +95,7 @@ async def _run_completion(
     now: Callable[[], datetime],
     logger: FilteringBoundLogger,
     failure_recorder: ArticleFetchLifecycleRecorder,
-) -> RedeliveryResponse:
+) -> PartialBatchResponse:
     """全IDを検証してから本文・補完結果を個別の配送応答へ対応付ける。"""
     recorder = CompletionMessageRecorder(logger)
     async with open_completion_resources(
@@ -171,7 +171,7 @@ async def _run_completion(
             now=now,
             recorder=recorder,
         )
-        return redelivery_response(
+        return partial_batch_response(
             [
                 redelivery_message.message.message_id
                 for redelivery_message in redelivery_messages

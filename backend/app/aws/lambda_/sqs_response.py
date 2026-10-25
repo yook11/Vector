@@ -1,17 +1,25 @@
-"""SQS受信工程で共有する部分バッチ応答の形式。"""
+"""SQSトリガーへ返すLambdaの部分バッチ応答の形式。"""
 
 from collections.abc import Sequence
 from typing import TypedDict
 
 
-class RedeliveryResponse(TypedDict):
-    """AWSの部分バッチ応答の形式で、再配信させるメッセージをSQSトリガーへ伝える。"""
+class BatchItemFailure(TypedDict):
+    """部分バッチ応答で、削除させないメッセージ1件を受信したmessageIdで示す。"""
 
-    batchItemFailures: list[dict[str, str]]
+    itemIdentifier: str
 
 
-def redelivery_response(message_ids: Sequence[str]) -> RedeliveryResponse:
+class PartialBatchResponse(TypedDict):
+    """載せたメッセージは削除されずに再配信され、載せなかったメッセージは処理済みとして削除される。"""
+
+    batchItemFailures: list[BatchItemFailure]
+
+
+def partial_batch_response(message_ids: Sequence[str]) -> PartialBatchResponse:
     """列挙したメッセージだけを再配信させ、残りは処理済みとして削除させる。"""
-    return RedeliveryResponse(
-        batchItemFailures=[{"itemIdentifier": message_id} for message_id in message_ids]
+    return PartialBatchResponse(
+        batchItemFailures=[
+            BatchItemFailure(itemIdentifier=message_id) for message_id in message_ids
+        ]
     )

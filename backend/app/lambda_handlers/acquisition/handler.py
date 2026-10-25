@@ -13,8 +13,8 @@ from app.aws.lambda_.sqs_input import (
     parse_sqs_lambda_input,
 )
 from app.aws.lambda_.sqs_response import (
-    RedeliveryResponse,
-    redelivery_response,
+    PartialBatchResponse,
+    partial_batch_response,
 )
 from app.aws.sqs.message import SqsMessage
 from app.collection.article_acquisition.consumer_result import (
@@ -34,7 +34,7 @@ from app.log_policy.runtime import create_policy_json_logger
 from app.shared.time import elapsed_ms_since
 
 
-def handler(sqs_input: object, context: object) -> RedeliveryResponse:
+def handler(sqs_input: object, context: object) -> PartialBatchResponse:
     with _open_invocation(context) as (logger, failure_recorder):
         try:
             messages = parse_sqs_lambda_input(sqs_input)
@@ -84,7 +84,7 @@ async def _run(
     *,
     logger: FilteringBoundLogger,
     failure_recorder: ArticleFetchLifecycleRecorder,
-) -> RedeliveryResponse:
+) -> PartialBatchResponse:
     redelivery_message_ids: list[str] = []
     async with open_acquisition_consumer(
         settings, failure_recorder=failure_recorder
@@ -124,4 +124,4 @@ async def _run(
                                 result,
                                 duration_ms=elapsed_ms_since(started_at_seconds),
                             )
-    return redelivery_response(redelivery_message_ids)
+    return partial_batch_response(redelivery_message_ids)

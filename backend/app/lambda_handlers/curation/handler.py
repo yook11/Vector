@@ -12,8 +12,8 @@ from app.aws.lambda_.sqs_input import (
     parse_sqs_lambda_input,
 )
 from app.aws.lambda_.sqs_response import (
-    RedeliveryResponse,
-    redelivery_response,
+    PartialBatchResponse,
+    partial_batch_response,
 )
 from app.collection.events import AnalyzableArticleCreatedEvent
 from app.lambda_handlers.article_analysis_invocation import (
@@ -29,7 +29,7 @@ from app.lambda_handlers.event_reader import EventReader, EventReadFailed
 from app.shared.time import elapsed_ms_since
 
 
-def handler(sqs_input: object, context: object) -> RedeliveryResponse:
+def handler(sqs_input: object, context: object) -> PartialBatchResponse:
     """呼び出しの文脈と設定を用意し、資源解放まで同じロガーを渡す。"""
     with open_article_analysis_invocation(
         "curation", context, CurationConsumerSettings
@@ -50,7 +50,7 @@ async def _run_curation(
     *,
     logger: FilteringBoundLogger,
     failure_recorder: ArticleAnalysisLifecycleRecorder,
-) -> RedeliveryResponse:
+) -> PartialBatchResponse:
     """バッチの各メッセージを順に処理し、再配信させるメッセージのIDだけを返す。"""
 
     async with open_curation_consumer(
@@ -109,4 +109,4 @@ async def _run_curation(
                             )
                             if isinstance(consume_result, RetryCuration):
                                 redelivery_message_ids.append(message.message_id)
-        return redelivery_response(redelivery_message_ids)
+        return partial_batch_response(redelivery_message_ids)
