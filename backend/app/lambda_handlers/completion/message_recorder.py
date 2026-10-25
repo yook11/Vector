@@ -14,10 +14,7 @@ from app.collection.article_completion.consumer import (
 )
 
 if TYPE_CHECKING:
-    from app.aws.lambda_.sqs_input import (
-        ReceiptHandleInvalidError,
-        SqsLambdaInputInvalidError,
-    )
+    from app.aws.lambda_.sqs_input import SqsLambdaInputInvalidError
     from app.collection.retry_at import RetryAt
     from app.lambda_handlers.completion.redelivery_wait import VisibilityTimeout
     from app.lambda_handlers.event_reader import EventReadFailed
@@ -133,19 +130,6 @@ class CompletionMessageRecorder:
     ) -> None:
         self._redelivery_wait_logger(retry_at, message_id=message_id).warning(
             "completion_redelivery_wait", result="insufficient_time"
-        )
-
-    def record_receipt_handle_invalid(
-        self,
-        retry_at: RetryAt,
-        error: ReceiptHandleInvalidError,
-        *,
-        message_id: str,
-    ) -> None:
-        self._redelivery_wait_logger(retry_at, message_id=message_id).error(
-            "completion_redelivery_wait",
-            result="invalid_receipt_handle",
-            exc_info=error,
         )
 
     def record_visibility_change_failed(

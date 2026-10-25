@@ -102,7 +102,7 @@ async def _run_completion(
         settings, failure_recorder=failure_recorder
     ) as resources:
         try:
-            records = parse_sqs_lambda_input(sqs_input)
+            messages = parse_sqs_lambda_input(sqs_input)
         except SqsLambdaInputInvalidError as exc:
             recorder.record_invalid_message_batch(exc)
             raise
@@ -115,25 +115,25 @@ async def _run_completion(
         processing_start_deadline = ProcessingStartDeadline(
             context, before_lambda_limit=timedelta(seconds=60)
         )
-        for record_position, record in enumerate(records):
+        for message_position, message in enumerate(messages):
             if processing_start_deadline.has_passed():
-                for unstarted in records[record_position:]:
+                for unstarted in messages[message_position:]:
                     redelivery_messages.append(RedeliveryMessage(unstarted))
                     with bound_contextvars(message_id=unstarted.message_id):
                         recorder.record_unstarted()
                 break
 
-            with bound_contextvars(message_id=record.message_id):
+            with bound_contextvars(message_id=message.message_id):
                 started_at_seconds = perf_counter()
                 recorder.record_started()
 
-                match event_reader.read(record):
+                match event_reader.read(message):
                     case EventReadFailed() as read_failed:
                         recorder.record_read_failed(
                             read_failed,
                             duration_ms=elapsed_ms_since(started_at_seconds),
                         )
-                        redelivery_messages.append(RedeliveryMessage(record))
+                        redelivery_messages.append(RedeliveryMessage(message))
 
                     case IncompleteArticleRecordedEvent() as article_event:
                         with bound_contextvars(
@@ -150,13 +150,13 @@ async def _run_completion(
                                     exc,
                                     duration_ms=elapsed_ms_since(started_at_seconds),
                                 )
-                                redelivery_messages.append(RedeliveryMessage(record))
+                                redelivery_messages.append(RedeliveryMessage(message))
                                 continue
 
                             if isinstance(completion_result, RetryCompletion):
                                 redelivery_messages.append(
                                     RedeliveryMessage(
-                                        record, completion_result.retry_at
+                                        message, completion_result.retry_at
                                     )
                                 )
                             recorder.record_consumed(
@@ -173,7 +173,7 @@ async def _run_completion(
         )
         return partial_batch_response(
             [
-                redelivery_message.record.message_id
+                redelivery_message.message.message_id
                 for redelivery_message in redelivery_messages
             ]
         )

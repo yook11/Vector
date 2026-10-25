@@ -187,7 +187,8 @@ def test_failed_message_id_preserves_whitespace(runtime):
 def test_missing_body_does_not_reach_consumer(runtime):
     """本文のないメッセージはConsumerへ渡さず、再配信対象にする。"""
     response = module.handler(
-        {"Records": [{"messageId": "missing-body"}]}, runtime.context
+        {"Records": [{"receiptHandle": "receipt-handle", "messageId": "missing-body"}]},
+        runtime.context,
     )
 
     assert response == {"batchItemFailures": [{"itemIdentifier": "missing-body"}]}
@@ -197,7 +198,16 @@ def test_missing_body_does_not_reach_consumer(runtime):
 def test_nontext_body_does_not_reach_consumer(runtime):
     """文字列でない本文はConsumerへ渡さず、再配信対象にする。"""
     response = module.handler(
-        {"Records": [{"messageId": "object-body", "body": {}}]}, runtime.context
+        {
+            "Records": [
+                {
+                    "receiptHandle": "receipt-handle",
+                    "messageId": "object-body",
+                    "body": {},
+                }
+            ]
+        },
+        runtime.context,
     )
 
     assert response == {"batchItemFailures": [{"itemIdentifier": "object-body"}]}
@@ -207,7 +217,15 @@ def test_nontext_body_does_not_reach_consumer(runtime):
 def test_invalid_json_does_not_reach_consumer(runtime):
     """解析できないJSONはConsumerへ渡さず、再配信対象にする。"""
     response = module.handler(
-        {"Records": [{"messageId": "invalid-json", "body": "{invalid"}]},
+        {
+            "Records": [
+                {
+                    "receiptHandle": "receipt-handle",
+                    "messageId": "invalid-json",
+                    "body": "{invalid",
+                }
+            ]
+        },
         runtime.context,
     )
 
@@ -219,7 +237,15 @@ def test_unsupported_version_does_not_reach_consumer(runtime):
     """非対応versionはConsumerへ渡さず、再配信対象にする。"""
     body = json.dumps({**valid_event(), "schema_version": 2})
     response = module.handler(
-        {"Records": [{"messageId": "unsupported-version", "body": body}]},
+        {
+            "Records": [
+                {
+                    "receiptHandle": "receipt-handle",
+                    "messageId": "unsupported-version",
+                    "body": body,
+                }
+            ]
+        },
         runtime.context,
     )
 
@@ -233,7 +259,11 @@ def test_invalid_message_does_not_stop_next_article(runtime):
     """不正JSONの後も、次の正常記事をConsumerへ渡す。"""
     batch = {
         "Records": [
-            {"messageId": "invalid", "body": "{invalid"},
+            {
+                "receiptHandle": "receipt-handle",
+                "messageId": "invalid",
+                "body": "{invalid",
+            },
             record("next", 102),
         ]
     }
@@ -530,7 +560,15 @@ def test_retry_log_failure_does_not_change_redelivery(runtime, broken_output):
 
 def test_invalid_input_log_failure_does_not_change_redelivery(runtime, broken_output):
     """入力不正ログの出力失敗でも再配信対象を維持する。"""
-    batch = {"Records": [{"messageId": "invalid", "body": "private-body"}]}
+    batch = {
+        "Records": [
+            {
+                "receiptHandle": "receipt-handle",
+                "messageId": "invalid",
+                "body": "private-body",
+            }
+        ]
+    }
 
     response = module.handler(batch, runtime.context)
 
@@ -542,7 +580,16 @@ def test_contract_validation_log_failure_preserves_redelivery(runtime, broken_ou
     data = valid_event()
     data["schema_version"] = 2
     response = module.handler(
-        {"Records": [{"messageId": "event", "body": json.dumps(data)}]}, runtime.context
+        {
+            "Records": [
+                {
+                    "receiptHandle": "receipt-handle",
+                    "messageId": "event",
+                    "body": json.dumps(data),
+                }
+            ]
+        },
+        runtime.context,
     )
     assert response == {"batchItemFailures": [{"itemIdentifier": "event"}]}
 
@@ -578,7 +625,13 @@ def test_insufficient_time_precedes_body_parsing(runtime, read_logs):
     """最初から時間不足なら本文不正として解析しない。"""
     runtime.context.get_remaining_time_in_millis.return_value = 59_999
     response = module.handler(
-        {"Records": [{"messageId": "first"}, {"messageId": "next"}]}, runtime.context
+        {
+            "Records": [
+                {"receiptHandle": "receipt-handle", "messageId": "first"},
+                {"receiptHandle": "receipt-handle", "messageId": "next"},
+            ]
+        },
+        runtime.context,
     )
     assert response["batchItemFailures"] == [
         {"itemIdentifier": "first"},

@@ -23,6 +23,10 @@ def test_contract_failure_is_not_wrapped(monkeypatch):
     monkeypatch.setattr(IncompleteArticleRecordedEvent, "from_input", reject)
     with pytest.raises(IncompleteArticleEventInvalidError) as caught:
         IncompleteArticleRecordedEvent.from_input(
-            SqsMessage(message_id="id", body=json.dumps(valid_event())).parse_json()
+            SqsMessage(
+                receipt_handle="receipt-handle",
+                message_id="id",
+                body=json.dumps(valid_event()),
+            ).parse_json()
         )
     assert caught.value is original.value

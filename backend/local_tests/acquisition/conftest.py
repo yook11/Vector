@@ -61,6 +61,7 @@ def invoke_acquisition(system_database, monkeypatch):
         event = {
             "Records": [
                 {
+                    "receiptHandle": "receipt-handle",
                     "messageId": "acquisition-message",
                     "body": json.dumps(schedule.create_request(source_id).to_message()),
                 }

@@ -60,7 +60,7 @@ async def _run_curation(
         # 失敗はメッセージIDで1件ずつ返すため、
         # IDを特定できないレコードがあれば全件を処理せず再配信させる。
         try:
-            records = parse_sqs_lambda_input(sqs_input)
+            messages = parse_sqs_lambda_input(sqs_input)
 
         except SqsLambdaInputInvalidError as exc:
             logger.warning(
@@ -73,18 +73,18 @@ async def _run_curation(
         message_recorder = CurationMessageRecorder(logger)
         redelivery_message_ids: list[str] = []
 
-        for record in records:
-            with bound_contextvars(message_id=record.message_id):
+        for message in messages:
+            with bound_contextvars(message_id=message.message_id):
                 started_at_seconds = perf_counter()
                 message_recorder.record_started()
 
-                match event_reader.read(record):
+                match event_reader.read(message):
                     case EventReadFailed() as read_failed:
                         message_recorder.record_read_failed(
                             read_failed,
                             duration_ms=elapsed_ms_since(started_at_seconds),
                         )
-                        redelivery_message_ids.append(record.message_id)
+                        redelivery_message_ids.append(message.message_id)
 
                     case AnalyzableArticleCreatedEvent() as article_event:
                         with bound_contextvars(
@@ -101,12 +101,12 @@ async def _run_curation(
                                     exc,
                                     duration_ms=elapsed_ms_since(started_at_seconds),
                                 )
-                                redelivery_message_ids.append(record.message_id)
+                                redelivery_message_ids.append(message.message_id)
                                 continue
                             message_recorder.record_consumed(
                                 consume_result,
                                 duration_ms=elapsed_ms_since(started_at_seconds),
                             )
                             if isinstance(consume_result, RetryCuration):
-                                redelivery_message_ids.append(record.message_id)
+                                redelivery_message_ids.append(message.message_id)
         return partial_batch_response(redelivery_message_ids)

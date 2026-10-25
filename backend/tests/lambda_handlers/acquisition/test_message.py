@@ -27,6 +27,8 @@ def test_source_id_requires_positive_integer(source_id):
     with pytest.raises(AcquisitionRequestInvalidError):
         acquisition_request_from_message(
             SqsMessage(
-                message_id="id", body=json.dumps(message(source_id=source_id))
+                receipt_handle="receipt-handle",
+                message_id="id",
+                body=json.dumps(message(source_id=source_id)),
             ).parse_json()
         )

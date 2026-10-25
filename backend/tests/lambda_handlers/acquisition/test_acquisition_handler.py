@@ -80,6 +80,7 @@ def test_id_mismatch_fails_message_without_exposing_body(runtime, read_logs):
         {
             "Records": [
                 {
+                    "receiptHandle": "receipt-handle",
                     "messageId": "invalid",
                     "body": json.dumps(message(request_id="private-id")),
                 }
@@ -120,7 +121,15 @@ def test_cancelled_acquisition_is_not_a_message_failure(runtime):
     runtime.consumer.consume.side_effect = asyncio.CancelledError()
     with pytest.raises(asyncio.CancelledError):
         entrypoint.handler(
-            {"Records": [{"messageId": "cancelled", "body": json.dumps(message())}]},
+            {
+                "Records": [
+                    {
+                        "receiptHandle": "receipt-handle",
+                        "messageId": "cancelled",
+                        "body": json.dumps(message()),
+                    }
+                ]
+            },
             None,
         )
 
@@ -128,7 +137,16 @@ def test_cancelled_acquisition_is_not_a_message_failure(runtime):
 def test_diagnostic_failure_preserves_completed_result(runtime, broken_output):
     """診断の出力障害で確定した取得結果を失敗に変えない。"""
     assert entrypoint.handler(
-        {"Records": [{"messageId": "done", "body": json.dumps(message())}]}, None
+        {
+            "Records": [
+                {
+                    "receiptHandle": "receipt-handle",
+                    "messageId": "done",
+                    "body": json.dumps(message()),
+                }
+            ]
+        },
+        None,
     ) == {"batchItemFailures": []}
 
 
@@ -170,7 +188,15 @@ def test_acquisition_failure_is_redelivered_only_when_decided_to_retry(
     """取得の失敗は再配信と判断したときだけ返し、調査要否のレベルで原因の診断とともに記録する。"""
     runtime.consumer.consume.return_value = result
     response = entrypoint.handler(
-        {"Records": [{"messageId": "failed", "body": json.dumps(message())}]},
+        {
+            "Records": [
+                {
+                    "receiptHandle": "receipt-handle",
+                    "messageId": "failed",
+                    "body": json.dumps(message()),
+                }
+            ]
+        },
         runtime.context,
     )
     assert response == {"batchItemFailures": expected_failures}
@@ -202,7 +228,15 @@ def test_consumer_exception_is_logged_as_call_failure_and_redelivered(
     runtime.consumer.consume.side_effect = RuntimeError("consume-raised")
 
     response = entrypoint.handler(
-        {"Records": [{"messageId": "raised", "body": json.dumps(message())}]},
+        {
+            "Records": [
+                {
+                    "receiptHandle": "receipt-handle",
+                    "messageId": "raised",
+                    "body": json.dumps(message()),
+                }
+            ]
+        },
         runtime.context,
     )
 
@@ -233,8 +267,16 @@ def test_read_failure_is_logged_before_following_message_is_consumed(
     response = entrypoint.handler(
         {
             "Records": [
-                {"messageId": "invalid-json", "body": "private-invalid-json"},
-                {"messageId": "following", "body": json.dumps(message())},
+                {
+                    "receiptHandle": "receipt-handle",
+                    "messageId": "invalid-json",
+                    "body": "private-invalid-json",
+                },
+                {
+                    "receiptHandle": "receipt-handle",
+                    "messageId": "following",
+                    "body": json.dumps(message()),
+                },
             ]
         },
         runtime.context,
@@ -300,7 +342,11 @@ def test_mixed_batch_redelivers_only_retry_results_and_call_failures(
     response = entrypoint.handler(
         {
             "Records": [
-                {"messageId": message_id, "body": json.dumps(message())}
+                {
+                    "receiptHandle": "receipt-handle",
+                    "messageId": message_id,
+                    "body": json.dumps(message()),
+                }
                 for message_id in message_ids
             ]
         },
@@ -330,7 +376,16 @@ def test_diagnostic_failure_preserves_retry_result(runtime, broken_output):
     )
 
     response = entrypoint.handler(
-        {"Records": [{"messageId": "retry", "body": json.dumps(message())}]}, None
+        {
+            "Records": [
+                {
+                    "receiptHandle": "receipt-handle",
+                    "messageId": "retry",
+                    "body": json.dumps(message()),
+                }
+            ]
+        },
+        None,
     )
 
     assert response == {"batchItemFailures": [{"itemIdentifier": "retry"}]}

@@ -64,6 +64,7 @@ def test_sender_body_round_trip_keeps_identity_time_and_payload(data):
     )
     event = ArticleAssessedInScopeEvent.from_input(
         SqsMessage(
+            receipt_handle="receipt-handle",
             message_id="id",
             body=build_assessed_in_scope_message(
                 EventEnvelope(
@@ -100,7 +101,9 @@ def test_sender_and_receiver_share_validation_details(data, changes):
     data.update(changes)
     with pytest.raises(AssessedEventInvalidError) as received:
         ArticleAssessedInScopeEvent.from_input(
-            SqsMessage(message_id="id", body=json.dumps(data)).parse_json()
+            SqsMessage(
+                receipt_handle="receipt-handle", message_id="id", body=json.dumps(data)
+            ).parse_json()
         )
     with pytest.raises(AssessedEventInvalidError) as caught:
         build_assessed_in_scope_message(

@@ -253,45 +253,6 @@ async def test_insufficient_time_stops_remaining_waits(delivery, read_logs):
 
 
 @pytest.mark.asyncio
-async def test_invalid_receipt_skips_only_its_wait(delivery, read_logs):
-    """receiptHandle不正は当該設定だけを省略する。"""
-    delivery.first, delivery.second = parse_sqs_lambda_input(
-        {
-            "Records": [
-                {
-                    "messageId": "first",
-                    "body": "{}",
-                    "receiptHandle": {"private-key": "private-value"},
-                },
-                {"messageId": "second", "body": "{}", "receiptHandle": "valid"},
-            ]
-        }
-    )
-    retry = RetryAt(delivery.now + timedelta(seconds=120))
-    await apply(
-        delivery,
-        [
-            RedeliveryMessage(delivery.first, retry),
-            RedeliveryMessage(delivery.second, retry),
-        ],
-    )
-    assert delivery.sqs.change_message_visibility.call_args_list == [
-        call(QueueUrl="configured-queue", ReceiptHandle="valid", VisibilityTimeout=120)
-    ]
-    assert read_logs()[0] == {
-        "event": "completion_redelivery_wait",
-        "level": "error",
-        "log_policy": "external_content_fetch",
-        "message_id": "first",
-        "retry_at": "2026-09-14T00:02:00+00:00",
-        "result": "invalid_receipt_handle",
-        "error_class": ("app.aws.lambda_.sqs_input.ReceiptHandleInvalidError"),
-        "error_message": "Receipt handle validation failed: invalid_type",
-        "error_details": {"reason": "invalid_type", "field": "receiptHandle"},
-    }
-
-
-@pytest.mark.asyncio
 async def test_logging_failure_does_not_stop_waits(delivery, monkeypatch):
     """診断障害が後続の待機設定を妨げない。"""
 

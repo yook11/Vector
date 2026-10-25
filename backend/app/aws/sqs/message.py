@@ -1,7 +1,7 @@
-"""IDと本文を持つSQSメッセージを表し、本文をJSONとして解析する。"""
+"""受信したSQSメッセージを、検証済みのメッセージか本文を使えないメッセージとして表す。"""
 
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import StrEnum
 
 from app.shared.errors import ApplicationError
@@ -29,9 +29,10 @@ class SqsMessageInvalidError(ApplicationError):
 
 @dataclass(frozen=True, slots=True)
 class SqsMessage:
-    """IDで1件を特定でき、本文が文字列であるSQSメッセージ。"""
+    """ID・受信ハンドル・文字列の本文を検証済みのSQSメッセージ。"""
 
     message_id: str
+    receipt_handle: str = field(repr=False)
     body: str
 
     def parse_json(self) -> object:
@@ -48,6 +49,18 @@ class SqsMessage:
         raise SqsMessageInvalidError(
             reason=SqsMessageInvalidReason.INVALID_JSON, field="body"
         )
+
+
+@dataclass(frozen=True, slots=True)
+class InvalidSqsMessage:
+    """IDと受信ハンドルは検証済みだが、本文を使えないSQSメッセージ。"""
+
+    message_id: str
+    receipt_handle: str = field(repr=False)
+    error: SqsMessageInvalidError
+
+
+type ReceivedSqsMessage = SqsMessage | InvalidSqsMessage
 
 
 def _unique_object(pairs: list[tuple[str, object]]) -> dict[str, object]:

@@ -100,7 +100,11 @@ async def test_failed_messages_are_returned_and_later_article_completes(
     batch = {
         "Records": [
             message("retry", retry_article),
-            {"messageId": "invalid", "body": "{invalid-json"},
+            {
+                "receiptHandle": "receipt-handle",
+                "messageId": "invalid",
+                "body": "{invalid-json",
+            },
             message("success", successful_article),
         ],
     }
@@ -201,6 +205,7 @@ async def test_invalid_event_is_returned_without_changing_article(
     batch = {
         "Records": [
             {
+                "receiptHandle": "receipt-handle",
                 "messageId": "invalid",
                 "body": json.dumps({"payload": {"incomplete_article_id": article.id}}),
             },

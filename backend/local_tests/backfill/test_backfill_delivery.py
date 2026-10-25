@@ -37,7 +37,9 @@ async def test_curation_deletes_aged_out_article_and_delivers_saved_article(
     assert len(batch["Entries"]) == 1
     event = AnalyzableArticleCreatedEvent.from_input(
         SqsMessage(
-            message_id="id", body=batch["Entries"][0]["MessageBody"]
+            receipt_handle="receipt-handle",
+            message_id="id",
+            body=batch["Entries"][0]["MessageBody"],
         ).parse_json()
     )
     assert event.payload.model_dump() == {"analyzable_article_id": article_id}
@@ -67,7 +69,9 @@ async def test_assessment_excludes_aged_out_curation_and_delivers_saved_curation
     assert len(batch["Entries"]) == 1
     event = ArticleCuratedSignalEvent.from_input(
         SqsMessage(
-            message_id="id", body=batch["Entries"][0]["MessageBody"]
+            receipt_handle="receipt-handle",
+            message_id="id",
+            body=batch["Entries"][0]["MessageBody"],
         ).parse_json()
     )
     assert event.payload.model_dump() == {
@@ -105,7 +109,9 @@ async def test_embedding_excludes_aged_out_analysis_and_delivers_saved_assessmen
     assert len(batch["Entries"]) == 1
     event = ArticleAssessedInScopeEvent.from_input(
         SqsMessage(
-            message_id="id", body=batch["Entries"][0]["MessageBody"]
+            receipt_handle="receipt-handle",
+            message_id="id",
+            body=batch["Entries"][0]["MessageBody"],
         ).parse_json()
     )
     assert event.payload.model_dump() == {
@@ -141,7 +147,9 @@ async def test_completion_closes_aged_out_row_and_delivers_saved_incomplete_arti
     assert len(batch["Entries"]) == 1
     event = IncompleteArticleRecordedEvent.from_input(
         SqsMessage(
-            message_id="id", body=batch["Entries"][0]["MessageBody"]
+            receipt_handle="receipt-handle",
+            message_id="id",
+            body=batch["Entries"][0]["MessageBody"],
         ).parse_json()
     )
     assert event.payload.incomplete_article_id == incomplete_id
@@ -162,14 +170,18 @@ async def test_next_invocation_replays_unfinished_article(system_database, deliv
     await asyncio.to_thread(delivery.handler.curation_handler, {}, None)
     first = AnalyzableArticleCreatedEvent.from_input(
         SqsMessage(
-            message_id="id", body=delivery.batches[0]["Entries"][0]["MessageBody"]
+            receipt_handle="receipt-handle",
+            message_id="id",
+            body=delivery.batches[0]["Entries"][0]["MessageBody"],
         ).parse_json()
     )
     await asyncio.to_thread(delivery.handler.curation_handler, {}, None)
     assert len(delivery.batches) == 2
     second = AnalyzableArticleCreatedEvent.from_input(
         SqsMessage(
-            message_id="id", body=delivery.batches[1]["Entries"][0]["MessageBody"]
+            receipt_handle="receipt-handle",
+            message_id="id",
+            body=delivery.batches[1]["Entries"][0]["MessageBody"],
         ).parse_json()
     )
     assert first.event_id != second.event_id

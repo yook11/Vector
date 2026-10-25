@@ -478,7 +478,11 @@ async def test_invalid_event_is_stopped_and_valid_event_is_delivered(
         entries = kwargs["Entries"]
         assert len(entries) == 1
         event = ArticleAssessedInScopeEvent.from_input(
-            SqsMessage(message_id="id", body=entries[0]["MessageBody"]).parse_json()
+            SqsMessage(
+                receipt_handle="receipt-handle",
+                message_id="id",
+                body=entries[0]["MessageBody"],
+            ).parse_json()
         )
         assert event.event_id == good.event_id
         assert event.payload.model_dump() == good.before["payload"]

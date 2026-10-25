@@ -128,7 +128,15 @@ def test_handler_outputs_json_without_global_logging_configuration(
             scoped.setattr(structlog, "configure", configure_spy)
 
             module.handler(
-                {"Records": [{"messageId": "message-001", "body": valid_body()}]},
+                {
+                    "Records": [
+                        {
+                            "receiptHandle": "receipt-handle",
+                            "messageId": "message-001",
+                            "body": valid_body(),
+                        }
+                    ]
+                },
                 SimpleNamespace(aws_request_id="request-001"),
             )
 
@@ -151,14 +159,14 @@ def test_batch_reports_only_failed_message_ids(wiring):
     """成功と再試行しない失敗を含めず、再試行する失敗と例外のIDだけを入力順で返す。"""
     body = valid_body()
     messages = [
-        {"messageId": "saved-before", "body": body},
-        {"messageId": "failed-first", "body": body},
-        {"messageId": "already", "body": body},
-        {"messageId": "rejected", "body": body},
-        {"messageId": "not-retried", "body": body},
-        {"messageId": "retried", "body": body},
-        {"messageId": "saved-after", "body": body},
-        {"messageId": "failed-last", "body": body},
+        {"receiptHandle": "receipt-handle", "messageId": "saved-before", "body": body},
+        {"receiptHandle": "receipt-handle", "messageId": "failed-first", "body": body},
+        {"receiptHandle": "receipt-handle", "messageId": "already", "body": body},
+        {"receiptHandle": "receipt-handle", "messageId": "rejected", "body": body},
+        {"receiptHandle": "receipt-handle", "messageId": "not-retried", "body": body},
+        {"receiptHandle": "receipt-handle", "messageId": "retried", "body": body},
+        {"receiptHandle": "receipt-handle", "messageId": "saved-after", "body": body},
+        {"receiptHandle": "receipt-handle", "messageId": "failed-last", "body": body},
     ]
     wiring.consumer.consume.side_effect = [
         AssessmentCompletion(AssessmentCompletionKind.IN_SCOPE, 901),
@@ -211,7 +219,16 @@ def test_failure_not_retried_is_completed_with_its_classification(
     wiring.consumer.consume.return_value = NoRetryAssessment(cause)
 
     response = module.handler(
-        {"Records": [{"messageId": "not-retried", "body": valid_body()}]}, None
+        {
+            "Records": [
+                {
+                    "receiptHandle": "receipt-handle",
+                    "messageId": "not-retried",
+                    "body": valid_body(),
+                }
+            ]
+        },
+        None,
     )
 
     assert response == {"batchItemFailures": []}
@@ -234,7 +251,16 @@ def test_retry_decision_is_reported_like_a_processing_failure(wiring, capsys):
     )
 
     response = module.handler(
-        {"Records": [{"messageId": "retried", "body": valid_body()}]}, None
+        {
+            "Records": [
+                {
+                    "receiptHandle": "receipt-handle",
+                    "messageId": "retried",
+                    "body": valid_body(),
+                }
+            ]
+        },
+        None,
     )
 
     assert response == {"batchItemFailures": [{"itemIdentifier": "retried"}]}
@@ -257,7 +283,15 @@ def test_consumer_exception_is_logged_as_call_failure_and_redelivered(
     wiring.consumer.consume.side_effect = RuntimeError("consume-raised")
 
     response = module.handler(
-        {"Records": [{"messageId": "raised", "body": valid_body()}]},
+        {
+            "Records": [
+                {
+                    "receiptHandle": "receipt-handle",
+                    "messageId": "raised",
+                    "body": valid_body(),
+                }
+            ]
+        },
         SimpleNamespace(aws_request_id="request-001"),
     )
 
@@ -285,10 +319,12 @@ def test_each_payload_is_passed_to_the_shared_consumer(wiring):
     """各payloadを、そのメッセージの相関情報だけを置いた文脈でConsumerへ渡す。"""
     messages = [
         {
+            "receiptHandle": "receipt-handle",
             "messageId": "first",
             "body": valid_body(curation_id=11, analyzable_article_id=101),
         },
         {
+            "receiptHandle": "receipt-handle",
             "messageId": "second",
             "body": valid_body(curation_id=22, analyzable_article_id=202),
         },
@@ -344,10 +380,12 @@ async def test_messages_finish_sequentially_in_input_order(wiring):
     """先行メッセージの完了を待ってから、次のメッセージを処理する。"""
     messages = [
         {
+            "receiptHandle": "receipt-handle",
             "messageId": "first",
             "body": valid_body(curation_id=11, analyzable_article_id=101),
         },
         {
+            "receiptHandle": "receipt-handle",
             "messageId": "second",
             "body": valid_body(curation_id=22, analyzable_article_id=202),
         },
@@ -386,7 +424,10 @@ def test_empty_batch_completes_without_consumption(wiring):
 def test_invalid_message_id_rejects_batch_before_consumption(wiring):
     """後続のIDが欠けていたら、先行分も処理せずバッチ全体を失敗にする。"""
     body = valid_body()
-    messages = [{"messageId": "valid", "body": body}, {"body": body}]
+    messages = [
+        {"receiptHandle": "receipt-handle", "messageId": "valid", "body": body},
+        {"body": body},
+    ]
 
     with pytest.raises(SqsLambdaInputInvalidError):
         module.handler({"Records": messages}, None)
@@ -399,17 +440,38 @@ def test_invalid_message_id_rejects_batch_before_consumption(wiring):
 @pytest.mark.parametrize(
     "invalid_message",
     [
-        pytest.param({"messageId": "invalid"}, id="missing-body"),
-        pytest.param({"messageId": "invalid", "body": "not-json"}, id="invalid-json"),
         pytest.param(
-            {"messageId": "invalid", "body": valid_body(curation_id=0)},
+            {"receiptHandle": "receipt-handle", "messageId": "invalid"},
+            id="missing-body",
+        ),
+        pytest.param(
+            {
+                "receiptHandle": "receipt-handle",
+                "messageId": "invalid",
+                "body": "not-json",
+            },
+            id="invalid-json",
+        ),
+        pytest.param(
+            {
+                "receiptHandle": "receipt-handle",
+                "messageId": "invalid",
+                "body": valid_body(curation_id=0),
+            },
             id="invalid-event",
         ),
     ],
 )
 def test_invalid_message_does_not_prevent_following_message(wiring, invalid_message):
     """本文・イベント不正はそのメッセージだけの失敗とし、後続を処理する。"""
-    messages = [invalid_message, {"messageId": "following", "body": valid_body()}]
+    messages = [
+        invalid_message,
+        {
+            "receiptHandle": "receipt-handle",
+            "messageId": "following",
+            "body": valid_body(),
+        },
+    ]
 
     response = module.handler({"Records": messages}, None)
 
@@ -422,8 +484,12 @@ def test_invalid_message_does_not_prevent_following_message(wiring, invalid_mess
 def test_duplicate_id_is_rejected_before_reading_bodies(wiring):
     """本文欠落を個別処理する前に、重複IDをバッチ全体の失敗にする。"""
     messages = [
-        {"messageId": "duplicate"},
-        {"messageId": "duplicate", "body": valid_body()},
+        {"receiptHandle": "receipt-handle", "messageId": "duplicate"},
+        {
+            "receiptHandle": "receipt-handle",
+            "messageId": "duplicate",
+            "body": valid_body(),
+        },
     ]
 
     with pytest.raises(SqsLambdaInputInvalidError) as caught:
@@ -438,7 +504,16 @@ def test_failed_message_id_is_not_trimmed(wiring):
     wiring.consumer.consume.side_effect = RuntimeError("processing-failed")
 
     response = module.handler(
-        {"Records": [{"messageId": " failed ", "body": valid_body()}]}, None
+        {
+            "Records": [
+                {
+                    "receiptHandle": "receipt-handle",
+                    "messageId": " failed ",
+                    "body": valid_body(),
+                }
+            ]
+        },
+        None,
     )
 
     assert response == {"batchItemFailures": [{"itemIdentifier": " failed "}]}
@@ -457,7 +532,16 @@ def test_completion_is_not_reported_as_batch_failure(wiring, completion):
     wiring.consumer.consume.return_value = completion
 
     response = module.handler(
-        {"Records": [{"messageId": "completed", "body": valid_body()}]}, None
+        {
+            "Records": [
+                {
+                    "receiptHandle": "receipt-handle",
+                    "messageId": "completed",
+                    "body": valid_body(),
+                }
+            ]
+        },
+        None,
     )
 
     assert response == {"batchItemFailures": []}
@@ -466,7 +550,9 @@ def test_completion_is_not_reported_as_batch_failure(wiring, completion):
 def test_unexpected_parser_failure_does_not_stop_batch(wiring, monkeypatch):
     """想定外の解析障害も、そのメッセージだけの失敗として後続を処理する。"""
     body = valid_body()
-    parsed_body = SqsMessage(message_id="id", body=body).parse_json()
+    parsed_body = SqsMessage(
+        receipt_handle="receipt-handle", message_id="id", body=body
+    ).parse_json()
     parsed = module.ArticleCuratedSignalEvent.from_input(parsed_body)
     monkeypatch.setattr(
         SqsMessage,
@@ -474,8 +560,8 @@ def test_unexpected_parser_failure_does_not_stop_batch(wiring, monkeypatch):
         Mock(side_effect=[RuntimeError("private-parser"), parsed_body]),
     )
     messages = [
-        {"messageId": "parse-failed", "body": body},
-        {"messageId": "following", "body": body},
+        {"receiptHandle": "receipt-handle", "messageId": "parse-failed", "body": body},
+        {"receiptHandle": "receipt-handle", "messageId": "following", "body": body},
     ]
 
     response = module.handler({"Records": messages}, None)
@@ -493,8 +579,8 @@ async def test_control_exception_stops_batch(wiring, interruption):
     wiring.consumer.consume.side_effect = interruption
     body = valid_body()
     messages = [
-        {"messageId": "interrupted", "body": body},
-        {"messageId": "unprocessed", "body": body},
+        {"receiptHandle": "receipt-handle", "messageId": "interrupted", "body": body},
+        {"receiptHandle": "receipt-handle", "messageId": "unprocessed", "body": body},
     ]
 
     with pytest.raises(type(interruption)) as caught:
@@ -517,7 +603,15 @@ def test_settings_failure_is_logged_and_aborts_entire_batch(wiring, read_logs):
 
     with pytest.raises(RuntimeError) as caught:
         module.handler(
-            {"Records": [{"messageId": "unprocessed", "body": valid_body()}]},
+            {
+                "Records": [
+                    {
+                        "receiptHandle": "receipt-handle",
+                        "messageId": "unprocessed",
+                        "body": valid_body(),
+                    }
+                ]
+            },
             SimpleNamespace(aws_request_id="request-001"),
         )
 
@@ -558,7 +652,15 @@ async def test_processing_cancellation_leaves_borrowed_scope(wiring):
 
     with pytest.raises(asyncio.CancelledError):
         await module._run_assessment(
-            {"Records": [{"messageId": "cancelled", "body": valid_body()}]},
+            {
+                "Records": [
+                    {
+                        "receiptHandle": "receipt-handle",
+                        "messageId": "cancelled",
+                        "body": valid_body(),
+                    }
+                ]
+            },
             wiring.settings,
             wiring.notifier,
             logger=wiring.log,
@@ -581,7 +683,16 @@ def test_ready_build_rejection_is_not_reported_as_batch_failure(wiring, reason):
         AssessmentReadyBuildRejected(reason)
     )
     response = module.handler(
-        {"Records": [{"messageId": "rejected", "body": valid_body()}]}, None
+        {
+            "Records": [
+                {
+                    "receiptHandle": "receipt-handle",
+                    "messageId": "rejected",
+                    "body": valid_body(),
+                }
+            ]
+        },
+        None,
     )
     assert response == {"batchItemFailures": []}
 
@@ -606,7 +717,15 @@ def test_shared_logging_context_is_scoped_to_invocation_and_notification(wiring)
     with structlog.contextvars.bound_contextvars(request_id="outer-request"):
         outer_context = structlog.contextvars.get_contextvars()
         module.handler(
-            {"Records": [{"messageId": "message-001", "body": valid_body()}]},
+            {
+                "Records": [
+                    {
+                        "receiptHandle": "receipt-handle",
+                        "messageId": "message-001",
+                        "body": valid_body(),
+                    }
+                ]
+            },
             SimpleNamespace(aws_request_id="request-001"),
         )
         assert structlog.contextvars.get_contextvars() == outer_context

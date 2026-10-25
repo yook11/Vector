@@ -30,7 +30,9 @@ def data():
 def test_parser_returns_whole_event_and_consumer_payload(data):
     """本文からイベント全体を復元し、Consumerが借用する既存payload型を保持する。"""
     event = ArticleCuratedSignalEvent.from_input(
-        SqsMessage(message_id="id", body=json.dumps(data)).parse_json()
+        SqsMessage(
+            receipt_handle="receipt-handle", message_id="id", body=json.dumps(data)
+        ).parse_json()
     )
     assert isinstance(event, ArticleCuratedSignalEvent)
     assert event.model_dump(mode="json") == data
@@ -41,7 +43,9 @@ def test_valid_json_with_wrong_root_uses_event_contract():
     """JSONとして正しい配列は解析不正にせず、共有契約の構造不正として返す。"""
     with pytest.raises(CuratedEventInvalidError) as caught:
         ArticleCuratedSignalEvent.from_input(
-            SqsMessage(message_id="id", body="[]").parse_json()
+            SqsMessage(
+                receipt_handle="receipt-handle", message_id="id", body="[]"
+            ).parse_json()
         )
     assert caught.value.invalid.reason == "invalid_envelope"
 
@@ -64,7 +68,9 @@ def test_shared_rejection_preserves_reason_and_details_without_exception_chain(
         ArticleCuratedSignalEvent.from_input(data)
     with pytest.raises(CuratedEventInvalidError) as caught:
         ArticleCuratedSignalEvent.from_input(
-            SqsMessage(message_id="id", body=json.dumps(data)).parse_json()
+            SqsMessage(
+                receipt_handle="receipt-handle", message_id="id", body=json.dumps(data)
+            ).parse_json()
         )
     error = caught.value
     assert error.invalid.reason.value == shared.value.invalid.reason.value
@@ -86,7 +92,9 @@ def test_unexpected_failure_and_process_exit_pass_through(data, monkeypatch, ori
     monkeypatch.setattr(ArticleCuratedSignalEvent, "from_input", fail)
     with pytest.raises(type(original)) as caught:
         ArticleCuratedSignalEvent.from_input(
-            SqsMessage(message_id="id", body=json.dumps(data)).parse_json()
+            SqsMessage(
+                receipt_handle="receipt-handle", message_id="id", body=json.dumps(data)
+            ).parse_json()
         )
     assert caught.value is original
 
@@ -102,6 +110,8 @@ def test_contract_failure_is_not_wrapped(data, monkeypatch):
     monkeypatch.setattr(ArticleCuratedSignalEvent, "from_input", reject)
     with pytest.raises(CuratedEventInvalidError) as caught:
         ArticleCuratedSignalEvent.from_input(
-            SqsMessage(message_id="id", body=json.dumps(data)).parse_json()
+            SqsMessage(
+                receipt_handle="receipt-handle", message_id="id", body=json.dumps(data)
+            ).parse_json()
         )
     assert caught.value is original.value
