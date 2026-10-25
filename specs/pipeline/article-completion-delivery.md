@@ -12,7 +12,7 @@ Status: スライス1〜4の起動・資源管理、抽出の独立、入力検�
 
 - [Consumer仕様](./article-completion-consumer.md)と[Consumer](../../backend/app/collection/article_completion/consumer.py): DB確定・先勝ち・失敗判断を所有し、SQS操作は行わない。
 - [取得イベント](../../backend/app/collection/article_acquisition/events.py): `article.incomplete_recorded`、schema version 1、正の`source_id`と`incomplete_article_id`を持つ。
-- [Lambda入力](../../backend/app/aws/lambda_/sqs_input.py): `parse_sqs_lambda_input()`がmessageIdを全件事前検証し、`SqsLambdaRecord`が本文とreceiptHandleを用途ごとに遅延検証する。
+- [Lambda入力](../../backend/app/aws/lambda_/sqs_input.py): `parse_sqs_lambda_input()`がmessageIdとreceiptHandleを全件事前検証し、本文を検証して[SQSメッセージ](../../backend/app/aws/sqs/message.py)へ変換する。
 - [AIの資源管理](../../backend/app/lambda_handlers/article_analysis_lifecycle.py): 初期化・解放の参照元だが、AIクライアントやAPIキーへの依存をそのまま補完へ持ち込まない。
 - [外部HTTP](../../backend/app/http/external.py)、[ソース型](../../backend/app/collection/sources/article_source.py)、[取得ツール](../../backend/app/collection/article_acquisition/tools/reader_tools.py): HTTP設定は独立しているが、ソースの型参照からアプリ全体の設定を読み込む経路がある。
 - [HTML抽出](../../backend/app/collection/article_completion/html_extraction.py): スライス2着手時点では抽出器のプロセス内重複判定を利用し、記事・試行ごとの独立を保証していなかった。
@@ -117,7 +117,7 @@ SQSクライアントは接続・読取待ち各5秒、SDKの総試行回数1回
 
 [補完handler](../../backend/app/lambda_handlers/completion/handler.py)は既存の設定と`open_completion_resources`で呼び出し専用の資源を開き、`parse_sqs_lambda_input()`で全IDを検証してから逐次処理する。同期の`handler(lambda_event, context)`が非同期処理を実行し、失敗IDの原文と入力順を保持した`batchItemFailures`を返す。空バッチは空の失敗一覧となる。
 
-[Lambda入力](../../backend/app/aws/lambda_/sqs_input.py)の`SqsLambdaRecord.read_message()`が本文の存在・文字列型を検証して[SQSメッセージ](../../backend/app/aws/sqs/message.py)の`SqsMessage`にし、`SqsMessage.parse_json()`がJSON解析、重複キー・非標準数値の拒否を担当し、解析結果を[取得工程のイベント契約](../../backend/app/collection/article_acquisition/events.py)の`IncompleteArticleRecordedEvent.from_input()`へ渡す。イベント型が既存Outboxのenvelopeと`IncompleteArticleRecorded`を使い、UUID・種類・version・タイムゾーン付き日時、必須項目・余分な項目・両IDの厳密な正整数を検証する。形式検証と失敗変換・送出は`from_input()`へ集約し、違反の変換処理もイベント型のprivateメソッドに置く。不正時の例外には固定の理由・項目・検証コードだけを保持し、入力値を持つ元の検証例外をcontextへ引き継がない。
+[Lambda入力](../../backend/app/aws/lambda_/sqs_input.py)の`parse_sqs_lambda_input()`が本文の存在・文字列型を検証して[SQSメッセージ](../../backend/app/aws/sqs/message.py)の`SqsMessage`にし、`SqsMessage.parse_json()`がJSON解析、重複キー・非標準数値の拒否を担当し、解析結果を[取得工程のイベント契約](../../backend/app/collection/article_acquisition/events.py)の`IncompleteArticleRecordedEvent.from_input()`へ渡す。イベント型が既存Outboxのenvelopeと`IncompleteArticleRecorded`を使い、UUID・種類・version・タイムゾーン付き日時、必須項目・余分な項目・両IDの厳密な正整数を検証する。形式検証と失敗変換・送出は`from_input()`へ集約し、違反の変換処理もイベント型のprivateメソッドに置く。不正時の例外には固定の理由・項目・検証コードだけを保持し、入力値を持つ元の検証例外をcontextへ引き継がない。
 
 本文不正はConsumerを呼ばず個別失敗とし、正常入力では`incomplete_article_id`だけを渡す。成功・処理不要・closed確定は受信完了、再試行判断と配送側の通常例外は当該メッセージの失敗となる。初期化や全ID検証の失敗は呼び出し全体へ伝播し、外部キャンセルを個別失敗へ変換しない。DBの確定やHTTP失敗分類、メッセージ削除・再投入を配送側で行わない。
 
@@ -143,13 +143,13 @@ EventInvalidへの命名統一後の最終検証（2026-09-14）: コミット�
 
 `RetryAt(value: datetime)`を補完工程に置き、タイムゾーン付き日時をUTCへ正規化して不変に保持する。`remaining(now)`は期限経過後に0を返すが、元の日時を変更しない。タイムゾーンなしの値・基準日時は拒否する。既存のRetry-After分類は維持し、指定なし・不正・0秒・分類時点で期限経過済みの場合は`None`、有効な未来日時だけを`RetryAt`にする。（2026-09-26に`RetryAt`とRetry-After解釈は[外部取得の失敗判断](../collection/external-fetch-failure-classification.md)としてcollection直下へ移した。）
 
-配送側の`RedeliveryMessage(record, retry_at)`は再配信させるレコードと任意の待機時刻であり、SQSの操作情報や11時間上限を補完工程へ持ち込まない。Queue URLは必須設定`SQS_ARTICLE_COMPLETION_QUEUE_URL`から取得する。スライス3の補完用設定には該当項目がなかったため、スライス4で追加した。設定の欠落・型不正・空文字・空白のみは起動失敗とし、本文から配送先を選ばない。AWSへの環境変数設定と権限適用はスライス5で行う。
+配送側の`RedeliveryMessage(message, retry_at)`は再配信させるメッセージと任意の待機時刻であり、SQSの操作情報や11時間上限を補完工程へ持ち込まない。Queue URLは必須設定`SQS_ARTICLE_COMPLETION_QUEUE_URL`から取得する。スライス3の補完用設定には該当項目がなかったため、スライス4で追加した。設定の欠落・型不正・空文字・空白のみは起動失敗とし、本文から配送先を選ばない。AWSへの環境変数設定と権限適用はスライス5で行う。
 
 同期handlerはLambda contextとUTC時計を内部へ渡す。残り時間はAWSの契約を前提として`context.get_remaining_time_in_millis()`で直接取得し、メソッドの存在・callable・戻り値の型や符号を独自に再検証しない。取得時の例外は呼び出し全体へ伝播させ、無制限の代替値を置かない。資源初期化と全messageId検証後、各本文処理前に残り時間を確認し、60,000ms以上なら開始する。未満なら現在位置以降を未着手として失敗一覧へ追加する。時間不足でConsumerを呼んだり、記事・監査を変更したりしない。
 
-再配信させるメッセージを待機時刻とともに1つの一覧で保持し、記事処理終了後に待機時刻のあるものだけを入力順で設定する。各指示で元の時刻から残り時間を計算し直し、期限経過なら省略する。残り実行時間が20,000ms未満なら残りの設定を打ち切る。対象レコードのreceiptHandleはこの段階でだけ検証し、欠落・非文字列・空白のみなら当該操作だけを省略する。有効な文字列は加工しない。
+再配信させるメッセージを待機時刻とともに1つの一覧で保持し、記事処理終了後に待機時刻のあるものだけを入力順で設定する。各指示で元の時刻から残り時間を計算し直し、期限経過なら省略する。残り実行時間が20,000ms未満なら残りの設定を打ち切る。receiptHandleはSQSメッセージへの変換時にmessageIdと同じく全件検証し、欠落・非文字列・空白のみなら呼び出し全体の不正とする。有効な文字列は加工しない。
 
-残り秒数を切り上げ、最大39,600秒で可視性変更を要求する。設定成功・通常障害・省略のいずれでもmessageIdを失敗一覧から除かない。元の時刻、要求秒数、成功時の設定秒数、上限適用を区別し、設定失敗を設定済みと記録しない。期限経過・操作情報不正・設定時間不足・記事未着手も区別する。ログには本文・receiptHandle・生ヘッダー・例外の自由文を含めず、診断障害は配送結果を変更しない。
+残り秒数を切り上げ、最大39,600秒で可視性変更を要求する。設定成功・通常障害・省略のいずれでもmessageIdを失敗一覧から除かない。元の時刻、要求秒数、成功時の設定秒数、上限適用を区別し、設定失敗を設定済みと記録しない。期限経過・設定時間不足・記事未着手も区別する。ログには本文・receiptHandle・生ヘッダー・例外の自由文を含めず、診断障害は配送結果を変更しない。
 
 同期SDK通信を`asyncio.to_thread`で1件ずつ実行する。Taskを保持して`asyncio.shield`で保護し、通信中にキャンセルされた場合は追加のキャンセルも含めて開始済み通信を回収してから資源を閉じ、元のキャンセルを伝播する。回収中の通常のSDK障害でキャンセルを置き換えない。開始済みの記事処理・SDK通信・資源解放への強制中断は追加しない。
 
