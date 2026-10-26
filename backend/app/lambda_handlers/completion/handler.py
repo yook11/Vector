@@ -10,6 +10,14 @@ import structlog
 from structlog.contextvars import bound_contextvars
 from structlog.typing import FilteringBoundLogger
 
+from app.aws.lambda_.sqs_input import (
+    SqsLambdaInputInvalidError,
+    parse_sqs_lambda_input,
+)
+from app.aws.lambda_.sqs_response import (
+    PartialBatchResponse,
+    partial_batch_response,
+)
 from app.collection.article_acquisition.events import IncompleteArticleRecordedEvent
 from app.collection.article_completion.consumer import (
     RetryCompletion,
@@ -27,25 +35,17 @@ from app.lambda_handlers.completion.redelivery_wait import (
 )
 from app.lambda_handlers.completion.settings import CompletionConsumerSettings
 from app.lambda_handlers.event_reader import EventReader, EventReadFailed
-from app.lambda_handlers.sqs.received_message import (
-    ReceivedMessageBatch,
-    ReceivedMessageBatchInvalidError,
-)
-from app.lambda_handlers.sqs.response import (
-    RedeliveryResponse,
-    redelivery_response,
-)
 from app.log_policy.policies.external_content import EXTERNAL_CONTENT_LOG_RULES
 from app.log_policy.runtime import create_policy_json_logger
 from app.shared.time import elapsed_ms_since
 
 
-def handler(sqs_event: object, context: LambdaContext) -> RedeliveryResponse:
+def handler(sqs_input: object, context: LambdaContext) -> PartialBatchResponse:
     """設定と資源を呼び出し単位で準備し、再配信させるメッセージだけを返す。"""
     with _open_invocation(context) as (settings, logger, failure_recorder):
         return asyncio.run(
             _run_completion(
-                sqs_event,
+                sqs_input,
                 settings,
                 context=context,
                 now=lambda: datetime.now(UTC),
@@ -88,22 +88,22 @@ def _open_invocation(
 
 
 async def _run_completion(
-    sqs_event: object,
+    sqs_input: object,
     settings: CompletionConsumerSettings,
     *,
     context: LambdaContext,
     now: Callable[[], datetime],
     logger: FilteringBoundLogger,
     failure_recorder: ArticleFetchLifecycleRecorder,
-) -> RedeliveryResponse:
+) -> PartialBatchResponse:
     """全IDを検証してから本文・補完結果を個別の配送応答へ対応付ける。"""
     recorder = CompletionMessageRecorder(logger)
     async with open_completion_resources(
         settings, failure_recorder=failure_recorder
     ) as resources:
         try:
-            message_batch = ReceivedMessageBatch.from_sqs_event(sqs_event)
-        except ReceivedMessageBatchInvalidError as exc:
+            messages = parse_sqs_lambda_input(sqs_input)
+        except SqsLambdaInputInvalidError as exc:
             recorder.record_invalid_message_batch(exc)
             raise
 
@@ -115,9 +115,9 @@ async def _run_completion(
         processing_start_deadline = ProcessingStartDeadline(
             context, before_lambda_limit=timedelta(seconds=60)
         )
-        for message_position, message in enumerate(message_batch.messages):
+        for message_position, message in enumerate(messages):
             if processing_start_deadline.has_passed():
-                for unstarted in message_batch.messages[message_position:]:
+                for unstarted in messages[message_position:]:
                     redelivery_messages.append(RedeliveryMessage(unstarted))
                     with bound_contextvars(message_id=unstarted.message_id):
                         recorder.record_unstarted()
@@ -171,7 +171,7 @@ async def _run_completion(
             now=now,
             recorder=recorder,
         )
-        return redelivery_response(
+        return partial_batch_response(
             [
                 redelivery_message.message.message_id
                 for redelivery_message in redelivery_messages

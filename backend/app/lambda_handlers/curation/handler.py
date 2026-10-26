@@ -7,6 +7,14 @@ from structlog.contextvars import bound_contextvars
 from structlog.typing import FilteringBoundLogger
 
 from app.analysis.curation.consumer_failure_classification import RetryCuration
+from app.aws.lambda_.sqs_input import (
+    SqsLambdaInputInvalidError,
+    parse_sqs_lambda_input,
+)
+from app.aws.lambda_.sqs_response import (
+    PartialBatchResponse,
+    partial_batch_response,
+)
 from app.collection.events import AnalyzableArticleCreatedEvent
 from app.lambda_handlers.article_analysis_invocation import (
     open_article_analysis_invocation,
@@ -18,25 +26,17 @@ from app.lambda_handlers.curation.composition import open_curation_consumer
 from app.lambda_handlers.curation.message_recorder import CurationMessageRecorder
 from app.lambda_handlers.curation.settings import CurationConsumerSettings
 from app.lambda_handlers.event_reader import EventReader, EventReadFailed
-from app.lambda_handlers.sqs.received_message import (
-    ReceivedMessageBatch,
-    ReceivedMessageBatchInvalidError,
-)
-from app.lambda_handlers.sqs.response import (
-    RedeliveryResponse,
-    redelivery_response,
-)
 from app.shared.time import elapsed_ms_since
 
 
-def handler(sqs_event: object, context: object) -> RedeliveryResponse:
+def handler(sqs_input: object, context: object) -> PartialBatchResponse:
     """呼び出しの文脈と設定を用意し、資源解放まで同じロガーを渡す。"""
     with open_article_analysis_invocation(
         "curation", context, CurationConsumerSettings
     ) as invocation:
         return asyncio.run(
             _run_curation(
-                sqs_event,
+                sqs_input,
                 invocation.settings,
                 logger=invocation.logger,
                 failure_recorder=invocation.failure_recorder,
@@ -45,12 +45,12 @@ def handler(sqs_event: object, context: object) -> RedeliveryResponse:
 
 
 async def _run_curation(
-    sqs_event: object,
+    sqs_input: object,
     settings: CurationConsumerSettings,
     *,
     logger: FilteringBoundLogger,
     failure_recorder: ArticleAnalysisLifecycleRecorder,
-) -> RedeliveryResponse:
+) -> PartialBatchResponse:
     """バッチの各メッセージを順に処理し、再配信させるメッセージのIDだけを返す。"""
 
     async with open_curation_consumer(
@@ -60,9 +60,9 @@ async def _run_curation(
         # 失敗はメッセージIDで1件ずつ返すため、
         # IDを特定できないレコードがあれば全件を処理せず再配信させる。
         try:
-            message_batch = ReceivedMessageBatch.from_sqs_event(sqs_event)
+            messages = parse_sqs_lambda_input(sqs_input)
 
-        except ReceivedMessageBatchInvalidError as exc:
+        except SqsLambdaInputInvalidError as exc:
             logger.warning(
                 "curation_sqs_input_invalid",
                 exc_info=exc,
@@ -73,7 +73,7 @@ async def _run_curation(
         message_recorder = CurationMessageRecorder(logger)
         redelivery_message_ids: list[str] = []
 
-        for message in message_batch.messages:
+        for message in messages:
             with bound_contextvars(message_id=message.message_id):
                 started_at_seconds = perf_counter()
                 message_recorder.record_started()
@@ -109,4 +109,4 @@ async def _run_curation(
                             )
                             if isinstance(consume_result, RetryCuration):
                                 redelivery_message_ids.append(message.message_id)
-        return redelivery_response(redelivery_message_ids)
+        return partial_batch_response(redelivery_message_ids)

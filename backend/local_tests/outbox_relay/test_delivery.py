@@ -16,6 +16,7 @@ from app.aws.sqs.errors import (
     MessageSendConfigurationReason,
     MessageSendTransportError,
 )
+from app.aws.sqs.message import SqsMessage
 from app.aws.sqs.outgoing_message import AcceptedSqsMessage
 from app.db.errors import DatabaseError
 from app.http.failure import (
@@ -23,7 +24,6 @@ from app.http.failure import (
     HttpTransportFailureReason,
     HttpTransportStage,
 )
-from app.lambda_handlers.sqs.received_message import ReceivedMessage
 from app.models.outbox_event import OutboxEvent
 from app.outbox.publishing.assessed_in_scope import build_assessed_in_scope_message
 from app.outbox.publishing.contracts import PublishFailure
@@ -478,8 +478,10 @@ async def test_invalid_event_is_stopped_and_valid_event_is_delivered(
         entries = kwargs["Entries"]
         assert len(entries) == 1
         event = ArticleAssessedInScopeEvent.from_input(
-            ReceivedMessage(
-                message_id="id", body=entries[0]["MessageBody"]
+            SqsMessage(
+                receipt_handle="receipt-handle",
+                message_id="id",
+                body=entries[0]["MessageBody"],
             ).parse_json()
         )
         assert event.event_id == good.event_id

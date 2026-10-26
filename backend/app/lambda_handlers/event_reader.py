@@ -1,9 +1,9 @@
-"""SQSの受信メッセージ1件を、工程が受け付けるイベントとして読む。"""
+"""受信したSQSメッセージ1件を、工程が受け付けるイベントとして読む。"""
 
 from collections.abc import Callable
 from dataclasses import dataclass
 
-from app.lambda_handlers.sqs.received_message import ReceivedMessage
+from app.aws.sqs.message import InvalidSqsMessage, ReceivedSqsMessage
 
 
 @dataclass(frozen=True, slots=True)
@@ -15,12 +15,14 @@ class EventReadFailed:
 
 @dataclass(frozen=True, slots=True)
 class EventReader[EventT]:
-    """SQSの受信メッセージ1件を、Consumerが受け付けるイベントとして読む。"""
+    """受信したSQSメッセージ1件を、Consumerが受け付けるイベントとして読む。"""
 
     parse_event: Callable[[object], EventT]
 
-    def read(self, message: ReceivedMessage) -> EventT | EventReadFailed:
+    def read(self, message: ReceivedSqsMessage) -> EventT | EventReadFailed:
         """本文・JSON・イベント契約のどこで失敗しても、原因の例外を値で返す。"""
+        if isinstance(message, InvalidSqsMessage):
+            return EventReadFailed(message.error)
         try:
             return self.parse_event(message.parse_json())
         except Exception as exc:

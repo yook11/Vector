@@ -9,6 +9,14 @@ import structlog
 from structlog.contextvars import bound_contextvars
 from structlog.typing import FilteringBoundLogger
 
+from app.aws.lambda_.sqs_input import (
+    parse_sqs_lambda_input,
+)
+from app.aws.lambda_.sqs_response import (
+    PartialBatchResponse,
+    partial_batch_response,
+)
+from app.aws.sqs.message import ReceivedSqsMessage
 from app.collection.article_acquisition.consumer_result import (
     RetryAcquisition,
 )
@@ -21,22 +29,15 @@ from app.lambda_handlers.acquisition.message_recorder import AcquisitionMessageR
 from app.lambda_handlers.acquisition.settings import AcquisitionConsumerSettings
 from app.lambda_handlers.article_fetch_lifecycle import ArticleFetchLifecycleRecorder
 from app.lambda_handlers.event_reader import EventReader, EventReadFailed
-from app.lambda_handlers.sqs.received_message import (
-    ReceivedMessageBatch,
-)
-from app.lambda_handlers.sqs.response import (
-    RedeliveryResponse,
-    redelivery_response,
-)
 from app.log_policy.policies.external_content import EXTERNAL_CONTENT_LOG_RULES
 from app.log_policy.runtime import create_policy_json_logger
 from app.shared.time import elapsed_ms_since
 
 
-def handler(sqs_event: object, context: object) -> RedeliveryResponse:
+def handler(sqs_input: object, context: object) -> PartialBatchResponse:
     with _open_invocation(context) as (logger, failure_recorder):
         try:
-            message_batch = ReceivedMessageBatch.from_sqs_event(sqs_event)
+            messages = parse_sqs_lambda_input(sqs_input)
             settings = AcquisitionConsumerSettings()  # type: ignore[call-arg]
         except Exception as exc:
             failure_recorder.record_initialization_failure("input_or_settings", exc)
@@ -45,7 +46,7 @@ def handler(sqs_event: object, context: object) -> RedeliveryResponse:
         try:
             return asyncio.run(
                 _run(
-                    message_batch,
+                    messages,
                     settings,
                     logger=logger,
                     failure_recorder=failure_recorder,
@@ -78,19 +79,19 @@ def _open_invocation(
 
 
 async def _run(
-    message_batch: ReceivedMessageBatch,
+    messages: tuple[ReceivedSqsMessage, ...],
     settings: AcquisitionConsumerSettings,
     *,
     logger: FilteringBoundLogger,
     failure_recorder: ArticleFetchLifecycleRecorder,
-) -> RedeliveryResponse:
+) -> PartialBatchResponse:
     redelivery_message_ids: list[str] = []
     async with open_acquisition_consumer(
         settings, failure_recorder=failure_recorder
     ) as consumer:
         event_reader = EventReader(acquisition_request_from_message)
         message_recorder = AcquisitionMessageRecorder(logger)
-        for message in message_batch.messages:
+        for message in messages:
             with bound_contextvars(message_id=message.message_id):
                 started_at_seconds = perf_counter()
                 message_recorder.record_started()
@@ -123,4 +124,4 @@ async def _run(
                                 result,
                                 duration_ms=elapsed_ms_since(started_at_seconds),
                             )
-    return redelivery_response(redelivery_message_ids)
+    return partial_batch_response(redelivery_message_ids)

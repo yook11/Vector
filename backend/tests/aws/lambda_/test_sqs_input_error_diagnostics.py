@@ -1,10 +1,10 @@
-"""受信メッセージのまとまりを作れないエラーを、共通変換へ渡したときの診断結果を確認する。"""
+"""受信構造の検証例外を共通変換へ渡した診断結果を、DB・外部通信なしで確認する。"""
 
 import pytest
 
-from app.lambda_handlers.sqs.received_message import (
-    ReceivedMessageBatchInvalidError,
-    ReceivedMessageBatchInvalidReason,
+from app.aws.lambda_.sqs_input import (
+    SqsLambdaInputInvalidError,
+    SqsLambdaInputInvalidReason,
 )
 from app.log_policy.exceptions.conversion import convert_exception
 
@@ -16,8 +16,8 @@ def test_batch_error_preserves_reason_field_and_record_position(
     record_index: int,
 ) -> None:
     """理由と不正項目に加え、先頭の0を含むレコード位置を診断に残す。"""
-    error = ReceivedMessageBatchInvalidError(
-        reason=ReceivedMessageBatchInvalidReason.MISSING_REQUIRED_FIELD,
+    error = SqsLambdaInputInvalidError(
+        reason=SqsLambdaInputInvalidReason.MISSING_REQUIRED_FIELD,
         field="messageId",
         record_index=record_index,
     )
@@ -37,8 +37,8 @@ def test_batch_error_preserves_reason_field_and_record_position(
 
 def test_batch_error_omits_unspecified_record_position() -> None:
     """レコード位置が未指定なら、理由と不正項目だけを診断に残す。"""
-    error = ReceivedMessageBatchInvalidError(
-        reason=ReceivedMessageBatchInvalidReason.INVALID_TYPE,
+    error = SqsLambdaInputInvalidError(
+        reason=SqsLambdaInputInvalidReason.INVALID_TYPE,
         field="Records",
     )
 

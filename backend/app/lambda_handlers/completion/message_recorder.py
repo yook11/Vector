@@ -14,13 +14,10 @@ from app.collection.article_completion.consumer import (
 )
 
 if TYPE_CHECKING:
+    from app.aws.lambda_.sqs_input import SqsLambdaInputInvalidError
     from app.collection.retry_at import RetryAt
     from app.lambda_handlers.completion.redelivery_wait import VisibilityTimeout
     from app.lambda_handlers.event_reader import EventReadFailed
-    from app.lambda_handlers.sqs.received_message import (
-        ReceivedMessageBatchInvalidError,
-        ReceivedMessageInvalidError,
-    )
 
 
 class CompletionMessageRecorder:
@@ -120,9 +117,7 @@ class CompletionMessageRecorder:
             message_disposition="batch_item_failure",
         )
 
-    def record_invalid_message_batch(
-        self, error: ReceivedMessageBatchInvalidError
-    ) -> None:
+    def record_invalid_message_batch(self, error: SqsLambdaInputInvalidError) -> None:
         self._logger.error("completion_sqs_input_invalid", exc_info=error)
 
     def record_retry_at_passed(self, retry_at: RetryAt, *, message_id: str) -> None:
@@ -135,19 +130,6 @@ class CompletionMessageRecorder:
     ) -> None:
         self._redelivery_wait_logger(retry_at, message_id=message_id).warning(
             "completion_redelivery_wait", result="insufficient_time"
-        )
-
-    def record_receipt_handle_invalid(
-        self,
-        retry_at: RetryAt,
-        error: ReceivedMessageInvalidError,
-        *,
-        message_id: str,
-    ) -> None:
-        self._redelivery_wait_logger(retry_at, message_id=message_id).error(
-            "completion_redelivery_wait",
-            result="invalid_receipt_handle",
-            exc_info=error,
         )
 
     def record_visibility_change_failed(

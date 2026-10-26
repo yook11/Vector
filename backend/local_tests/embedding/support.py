@@ -69,6 +69,7 @@ def build_sqs_record(payload):
         payload=payload,
     )
     return {
+        "receiptHandle": "receipt-handle",
         "messageId": str(payload.analyzed_article_id),
         "body": build_assessed_in_scope_message(
             EventEnvelope(

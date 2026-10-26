@@ -1,18 +1,16 @@
-"""SQSの受信メッセージ1件をイベントとして読み、失敗は原因の例外を持つ値で返すことを検証する。"""
+"""受信したSQSメッセージ1件をイベントとして読み、失敗は原因の例外を持つ値で返すことを検証する。"""
 
 import pytest
 
+from app.aws.lambda_.sqs_input import parse_sqs_lambda_input
+from app.aws.sqs.message import ReceivedSqsMessage, SqsMessageInvalidReason
 from app.lambda_handlers.event_reader import EventReader, EventReadFailed
-from app.lambda_handlers.sqs.received_message import (
-    ReceivedMessage,
-    ReceivedMessageInvalidReason,
-)
 
 pytestmark = pytest.mark.unit
 
 
-def _received_message(record: dict[str, object]) -> ReceivedMessage:
-    return ReceivedMessage.from_sqs_record(record, record_index=0)
+def _received_message(record: dict[str, object]) -> ReceivedSqsMessage:
+    return parse_sqs_lambda_input({"Records": [record]})[0]
 
 
 def test_parsed_body_is_passed_to_parser_and_its_event_returned():
@@ -20,7 +18,13 @@ def test_parsed_body_is_passed_to_parser_and_its_event_returned():
     event_reader = EventReader(lambda data: ("event", data))
 
     read_result = event_reader.read(
-        _received_message({"messageId": "id", "body": '{"key": [1, true]}'})
+        _received_message(
+            {
+                "receiptHandle": "receipt-handle",
+                "messageId": "id",
+                "body": '{"key": [1, true]}',
+            }
+        )
     )
 
     assert read_result == ("event", {"key": [1, True]})
@@ -30,18 +34,18 @@ def test_parsed_body_is_passed_to_parser_and_its_event_returned():
     ("record", "reason"),
     [
         pytest.param(
-            {"messageId": "id"},
-            ReceivedMessageInvalidReason.MISSING_REQUIRED_FIELD,
+            {"receiptHandle": "receipt-handle", "messageId": "id"},
+            SqsMessageInvalidReason.MISSING_REQUIRED_FIELD,
             id="missing-body",
         ),
         pytest.param(
-            {"messageId": "id", "body": 1},
-            ReceivedMessageInvalidReason.INVALID_TYPE,
+            {"receiptHandle": "receipt-handle", "messageId": "id", "body": 1},
+            SqsMessageInvalidReason.INVALID_TYPE,
             id="non-str-body",
         ),
         pytest.param(
-            {"messageId": "id", "body": "{"},
-            ReceivedMessageInvalidReason.INVALID_JSON,
+            {"receiptHandle": "receipt-handle", "messageId": "id", "body": "{"},
+            SqsMessageInvalidReason.INVALID_JSON,
             id="invalid-json",
         ),
     ],
@@ -66,7 +70,9 @@ def test_parser_exception_is_returned_as_read_failure():
         raise original
 
     read_result = EventReader(parse_event).read(
-        _received_message({"messageId": "id", "body": "{}"})
+        _received_message(
+            {"receiptHandle": "receipt-handle", "messageId": "id", "body": "{}"}
+        )
     )
 
     assert read_result == EventReadFailed(original)

@@ -52,7 +52,11 @@ def build_sqs_record(payload):
             payload=payload.model_dump(),
         )
     )
-    return {"messageId": str(payload.curation_id), "body": message.body}
+    return {
+        "receiptHandle": "receipt-handle",
+        "messageId": str(payload.curation_id),
+        "body": message.body,
+    }
 
 
 async def invoke_sqs_record(record):

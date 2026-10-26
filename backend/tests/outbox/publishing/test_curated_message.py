@@ -10,7 +10,7 @@ from app.analysis.curation.events import (
     ArticleCuratedSignalEvent,
     CuratedEventInvalidError,
 )
-from app.lambda_handlers.sqs.received_message import ReceivedMessage
+from app.aws.sqs.message import SqsMessage
 from app.outbox.publishing.contracts import EventEnvelope
 from app.outbox.publishing.curated_signal import build_curated_signal_message
 
@@ -29,7 +29,9 @@ def test_message_round_trip_preserves_stored_event():
 
     message = build_curated_signal_message(envelope)
     received = ArticleCuratedSignalEvent.from_input(
-        ReceivedMessage(message_id="id", body=message.body).parse_json()
+        SqsMessage(
+            receipt_handle="receipt-handle", message_id="id", body=message.body
+        ).parse_json()
     )
 
     assert message.event_id == envelope.event_id

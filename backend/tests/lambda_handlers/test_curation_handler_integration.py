@@ -143,7 +143,11 @@ async def article(db_session, source, name, *, content="content"):
 
 
 def message(name, article_id):
-    return {"messageId": name, "body": valid_body(analyzable_article_id=article_id)}
+    return {
+        "receiptHandle": "receipt-handle",
+        "messageId": name,
+        "body": valid_body(analyzable_article_id=article_id),
+    }
 
 
 async def rows(session, model):
@@ -187,7 +191,11 @@ async def test_mixed_batch_matches_persistence_and_releases_resources(
             message("missing", 999_999),
             message("large", ids["large"]),
             message("invalid", ids["invalid"]),
-            {"messageId": "bad-event", "body": "private-invalid-json"},
+            {
+                "receiptHandle": "receipt-handle",
+                "messageId": "bad-event",
+                "body": "private-invalid-json",
+            },
             message("failed", ids["failed"]),
             message("after", ids["after"]),
         ]

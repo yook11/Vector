@@ -10,9 +10,9 @@ from app.analysis.assessment.consumer_failure_classification import (
 from app.analysis.assessment.domain.ready import AssessmentReadyBuildRejected
 from app.analysis.assessment.service import AssessmentCompletion
 from app.analysis.curation.events import CuratedEventInvalidError
+from app.aws.sqs.message import SqsMessageInvalidError
 from app.db.errors import DatabaseError
 from app.lambda_handlers.event_reader import EventReadFailed
-from app.lambda_handlers.sqs.received_message import ReceivedMessageInvalidError
 
 
 class AssessmentMessageRecorder:
@@ -31,7 +31,7 @@ class AssessmentMessageRecorder:
             duration_ms=duration_ms, message_disposition="batch_item_failure"
         )
         match read_failed.error:
-            case ReceivedMessageInvalidError() as error:
+            case SqsMessageInvalidError() as error:
                 logger.warning(
                     "assessment_message_processing_failed",
                     operation="parse_message",

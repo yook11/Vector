@@ -8,6 +8,14 @@ from structlog.typing import FilteringBoundLogger
 
 from app.analysis.assessment.events import ArticleAssessedInScopeEvent
 from app.analysis.embedding.consumer_failure_classification import RetryEmbedding
+from app.aws.lambda_.sqs_input import (
+    SqsLambdaInputInvalidError,
+    parse_sqs_lambda_input,
+)
+from app.aws.lambda_.sqs_response import (
+    PartialBatchResponse,
+    partial_batch_response,
+)
 from app.lambda_handlers.article_analysis_invocation import (
     open_article_analysis_invocation,
 )
@@ -18,25 +26,17 @@ from app.lambda_handlers.embedding.composition import open_embedding_consumer
 from app.lambda_handlers.embedding.message_recorder import EmbeddingMessageRecorder
 from app.lambda_handlers.embedding.settings import EmbeddingConsumerSettings
 from app.lambda_handlers.event_reader import EventReader, EventReadFailed
-from app.lambda_handlers.sqs.received_message import (
-    ReceivedMessageBatch,
-    ReceivedMessageBatchInvalidError,
-)
-from app.lambda_handlers.sqs.response import (
-    RedeliveryResponse,
-    redelivery_response,
-)
 from app.shared.time import elapsed_ms_since
 
 
-def handler(sqs_event: object, context: object) -> RedeliveryResponse:
+def handler(sqs_input: object, context: object) -> PartialBatchResponse:
     """呼び出しの文脈と設定を用意し、資源解放まで同じロガーを渡す。"""
     with open_article_analysis_invocation(
         "embedding", context, EmbeddingConsumerSettings
     ) as invocation:
         return asyncio.run(
             _run_embedding(
-                sqs_event,
+                sqs_input,
                 invocation.settings,
                 logger=invocation.logger,
                 failure_recorder=invocation.failure_recorder,
@@ -45,12 +45,12 @@ def handler(sqs_event: object, context: object) -> RedeliveryResponse:
 
 
 async def _run_embedding(
-    sqs_event: object,
+    sqs_input: object,
     settings: EmbeddingConsumerSettings,
     *,
     logger: FilteringBoundLogger,
     failure_recorder: ArticleAnalysisLifecycleRecorder,
-) -> RedeliveryResponse:
+) -> PartialBatchResponse:
     """バッチの各メッセージを順に処理し、再配信させるメッセージのIDだけを返す。"""
     async with open_embedding_consumer(
         settings, failure_recorder=failure_recorder
@@ -58,8 +58,8 @@ async def _run_embedding(
         # 失敗はメッセージIDで1件ずつ返すため、
         # IDを特定できないレコードがあれば全件を処理せず再配信させる。
         try:
-            message_batch = ReceivedMessageBatch.from_sqs_event(sqs_event)
-        except ReceivedMessageBatchInvalidError as exc:
+            messages = parse_sqs_lambda_input(sqs_input)
+        except SqsLambdaInputInvalidError as exc:
             logger.warning(
                 "embedding_sqs_input_invalid",
                 exc_info=exc,
@@ -70,7 +70,7 @@ async def _run_embedding(
         message_recorder = EmbeddingMessageRecorder(logger)
         redelivery_message_ids: list[str] = []
 
-        for message in message_batch.messages:
+        for message in messages:
             with bound_contextvars(message_id=message.message_id):
                 started_at_seconds = perf_counter()
                 message_recorder.record_started()
@@ -107,4 +107,4 @@ async def _run_embedding(
                             )
                             if isinstance(consume_result, RetryEmbedding):
                                 redelivery_message_ids.append(message.message_id)
-        return redelivery_response(redelivery_message_ids)
+        return partial_batch_response(redelivery_message_ids)
