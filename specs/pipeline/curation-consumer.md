@@ -310,7 +310,7 @@ Invariantsは、両発行元の同一契約、保存の原子性、保存済み�
 - `local_tests/acquisition/test_article_acquisition.py`: 取得工程の2ケースとして、充足時の完成記事保存・完成イベントと、不足時の未完成記事保存・補完依頼イベントを確認する。各ケースは記事1件を扱い、実RSS取得・変換・保存・イベント記録までを接続する。従来の`curation/test_delivery.py`から検証範囲を変更し、Completion・Relay・Curationは実行しない。
 - 既存取得・本文補完Serviceテスト: 未完成・保存競合・補完済み競合での非発行と、Outbox障害時の記事・成功監査・補完状態のロールバックを所有する。旧Taskiq経路の期待値も新種別へ接続し、既存投入は維持する。
 - `tests/lambda_handlers/test_curation_relay_integration.py`: 新イベントの正常分・不正分・旧2種別を混在させて、正常配送・不正分停止・旧行の全列保持を確認する。通信障害1ケースで再試行予約への接続を確認し、共通relayのbackoff・上限・SDKエラー網羅は複製しない。
-- `tests/outbox/publishing/test_analyzable_message.py`: 新しいエラー変換が安全な理由・項目だけを保持することを確認する。Envelopeの項目別制約は共有契約の既存テストを使う。
+- `tests/outbox/event/test_analyzable_message.py`: 新しいエラー変換が安全な理由・項目だけを保持することを確認する。Envelopeの項目別制約は共有契約の既存テストを使う。
 
 ローカル経路テストの取得・補完は`vector_collect`、relay・Curationは`vector_app`で接続し、管理権限や追加GRANTを使用しない。RSS HTTP、記事スクレイピング、SQS送信、SSM・RDS署名、Gemini HTTPをテスト境界で置換する。SQSで捕捉したMessageBodyは変更せずCurationへ渡す。AWS IAMの実認証・SQSの実配送・本番有効化は保証範囲外とする。
 

@@ -11,8 +11,8 @@ from uuid import uuid4
 import httpx2
 
 from app.collection.events import AnalyzableArticleCreated
-from app.outbox.publishing.analyzable_created import build_analyzable_created_message
-from app.outbox.publishing.contracts import EventEnvelope
+from app.outbox.event.analyzable_created import build_analyzable_created_message
+from app.outbox.event.envelope import EventEnvelope
 
 handler_module = import_module("app.lambda_handlers.curation.handler")
 

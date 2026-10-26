@@ -10,9 +10,9 @@ from app.lambda_handlers.outbox_relay.settings import (
     AssessmentOutboxRelaySettings,
     EmbeddingOutboxRelaySettings,
 )
-from app.outbox.publishing.assessed_in_scope import build_assessed_in_scope_message
-from app.outbox.publishing.curated_signal import build_curated_signal_message
-from app.outbox.publishing.route import EventDeliveryRoute
+from app.outbox.event.assessed_in_scope import build_assessed_in_scope_message
+from app.outbox.event.curated_signal import build_curated_signal_message
+from app.outbox.relay.route import EventDeliveryRoute
 
 pytestmark = pytest.mark.unit
 

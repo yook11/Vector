@@ -9,9 +9,10 @@ from app.db.session import SessionFactory
 from app.lambda_handlers.backfill.failure_recorder import record_failure
 from app.lambda_handlers.backfill.resources import open_backfill_resources
 from app.lambda_handlers.backfill.settings import BackfillConnectionSettings
-from app.outbox.publishing.contracts import EventEnvelope
-from app.outbox.publishing.route import EventDeliveryRoute, EventMessage
-from app.outbox.publishing.sender import MessageSenderFactory
+from app.outbox.event.envelope import EventEnvelope
+from app.outbox.event.message import EventMessage
+from app.outbox.relay.route import EventDeliveryRoute
+from app.outbox.relay.sender import MessageSenderFactory
 
 
 class BackfillOperation(Protocol):

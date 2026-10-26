@@ -10,11 +10,12 @@ from app.aws.sqs.message_sender import create_sqs_client
 from app.db.engine import create_lambda_engine
 from app.db.session import caller_managed_session_factory
 from app.lambda_handlers.outbox_relay.settings import OutboxRelayConnectionSettings
-from app.outbox.delivery.failure_handler import OutboxDeliveryFailureHandler
-from app.outbox.delivery.relay import OutboxRelay
-from app.outbox.publishing.contracts import EventEnvelope
-from app.outbox.publishing.route import EventDeliveryRoute, EventMessage
-from app.outbox.publishing.sqs_sender import open_sqs_event_message_sender
+from app.outbox.event.envelope import EventEnvelope
+from app.outbox.event.message import EventMessage
+from app.outbox.relay.failure_handler import OutboxDeliveryFailureHandler
+from app.outbox.relay.relay import OutboxRelay
+from app.outbox.relay.route import EventDeliveryRoute
+from app.outbox.relay.sqs_sender import open_sqs_event_message_sender
 
 
 async def run_relay(
