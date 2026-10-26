@@ -9,14 +9,14 @@
 - `app.backfill.repository.PipelineBacklog`：新経路のイベント対象抽出・件数観測・期限切れ整理の照会。旧 Taskiq Curation の対象取得は `app.queue.helpers.backlog`、管理画面の集計は `app.admin.pipeline_health.repository` が担う。
 - `app.backfill.targets`：再投入する保存済み事実。
 - `app.backfill.policy`：元記事の年齢窓と一回の処理上限。
-- 各consumerの共有イベント型と、共通`build_sendable_message`・`SqsSender`。
+- 各consumerの共有イベント型と、共通の本文生成関数・`MessageSender`。
 - 旧maintenanceテストと`tests/backfill/`の単体・DB統合テスト。
 
 ## Interface
 
 `app.backfill.service`に`backfill_curations`・`backfill_assessments`・`backfill_embeddings`・`backfill_completions`を用意する。いずれも`session_factory, sender, *, route, build_message, enabled, now`を受け取り、正常時は`None`、続行不能な障害は例外を返す。`now`はタイムゾーン付き日時を呼び出し元から渡す。
 
-DBと送信クライアントの生成・終了、設定取得は呼び出し元の責任とする。工程ごとの配送定義・既存本文builderと`SqsSender`を本体へ渡し、`_dispatch`内で`build_sendable_message`を1件ずつ呼んでから正常分を`sender.send_batch`で送る。新本体にTaskiq・Lambda・Redisの依存を持たせない。
+DBと送信クライアントの生成・終了、設定取得は呼び出し元の責任とする。工程ごとの配送定義・既存本文builderと`SqsSender`を本体へ渡し、`_dispatch`内で本文生成関数を1件ずつ呼んでから正常分を`sender.send_batch`で送る。新本体にTaskiq・Lambda・Redisの依存を持たせない。
 
 ## Invariants
 
@@ -39,7 +39,7 @@ DBと送信クライアントの生成・終了、設定取得は呼び出し元
 
 対象ごと・再投入ごとに新しいUUIDをevent_idに使う。既存Outbox行の再送ではなく、DBに残る事実から受信契約に沿って再構成する。Outboxの検索・追加・状態更新は行わない。
 
-種別不一致とEventInvalidErrorによる変換失敗は該当イベントを除外し、全件変換失敗のバッチはSenderを呼ばず、次のバッチへ進む。本文生成中の想定外例外では同じバッチのどのメッセージも送らない。
+EventInvalidErrorによる変換失敗（種別違いを含む）は該当イベントを除外し、全件変換失敗のバッチはSenderを呼ばず、次のバッチへ進む。本文生成中の想定外例外では同じバッチのどのメッセージも送らない。
 
 Backfillは生成済みの`EventMessage`を`MessageBatch`にまとめてSenderへ渡す。Senderは送信と応答検証を担当し、正常に戻る場合は各入力メッセージと同じIDの受付成功・失敗を入力順で1件ずつ返す。Backfillはその戻り値の型・件数・ID・順序を再検証せず、PublishSucceededの件数を集計する。PublishFailedがあっても後続バッチを送り、同一実行内の追加リトライはしない。本文生成・Senderから伝播した例外は実行全体の失敗とする。
 

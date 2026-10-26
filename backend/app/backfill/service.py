@@ -28,8 +28,7 @@ from app.backfill.targets import BackfillEventTarget
 from app.db.session import SessionFactory
 from app.outbox.event.envelope import EventEnvelope
 from app.outbox.event.message import EventMessage
-from app.outbox.relay.preparation import build_sendable_message
-from app.outbox.relay.route import EventDeliveryRoute, EventRouteMismatchError
+from app.outbox.relay.route import EventDeliveryRoute
 from app.outbox.relay.sender import MessageSenderFactory
 from app.shared.event_contract import EventInvalidError
 
@@ -62,10 +61,8 @@ async def _dispatch(
         sendable: list[tuple[EventEnvelope, EventMessage]] = []
         for envelope in envelopes:
             try:
-                message = build_sendable_message(
-                    envelope, route=route, build_message=build_message
-                )
-            except (EventRouteMismatchError, EventInvalidError):
+                message = build_message(envelope)
+            except EventInvalidError:
                 continue
             sendable.append((envelope, message))
         successes = 0

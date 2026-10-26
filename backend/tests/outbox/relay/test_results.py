@@ -21,7 +21,6 @@ from app.collection.events import (
 )
 from app.db.errors import DatabaseUnexpectedError
 from app.outbox.relay.failures import PublishFailed
-from app.outbox.relay.route import EventRouteMismatchError
 from app.shared.event_contract import (
     EventInvalid,
     EventInvalidReason,
@@ -56,11 +55,10 @@ def test_failed_result_rejects_non_uuid(event_id):
         CuratedEventInvalidError(
             EventInvalid(reason=EventInvalidReason.INVALID_PAYLOAD, issues=())
         ),
-        EventRouteMismatchError(),
     ],
 )
 def test_failed_result_accepts_every_publish_failure(error):
-    """SQSへの送信の失敗、4つのイベントの構築失敗、outbox自身の種別の不一致を、イベントの送信失敗として持てる。"""
+    """SQSへの送信の失敗と4つのイベントの構築失敗を、イベントの送信失敗として持てる。"""
     assert PublishFailed(UUID(int=1), error).error is error
 
 

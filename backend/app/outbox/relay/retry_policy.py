@@ -10,7 +10,19 @@ from math import isfinite
 from app.aws.sqs.errors import MessageSendError
 from app.aws.sqs.retry_prospect import is_resolvable_by_retry
 from app.outbox.relay.failures import PublishFailure
-from app.outbox.relay.values import RetryDelay
+
+
+@dataclass(frozen=True, slots=True)
+class RetryDelay:
+    """次の送信試行までの待ち時間を、ゼロ以上の時間として保持する。"""
+
+    value: timedelta
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.value, timedelta):
+            raise TypeError("retry_delay must be a timedelta")
+        if self.value < timedelta(0):
+            raise ValueError("retry_delay must not be negative")
 
 
 class NonRetryableReason(StrEnum):

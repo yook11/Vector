@@ -8,9 +8,12 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.outbox.event.envelope import EventEnvelope
-from app.outbox.relay.repository import LeasedOutboxEvent, OutboxDeliveryRepository
+from app.outbox.relay.repository import (
+    LeasedOutboxEvent,
+    LeaseDuration,
+    OutboxDeliveryRepository,
+)
 from app.outbox.relay.retry_policy import MAX_PUBLISH_ATTEMPTS
-from app.outbox.relay.values import LeaseDuration
 from tests.outbox.helpers import (
     FUTURE,
     PAST,

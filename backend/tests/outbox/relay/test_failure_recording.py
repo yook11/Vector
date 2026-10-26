@@ -57,7 +57,6 @@ from app.outbox.relay.failure_handler import (
 from app.outbox.relay.failures import PublishFailed
 from app.outbox.relay.repository import LeasedOutboxEvent
 from app.outbox.relay.retry_policy import NonRetryableReason
-from app.outbox.relay.route import EventRouteMismatchError
 from app.shared.event_contract import (
     EventInvalid,
     EventInvalidReason,
@@ -421,14 +420,6 @@ def leased_event():
                     "reason": "unsupported_schema_version",
                     "issues": [],
                 },
-            },
-        ),
-        (
-            EventRouteMismatchError(),
-            False,
-            {
-                "error_class": "app.outbox.relay.route.EventRouteMismatchError",
-                "error_message": "イベントの種別が配送定義の種別と一致しません",
             },
         ),
     ],

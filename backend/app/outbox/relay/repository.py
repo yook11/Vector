@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import timedelta
 from uuid import UUID
 
 from sqlalchemy import DateTime, Interval, Update, func, literal, or_, select, update
@@ -8,8 +9,24 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.outbox_event import OutboxEvent
 from app.outbox.event.envelope import EventEnvelope
-from app.outbox.relay.retry_policy import MAX_PUBLISH_ATTEMPTS, NonRetryableReason
-from app.outbox.relay.values import LeaseDuration, RetryDelay
+from app.outbox.relay.retry_policy import (
+    MAX_PUBLISH_ATTEMPTS,
+    NonRetryableReason,
+    RetryDelay,
+)
+
+
+@dataclass(frozen=True, slots=True)
+class LeaseDuration:
+    """配信担当を確保する期間を、正の時間として保持する。"""
+
+    value: timedelta
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.value, timedelta):
+            raise TypeError("lease_duration must be a timedelta")
+        if self.value <= timedelta(0):
+            raise ValueError("lease_duration must be positive")
 
 
 @dataclass(frozen=True, slots=True)

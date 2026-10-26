@@ -4,16 +4,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from app.outbox.event.envelope import EventEnvelope
-from app.shared.errors import ApplicationError
-
-
-class EventRouteMismatchError(ApplicationError):
-    """保存されたイベントの種別が、配送定義の種別と一致しない。"""
-
-    def __init__(self) -> None:
-        super().__init__("イベントの種別が配送定義の種別と一致しません")
-
 
 @dataclass(frozen=True, slots=True)
 class EventDeliveryRoute:
@@ -28,8 +18,3 @@ class EventDeliveryRoute:
                 raise TypeError("route fields must be strings")
             if not value.strip():
                 raise ValueError("route fields must not be blank")
-
-    def ensure_matches(self, envelope: EventEnvelope) -> None:
-        """保存されたイベントの種別が、この対応の種別と一致することを確かめる。"""
-        if envelope.event_type != self.event_type:
-            raise EventRouteMismatchError()

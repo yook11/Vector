@@ -1,5 +1,6 @@
-"""送信の失敗から再試行・停止を決める判断を、SQSへの送信の失敗などを直接渡し、外部通信やDBを使わず検証する。"""
+"""送信の失敗から再試行・停止を決める判断と待ち時間の値を、SQSへの送信の失敗などを直接渡し、外部通信やDBを使わず検証する。"""
 
+from dataclasses import FrozenInstanceError
 from datetime import timedelta
 
 import pytest
@@ -43,10 +44,9 @@ from app.outbox.relay.retry_policy import (
     NonRetryable,
     NonRetryableReason,
     Retryable,
+    RetryDelay,
     decide_publish_retry,
 )
-from app.outbox.relay.route import EventRouteMismatchError
-from app.outbox.relay.values import RetryDelay
 from app.shared.event_contract import (
     EventInvalid,
     EventInvalidReason,
@@ -110,7 +110,6 @@ def test_resolvable_sqs_failure_is_retried_after_first_delay(error):
         CuratedEventInvalidError(
             EventInvalid(reason=EventInvalidReason.INVALID_PAYLOAD, issues=())
         ),
-        EventRouteMismatchError(),
         MessageSendUnexpectedError(exception_type="ParamValidationError"),
     ],
 )
@@ -228,3 +227,33 @@ def test_non_retryable_requires_reason_enum(reason):
     """値が一致する文字列でもEnumへの暗黙変換は行わない。"""
     with pytest.raises(TypeError):
         NonRetryable(reason)
+
+
+@pytest.mark.parametrize("value", [None, 1, True, "5 minutes"])
+def test_retry_delay_rejects_non_timedelta(value):
+    """時間はtimedeltaからのみ生成できる。"""
+    with pytest.raises(TypeError):
+        RetryDelay(value)
+
+
+def test_retry_delay_rejects_negative_value():
+    """即時再試行より前の時刻を指定できない。"""
+    with pytest.raises(ValueError):
+        RetryDelay(timedelta(microseconds=-1))
+
+
+def test_retry_delay_preserves_positive_value():
+    """期間の精度を落とさず保持する。"""
+    value = timedelta(seconds=150, microseconds=1)
+    assert RetryDelay(value).value == value
+
+
+def test_retry_delay_accepts_zero():
+    """待ち時間ゼロの即時再試行を許容する。"""
+    assert RetryDelay(timedelta(0)).value == timedelta(0)
+
+
+def test_retry_delay_cannot_be_mutated():
+    """生成後に不正な内容へ書き換えられない。"""
+    with pytest.raises(FrozenInstanceError):
+        setattr(RetryDelay(timedelta(0)), "value", timedelta(seconds=-1))

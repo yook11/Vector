@@ -9,8 +9,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.outbox.relay.repository import OutboxDeliveryRepository
-from app.outbox.relay.retry_policy import NonRetryableReason
-from app.outbox.relay.values import RetryDelay
+from app.outbox.relay.retry_policy import NonRetryableReason, RetryDelay
 from tests.outbox.helpers import FUTURE, PAST, insert_event, read_event
 
 pytestmark = pytest.mark.asyncio

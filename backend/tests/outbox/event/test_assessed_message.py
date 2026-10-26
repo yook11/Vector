@@ -1,6 +1,7 @@
 """既存イベント契約と配送本文の接続を検証する。"""
 
 import json
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta, timezone
 from uuid import UUID
 
@@ -38,6 +39,24 @@ def test_builder_keeps_exact_existing_json_and_event_id(envelope):
         '"payload": {"curation_id": 123, "analyzed_article_id": 456}}'
     )
     assert build_assessed_in_scope_message(envelope) == message
+
+
+def test_occurred_at_preserves_microseconds_in_utc(envelope):
+    """本文の発生日時をUTCに正規化し、マイクロ秒を維持する。"""
+    event = replace(
+        envelope,
+        occurred_at=datetime(
+            2026, 9, 7, 12, 0, 0, 123456, tzinfo=timezone(timedelta(hours=9))
+        ),
+    )
+    message = build_assessed_in_scope_message(event)
+    assert json.loads(message.body) == {
+        "event_id": str(event.event_id),
+        "event_type": event.event_type,
+        "schema_version": 1,
+        "occurred_at": "2026-09-07T03:00:00.123456Z",
+        "payload": event.payload,
+    }
 
 
 @pytest.fixture

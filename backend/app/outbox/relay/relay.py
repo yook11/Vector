@@ -12,11 +12,13 @@ from app.outbox.event.envelope import EventEnvelope
 from app.outbox.event.message import EventMessage
 from app.outbox.relay.failure_handler import OutboxDeliveryFailureHandler
 from app.outbox.relay.failures import PublishFailed
-from app.outbox.relay.preparation import build_sendable_message
-from app.outbox.relay.repository import LeasedOutboxEvent, OutboxDeliveryRepository
-from app.outbox.relay.route import EventDeliveryRoute, EventRouteMismatchError
+from app.outbox.relay.repository import (
+    LeasedOutboxEvent,
+    LeaseDuration,
+    OutboxDeliveryRepository,
+)
+from app.outbox.relay.route import EventDeliveryRoute
 from app.outbox.relay.sender import MessageSenderFactory
-from app.outbox.relay.values import LeaseDuration
 from app.shared.event_contract import EventInvalidError
 
 
@@ -64,10 +66,8 @@ class OutboxRelay:
         for leased_event in leased_events:
             envelope = leased_event.envelope
             try:
-                message = build_sendable_message(
-                    envelope, route=self._route, build_message=self._build_message
-                )
-            except (EventRouteMismatchError, EventInvalidError) as error:
+                message = self._build_message(envelope)
+            except EventInvalidError as error:
                 await self._failure_handler.handle(
                     leased_event=leased_event,
                     failure=PublishFailed(envelope.event_id, error),

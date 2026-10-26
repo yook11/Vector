@@ -7,9 +7,8 @@ import pytest
 
 from app.outbox.relay.failure_handler import OutboxDeliveryFailureHandler
 from app.outbox.relay.relay import OutboxRelay
-from app.outbox.relay.repository import OutboxDeliveryRepository
+from app.outbox.relay.repository import LeaseDuration, OutboxDeliveryRepository
 from app.outbox.relay.route import EventDeliveryRoute
-from app.outbox.relay.values import LeaseDuration
 
 pytestmark = pytest.mark.asyncio
 

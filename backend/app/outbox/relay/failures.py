@@ -4,11 +4,10 @@ from dataclasses import dataclass
 from uuid import UUID
 
 from app.aws.sqs.errors import MessageSendError
-from app.outbox.relay.route import EventRouteMismatchError
 from app.shared.event_contract import EventInvalidError
 
 # 型注釈とisinstanceの両方に使うため、TypeAliasやtype文ではなくUnionTypeの値として持つ。
-PublishFailure = MessageSendError | EventInvalidError | EventRouteMismatchError
+PublishFailure = MessageSendError | EventInvalidError
 
 
 @dataclass(frozen=True, slots=True)
