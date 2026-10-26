@@ -7,8 +7,6 @@ from uuid import uuid4
 
 import structlog
 
-from app.aws.sqs.errors import MessageSendError
-from app.aws.sqs.outgoing_message import AcceptedSqsMessage
 from app.backfill.cleanup import (
     close_aged_out_completions,
     delete_aged_out_curations,
@@ -29,7 +27,11 @@ from app.db.session import SessionFactory
 from app.outbox.event.envelope import EventEnvelope
 from app.outbox.event.message import EventMessage
 from app.outbox.relay.route import EventDeliveryRoute
-from app.outbox.relay.sender import MessageSenderFactory
+from app.outbox.relay.sender import (
+    MessageAccepted,
+    MessageSenderFactory,
+    MessageSendError,
+)
 from app.shared.event_contract import EventInvalidError
 
 logger = structlog.get_logger(__name__)
@@ -67,9 +69,7 @@ async def _dispatch(
             sendable.append((envelope, message))
         successes = 0
         if sendable:
-            send_results: list[
-                tuple[EventEnvelope, AcceptedSqsMessage | MessageSendError]
-            ]
+            send_results: list[tuple[EventEnvelope, MessageAccepted | MessageSendError]]
             async with AsyncExitStack() as resources:
                 try:
                     sender = await resources.enter_async_context(sender_factory())
@@ -79,7 +79,7 @@ async def _dispatch(
                 else:
                     send_results = await sender.send_batch(sendable)
             successes = sum(
-                isinstance(send_result, AcceptedSqsMessage)
+                isinstance(send_result, MessageAccepted)
                 for _, send_result in send_results
             )
         record_dispatched(stage, successes)

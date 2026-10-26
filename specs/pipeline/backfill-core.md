@@ -14,9 +14,9 @@
 
 ## Interface
 
-`app.backfill.service`に`backfill_curations`・`backfill_assessments`・`backfill_embeddings`・`backfill_completions`を用意する。いずれも`session_factory, sender, *, route, build_message, enabled, now`を受け取り、正常時は`None`、続行不能な障害は例外を返す。`now`はタイムゾーン付き日時を呼び出し元から渡す。
+`app.backfill.service`に`backfill_curations`・`backfill_assessments`・`backfill_embeddings`・`backfill_completions`を用意する。いずれも`session_factory, sender_factory, *, route, build_message, enabled, now`を受け取り、正常時は`None`、続行不能な障害は例外を返す。`now`はタイムゾーン付き日時を呼び出し元から渡す。
 
-DBと送信クライアントの生成・終了、設定取得は呼び出し元の責任とする。工程ごとの配送定義・既存本文builderと`SqsSender`を本体へ渡し、`_dispatch`内で本文生成関数を1件ずつ呼んでから正常分を`sender.send_batch`で送る。新本体にTaskiq・Lambda・Redisの依存を持たせない。
+DBと送信クライアントの生成・終了、設定取得は呼び出し元の責任とする。工程ごとの配送定義・既存本文builderと`MessageSenderFactory`を本体へ渡し、`_dispatch`内で本文生成関数を1件ずつ呼んでから正常分を`sender.send_batch`で送る。新本体にTaskiq・Lambda・Redisの依存を持たせない。
 
 ## Invariants
 
@@ -41,9 +41,9 @@ DBと送信クライアントの生成・終了、設定取得は呼び出し元
 
 EventInvalidErrorによる変換失敗（種別違いを含む）は該当イベントを除外し、全件変換失敗のバッチはSenderを呼ばず、次のバッチへ進む。本文生成中の想定外例外では同じバッチのどのメッセージも送らない。
 
-Backfillは生成済みの`EventMessage`を`MessageBatch`にまとめてSenderへ渡す。Senderは送信と応答検証を担当し、正常に戻る場合は各入力メッセージと同じIDの受付成功・失敗を入力順で1件ずつ返す。Backfillはその戻り値の型・件数・ID・順序を再検証せず、PublishSucceededの件数を集計する。PublishFailedがあっても後続バッチを送り、同一実行内の追加リトライはしない。本文生成・Senderから伝播した例外は実行全体の失敗とする。
+Backfillは`(EventEnvelope, EventMessage)`の組をSenderへ渡し、Senderは元の対象と`MessageAccepted | MessageSendError`の組を入力順で返す。結果型は`app.outbox.relay.sender`で定義し、BackfillはAWS側の型をimportしない。`MessageAccepted`の件数だけを集計し、個別失敗があっても後続バッチを送る。Sender初期化時の`MessageSendError`は当該バッチの成功0件として次へ進み、同一実行内の追加リトライはしない。本文生成・送信から伝播したその他の例外は実行全体の失敗とする。
 
-送信成功はSQS受付のみを意味し、DBに送信済み状態を持たせない。未完了なら次回も送る。入力と結果の対応は`tests/outbox/sqs/`でSenderの責任として検証し、Backfill側は分割・変換失敗の除外・成功件数・部分失敗時の継続と例外の伝播を検証する。
+送信成功は送信先の受付のみを意味し、DBに送信済み状態を持たせない。未完了なら次回も送る。入力と結果の対応は`tests/aws/sqs/`でSenderの責任として検証し、Backfill側は分割・変換失敗の除外・成功件数・部分失敗時の継続と例外の伝播を検証する。
 
 ## Compatibility / Non-goals
 

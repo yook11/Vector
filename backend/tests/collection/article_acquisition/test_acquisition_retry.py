@@ -4,9 +4,13 @@ from __future__ import annotations
 
 import pytest
 
-from app.aws.sqs.errors import MessageSendError, SqsServiceError, SqsServiceErrorReason
 from app.collection.article_acquisition.acquisition_retry import (
     should_retry_acquisition_send,
+)
+from app.outbox.relay.sender import (
+    MessageSendError,
+    MessageServiceError,
+    MessageServiceErrorReason,
 )
 
 
@@ -14,22 +18,25 @@ from app.collection.article_acquisition.acquisition_retry import (
     ("error", "attempt", "expected"),
     [
         (
-            SqsServiceError(
-                reason=SqsServiceErrorReason.THROTTLED, service_code="RequestThrottled"
+            MessageServiceError(
+                reason=MessageServiceErrorReason.THROTTLED,
+                service_code="RequestThrottled",
             ),
             2,
             True,
         ),
         (
-            SqsServiceError(
-                reason=SqsServiceErrorReason.THROTTLED, service_code="RequestThrottled"
+            MessageServiceError(
+                reason=MessageServiceErrorReason.THROTTLED,
+                service_code="RequestThrottled",
             ),
             3,
             False,
         ),
         (
-            SqsServiceError(
-                reason=SqsServiceErrorReason.ACCESS_DENIED, service_code="AccessDenied"
+            MessageServiceError(
+                reason=MessageServiceErrorReason.ACCESS_DENIED,
+                service_code="AccessDenied",
             ),
             1,
             False,

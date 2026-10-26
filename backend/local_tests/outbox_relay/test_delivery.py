@@ -11,13 +11,8 @@ from sqlalchemy import update
 from sqlalchemy.exc import SQLAlchemyError
 
 from app.analysis.assessment.events import ArticleAssessedInScopeEvent
-from app.aws.sqs.errors import (
-    MessageSendConfigurationError,
-    MessageSendConfigurationReason,
-    MessageSendTransportError,
-)
 from app.aws.sqs.message import SqsMessage
-from app.aws.sqs.outgoing_message import AcceptedSqsMessage
+from app.aws.sqs.message_sender import open_sqs_message_sender
 from app.db.errors import DatabaseError
 from app.http.failure import (
     HttpTransportFailure,
@@ -27,7 +22,12 @@ from app.http.failure import (
 from app.models.outbox_event import OutboxEvent
 from app.outbox.event.assessed_in_scope import build_assessed_in_scope_message
 from app.outbox.relay.failures import PublishFailure
-from app.outbox.relay.sqs_sender import open_sqs_event_message_sender
+from app.outbox.relay.sender import (
+    MessageAccepted,
+    MessageSendConfigurationError,
+    MessageSendConfigurationReason,
+    MessageSendTransportError,
+)
 from local_tests.outbox_relay.support import (
     ClaimHold,
     answer_by_event_id,
@@ -84,7 +84,7 @@ async def test_conversion_failure_send_failure_and_success_keep_event_correspond
         send_batch=AsyncMock(
             side_effect=answer_by_event_id(
                 {
-                    successful.event_id: AcceptedSqsMessage("sqs-id"),
+                    successful.event_id: MessageAccepted("sqs-id"),
                     failed.event_id: timeout,
                 }
             )
@@ -140,7 +140,7 @@ async def test_only_retryable_event_is_published_when_processed_with_exhausted(
     sender = Mock(
         send_batch=AsyncMock(
             side_effect=answer_by_event_id(
-                {retryable.event_id: AcceptedSqsMessage("sqs-id")}
+                {retryable.event_id: MessageAccepted("sqs-id")}
             )
         )
     )
@@ -178,7 +178,7 @@ async def test_mixed_results_preserve_success_retry_and_stop(
         send_batch=AsyncMock(
             side_effect=answer_by_event_id(
                 {
-                    successful.event_id: AcceptedSqsMessage("sqs-id"),
+                    successful.event_id: MessageAccepted("sqs-id"),
                     retryable.event_id: timeout,
                     permanent.event_id: configuration_error(),
                 }
@@ -248,9 +248,7 @@ async def test_leased_event_is_not_resent_by_another_relay(
 
     first_sender = Mock(
         send_batch=AsyncMock(
-            side_effect=answer_by_event_id(
-                {event.event_id: AcceptedSqsMessage("sqs-id")}
-            )
+            side_effect=answer_by_event_id({event.event_id: MessageAccepted("sqs-id")})
         )
     )
     second_sender = Mock()
@@ -306,14 +304,14 @@ async def test_skipped_update_does_not_block_later_results(
     first_outcome = (
         configuration_error()
         if first_result == "failure"
-        else AcceptedSqsMessage("sqs-first")
+        else MessageAccepted("sqs-first")
     )
     sender = Mock(
         send_batch=AsyncMock(
             side_effect=answer_by_event_id(
                 {
                     first.event_id: first_outcome,
-                    second.event_id: AcceptedSqsMessage("sqs-second"),
+                    second.event_id: MessageAccepted("sqs-second"),
                 }
             )
         )
@@ -398,7 +396,7 @@ async def test_result_fault_keeps_earlier_publish_and_does_not_resend(
     sender = Mock(
         send_batch=AsyncMock(
             side_effect=lambda sendable: [
-                (target, AcceptedSqsMessage("sqs-id")) for target, _ in sendable
+                (target, MessageAccepted("sqs-id")) for target, _ in sendable
             ]
         )
     )
@@ -502,7 +500,7 @@ async def test_invalid_event_is_stopped_and_valid_event_is_delivered(
     client.send_message_batch.side_effect = send
 
     def open_sender():
-        return open_sqs_event_message_sender(
+        return open_sqs_message_sender(
             client_factory=lambda: client, queue_url="https://sqs.invalid/embedding"
         )
 

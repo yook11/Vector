@@ -197,14 +197,14 @@ Done: 合意した配送シナリオと境界の検証、既存チェックが�
 
 ### 実装契約
 
-- SQSの送信・受付結果・SDK例外の解釈は`app/aws/sqs`が所有し、送れなかった失敗を起きたことごとの`MessageSendError`で返す。投入工程の`SourceAcquisitionDispatcher`は`SqsMessageSender`に依存し、`acquisition_retry`が`MessageSendError`の型とreasonから再送を判断する。投入工程と再送判断は`collection/article_acquisition`に置く。収集側ではSDK例外やAWSコードを解釈せず、SQS側は収集ドメインをimportしない。既存のOutbox送信とLambda受信の配置・契約は変更しない。
+- SQSの送信・受付結果・SDK例外の解釈は`app/aws/sqs`が所有し、送れなかった失敗を起きたことごとの`MessageSendError`で返す。投入工程の`SourceAcquisitionDispatcher`は`SqsMessageSender`に依存し、`acquisition_retry`が`MessageSendError`の型とreasonから再送を判断する。投入工程と再送判断は`collection/article_acquisition`に置く。送信の結果・エラーの型と、送り直しで解消しうるかの判定はoutbox(`app.outbox.relay`)のものを使い、収集側ではSDK例外やAWSコードを解釈しない。SQS側は収集ドメインをimportしない。
 - `SourceAcquisitionDispatcher.dispatch(schedule)`は呼び出すたびにDBで対象を選び、`schedule.create_request(source.id)`で不変の依頼を生成する。正常時は送信した件数を返す。対象0件はSDKクライアントを生成せず終了し、除外理由は既存の選定診断に残す。
 - `app.aws.sqs.message_sender.SqsMessageSender.send(body)`はSendMessageを1回呼ぶ（SDK内部の最大3試行を含む）。送る本文は`OutgoingSqsMessage`がMD5とともに持ち、`verify(response)`で応答の形式と本文の一致を確かめる。応答不正(`SqsResponseInvalidError`)と本文不一致(`MessageBodyMismatchError`)を区別する。SQSレコードによるConsumerへの処理依頼とは別の通信上の概念である。
 - 命名はSDKへ本文を渡す`SqsMessageSender`と、送る本文と応答の照合を持つ`OutgoingSqsMessage`に分ける。`OutgoingSqsMessage`は送信する業務メッセージの形式を定義しない。
 - `app.aws.sqs.message_sender.create_sqs_client(session, region)`は接続3秒・応答待ち5秒、standard・初回込み最大3回を設定する。キューURLは投入側から1つ渡す。既存クライアント設定は変更しない。
 - `open_sqs_message_sender`をsender_factoryとして注入する。クライアント生成時の例外も`MessageSendError`へ変換する。クライアントの生成・通信・解放はスレッドへ移し、イベントループを塞がない。外部キャンセル時は進行中のSDK操作を回収してから解放し、キャンセルを伝播する。
-- `app.aws.sqs.errors`の`MessageSendError`の各サブクラスは発生事実だけを持つ。`should_retry_acquisition_send`はその型・reasonと試行回数で判断する。通信障害は共通のclassify_botocoreで分類する。
-- 通信timeout・DNS・network_io・protocol_violation・通信分類内のunknown、SQSのthrottled・service_unavailableを再送する。proxyはstatusなし・429・5xxを再送し、TLSとその他のproxy拒否は再送しない。
+- `MessageSendError`の各サブクラスは発生事実だけを持つ。`should_retry_acquisition_send`はその型・reasonと試行回数で判断する。通信障害は共通のclassify_botocoreで分類する。
+- 通信timeout・DNS・TLS・network_io・protocol_violation、サービスのthrottled・service_unavailableを再送する。proxyはstatusなし・429・5xxを再送し、証明書検証失敗・通信分類内のunknown・その他のproxy拒否は再送しない。
 - 既知のSQS拒否コードはHTTP statusより優先する。未分類5xxはサービス障害、それ以外の未知コードは調査対象とする。設定・資格情報不足、既知の拒否、応答不正・本文不一致、想定外の例外はアプリ内で再送しない。
 - 初回込み最大3回を依頼ごとに適用し、再送ラウンド前に一度だけ0〜1秒・0〜2秒待つ。待機と乱数は注入可能。再送中は対象を選び直さない。
 - 最終失敗は`UnsentAcquisitionRequest`にID・試行回数・失敗事実を保持し、`source_acquisition_send_failed`ログを出して`AcquisitionDispatchError`を返す。クライアント初期化で止まった場合は全対象を試行0回の未送信として記録する。

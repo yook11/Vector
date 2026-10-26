@@ -20,11 +20,8 @@ from botocore.stub import Stubber
 from botocore.utils import ContainerMetadataFetcher
 
 from app.aws.sqs.errors import (
-    MessageSendConfigurationError,
     MessageSendCredentialsError,
-    MessageSendTransportError,
     MessageSendUnexpectedError,
-    SqsServiceError,
     to_message_send_error,
     to_sqs_service_error,
 )
@@ -32,6 +29,11 @@ from app.http.failure import (
     HttpTransportFailure,
     HttpTransportFailureReason,
     HttpTransportStage,
+)
+from app.outbox.relay.sender import (
+    MessageSendConfigurationError,
+    MessageSendTransportError,
+    MessageServiceError,
 )
 
 QUEUE_URL = "https://sqs.ap-northeast-1.amazonaws.com/123456789012/q"
@@ -92,7 +94,7 @@ def test_known_codes_become_what_happened(code, status, reason):
     """SQSの既知のエラーコードを何が起きたかを表す理由に翻訳し、元のコードも残す。"""
     error = to_message_send_error(_client_error(code, status))
     assert (type(error), error.reason, error.service_code) == (
-        SqsServiceError,
+        MessageServiceError,
         reason,
         code,
     )
@@ -110,7 +112,7 @@ def test_status_is_used_only_for_unknown_codes(code, status, reason):
     """既知のコードはstatusより優先し、未知のコードだけ5xxをSQS側の障害とみなす。"""
     error = to_message_send_error(_client_error(code, status))
     assert (type(error), error.reason, error.service_code) == (
-        SqsServiceError,
+        MessageServiceError,
         reason,
         code,
     )
@@ -156,7 +158,7 @@ def test_real_sdk_client_error_is_translated_without_sdk_message(
             getattr(sqs_client, operation)(QueueUrl=QUEUE_URL, **params)
     error = to_message_send_error(caught.value)
     assert (type(error), error.reason, error.service_code) == (
-        SqsServiceError,
+        MessageServiceError,
         "destination_not_found",
         "QueueDoesNotExist",
     )
@@ -192,7 +194,7 @@ def test_real_sdk_query_compatible_code_is_translated_by_original_code(
         getattr(sqs_client, operation)(QueueUrl=QUEUE_URL, **params)
     error = to_message_send_error(caught.value)
     assert (type(error), error.reason, error.service_code) == (
-        SqsServiceError,
+        MessageServiceError,
         "destination_not_found",
         "QueueDoesNotExist",
     )
@@ -214,7 +216,7 @@ def test_batch_client_error_without_code_is_judged_by_status(error, status, reas
         )
     )
     assert (type(translated), translated.reason, translated.service_code) == (
-        SqsServiceError,
+        MessageServiceError,
         reason,
         None,
     )

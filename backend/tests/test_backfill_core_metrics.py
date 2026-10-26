@@ -19,10 +19,10 @@ import pytest
 from logfire.testing import CaptureLogfire
 
 from app.aws.sqs.errors import MessageSendUnexpectedError
-from app.aws.sqs.outgoing_message import AcceptedSqsMessage
 from app.backfill import service
 from app.backfill.targets import BackfillEventTarget
 from app.collection.events import AnalyzableArticleCreated
+from app.outbox.relay.sender import MessageAccepted
 from tests.backfill.helpers import delivery_arguments
 
 NOW = datetime(2026, 9, 14, 12, tzinfo=UTC)
@@ -101,7 +101,7 @@ def _sender(*, failed_positions: frozenset[int] = frozenset()) -> MagicMock:
                 target,
                 MessageSendUnexpectedError(exception_type="RuntimeError")
                 if position in failed_positions
-                else AcceptedSqsMessage(f"sqs-{message.event_id}"),
+                else MessageAccepted(f"sqs-{message.event_id}"),
             )
             for position, (target, message) in enumerate(sendable)
         ]

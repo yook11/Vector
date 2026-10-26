@@ -4,16 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from app.aws.sqs.errors import (
-    MessageSendConfigurationError,
-    MessageSendConfigurationReason,
-    MessageSendCredentialsError,
-    MessageSendError,
-    MessageSendTransportError,
-    MessageSendUnexpectedError,
-    SqsServiceError,
-    SqsServiceErrorReason,
-)
+from app.aws.sqs.errors import MessageSendCredentialsError, MessageSendUnexpectedError
 from app.aws.sqs.outgoing_message import (
     MessageBodyMismatchError,
     MessageTooLargeError,
@@ -21,23 +12,31 @@ from app.aws.sqs.outgoing_message import (
     SqsResponseInvalidError,
     SqsResponseInvalidReason,
 )
-from app.aws.sqs.retry_prospect import is_resolvable_by_retry
 from app.http.failure import (
     HttpTransportFailure,
     HttpTransportFailureReason,
     HttpTransportStage,
 )
+from app.outbox.relay.retry_policy import is_resolvable_by_retry
+from app.outbox.relay.sender import (
+    MessageSendConfigurationError,
+    MessageSendConfigurationReason,
+    MessageSendError,
+    MessageSendTransportError,
+    MessageServiceError,
+    MessageServiceErrorReason,
+)
 
 S = HttpTransportStage
 R = HttpTransportFailureReason
-Q = SqsServiceErrorReason
+Q = MessageServiceErrorReason
 
 
 @pytest.mark.parametrize(
     "error",
     [
-        SqsServiceError(reason=Q.THROTTLED, service_code="RequestThrottled"),
-        SqsServiceError(
+        MessageServiceError(reason=Q.THROTTLED, service_code="RequestThrottled"),
+        MessageServiceError(
             reason=Q.SERVICE_UNAVAILABLE, service_code="ServiceUnavailable"
         ),
         MessageSendTransportError(
@@ -59,20 +58,22 @@ def test_sqs_congestion_outage_and_interrupted_transport_are_resolvable(
 @pytest.mark.parametrize(
     "error",
     [
-        SqsServiceError(
+        MessageServiceError(
             reason=Q.AUTHENTICATION_FAILED, service_code="InvalidClientTokenId"
         ),
-        SqsServiceError(reason=Q.ACCESS_DENIED, service_code="AccessDenied"),
-        SqsServiceError(
+        MessageServiceError(reason=Q.ACCESS_DENIED, service_code="AccessDenied"),
+        MessageServiceError(
             reason=Q.DESTINATION_NOT_FOUND, service_code="QueueDoesNotExist"
         ),
-        SqsServiceError(
+        MessageServiceError(
             reason=Q.REQUEST_REJECTED, service_code="InvalidParameterValue"
         ),
-        SqsServiceError(reason=Q.SECURITY_REJECTED, service_code="IncompleteSignature"),
-        SqsServiceError(reason=Q.REQUEST_EXPIRED, service_code="RequestExpired"),
-        SqsServiceError(reason=Q.ENCRYPTION_ERROR, service_code="KmsDisabled"),
-        SqsServiceError(reason=Q.UNKNOWN, service_code="FutureError"),
+        MessageServiceError(
+            reason=Q.SECURITY_REJECTED, service_code="IncompleteSignature"
+        ),
+        MessageServiceError(reason=Q.REQUEST_EXPIRED, service_code="RequestExpired"),
+        MessageServiceError(reason=Q.ENCRYPTION_ERROR, service_code="KmsDisabled"),
+        MessageServiceError(reason=Q.UNKNOWN, service_code="FutureError"),
         MessageSendTransportError(
             failure=HttpTransportFailure(S.CONNECT, R.CERTIFICATE_VERIFICATION),
             exception_type="SSLError",
@@ -88,7 +89,8 @@ def test_sqs_congestion_outage_and_interrupted_transport_are_resolvable(
         MessageSendUnexpectedError(exception_type="ParamValidationError"),
         MessageTooLargeError(),
         SqsResponseInvalidError(
-            reason=SqsResponseInvalidReason.MISSING, field=SqsResponseField.MESSAGE_ID
+            reason=SqsResponseInvalidReason.MISSING,
+            field=SqsResponseField.MESSAGE_ID,
         ),
         MessageBodyMismatchError(),
     ],

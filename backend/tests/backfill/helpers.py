@@ -8,7 +8,6 @@ from uuid import uuid4
 
 from app.analysis.assessment.events import ArticleAssessedInScope
 from app.analysis.curation.events import ArticleCuratedSignal
-from app.aws.sqs.outgoing_message import AcceptedSqsMessage
 from app.collection.article_acquisition.events import IncompleteArticleRecorded
 from app.collection.events import AnalyzableArticleCreated
 from app.models.analyzable_article_record import AnalyzableArticleRecord
@@ -21,6 +20,7 @@ from app.outbox.event.curated_signal import build_curated_signal_message
 from app.outbox.event.envelope import EventEnvelope
 from app.outbox.event.incomplete_recorded import build_incomplete_recorded_message
 from app.outbox.relay.route import EventDeliveryRoute
+from app.outbox.relay.sender import MessageAccepted
 
 
 @dataclass(frozen=True)
@@ -127,7 +127,7 @@ class RecordingSender:
     async def send_batch(self, sendable):
         self.batches.append([message for _, message in sendable])
         return [
-            (target, AcceptedSqsMessage(f"sqs-{message.event_id}"))
+            (target, MessageAccepted(f"sqs-{message.event_id}"))
             for target, message in sendable
         ]
 

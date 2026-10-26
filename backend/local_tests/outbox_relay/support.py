@@ -7,14 +7,14 @@ from datetime import timedelta
 from uuid import UUID
 
 from app.analysis.assessment.events import ArticleAssessedInScope
-from app.aws.sqs.errors import (
-    MessageSendConfigurationError,
-    MessageSendConfigurationReason,
-)
 from app.outbox.event.assessed_in_scope import build_assessed_in_scope_message
 from app.outbox.relay.failure_handler import OutboxDeliveryFailureHandler
 from app.outbox.relay.relay import OutboxRelay
 from app.outbox.relay.route import EventDeliveryRoute
+from app.outbox.relay.sender import (
+    MessageSendConfigurationError,
+    MessageSendConfigurationReason,
+)
 from tests.outbox.helpers import PAST, insert_event, read_event
 
 EVENT_TYPE = ArticleAssessedInScope.EVENT_TYPE

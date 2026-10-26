@@ -6,19 +6,20 @@ from datetime import timedelta
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.aws.sqs.errors import MessageSendError
-from app.aws.sqs.outgoing_message import AcceptedSqsMessage
 from app.outbox.event.envelope import EventEnvelope
 from app.outbox.event.message import EventMessage
 from app.outbox.relay.failure_handler import OutboxDeliveryFailureHandler
-from app.outbox.relay.failures import PublishFailed
 from app.outbox.relay.repository import (
     LeasedOutboxEvent,
     LeaseDuration,
     OutboxDeliveryRepository,
 )
 from app.outbox.relay.route import EventDeliveryRoute
-from app.outbox.relay.sender import MessageSenderFactory
+from app.outbox.relay.sender import (
+    MessageAccepted,
+    MessageSenderFactory,
+    MessageSendError,
+)
 from app.shared.event_contract import EventInvalidError
 
 
@@ -70,7 +71,7 @@ class OutboxRelay:
             except EventInvalidError as error:
                 await self._failure_handler.handle(
                     leased_event=leased_event,
-                    failure=PublishFailed(envelope.event_id, error),
+                    error=error,
                 )
                 continue
             sendable.append((leased_event, message))
@@ -86,13 +87,13 @@ class OutboxRelay:
                 for leased_event, _ in sendable:
                     await self._failure_handler.handle(
                         leased_event=leased_event,
-                        failure=PublishFailed(leased_event.envelope.event_id, error),
+                        error=error,
                     )
                 return
             send_results = await sender.send_batch(sendable)
 
         for leased_event, send_result in send_results:
-            if isinstance(send_result, AcceptedSqsMessage):
+            if isinstance(send_result, MessageAccepted):
                 async with self._session_factory() as session, session.begin():
                     await OutboxDeliveryRepository(session).mark_published(
                         event_id=leased_event.envelope.event_id,
@@ -101,5 +102,5 @@ class OutboxRelay:
             else:
                 await self._failure_handler.handle(
                     leased_event=leased_event,
-                    failure=PublishFailed(leased_event.envelope.event_id, send_result),
+                    error=send_result,
                 )

@@ -314,13 +314,13 @@ async def test_unsent_requests_fail_after_three_attempts(
     [
         pytest.param(
             service_error("AccessDenied", 503),
-            "app.aws.sqs.errors.SqsServiceError",
+            "app.outbox.relay.sender.MessageServiceError",
             {"reason": "access_denied", "service_code": "AccessDenied"},
             id="known-rejection-before-status",
         ),
         pytest.param(
             service_error("NewServiceError"),
-            "app.aws.sqs.errors.SqsServiceError",
+            "app.outbox.relay.sender.MessageServiceError",
             {"reason": "unknown", "service_code": "NewServiceError"},
             id="unknown-code",
         ),

@@ -13,16 +13,14 @@ from botocore.credentials import CredentialResolver
 from botocore.exceptions import ConnectTimeoutError, ReadTimeoutError
 from botocore.stub import Stubber
 
-from app.aws.sqs.errors import (
+from app.aws.sqs.errors import MessageSendUnexpectedError
+from app.aws.sqs.message_sender import create_sqs_client, open_sqs_message_sender
+from app.aws.sqs.outgoing_message import MessageTooLargeError, SqsResponseInvalidError
+from app.outbox.event.message import EventMessage
+from app.outbox.relay.sender import (
+    MessageAccepted,
     MessageSendConfigurationError,
     MessageSendTransportError,
-    MessageSendUnexpectedError,
-)
-from app.aws.sqs.message_sender import create_sqs_client, open_sqs_message_sender
-from app.aws.sqs.outgoing_message import (
-    AcceptedSqsMessage,
-    MessageTooLargeError,
-    SqsResponseInvalidError,
 )
 
 QUEUE_URL = "https://sqs.ap-northeast-1.amazonaws.com/123456789012/article-embedding"
@@ -49,7 +47,10 @@ async def _send_batch(client, bodies):
     async with open_sqs_message_sender(
         client_factory=lambda: client, queue_url=QUEUE_URL
     ) as sender:
-        return await sender.send_batch(bodies)
+        results = await sender.send_batch(
+            [(key, EventMessage(key, body)) for key, body in bodies.items()]
+        )
+        return dict(results)
 
 
 @pytest.mark.parametrize("max_attempts", [1, 3])
@@ -150,7 +151,7 @@ async def test_batch_returns_accepted_in_input_order_with_sent_bodies(count):
         stubber.assert_no_pending_responses()
 
     assert list(results.items()) == [
-        (key, AcceptedSqsMessage(f"sqs-{key}")) for key in bodies
+        (key, MessageAccepted(f"sqs-{key}")) for key in bodies
     ]
 
 
@@ -173,8 +174,8 @@ async def test_oversized_body_fails_only_its_id_and_the_rest_are_sent(
         MessageTooLargeError,
     )
     assert (results[first], results[last]) == (
-        AcceptedSqsMessage(f"sqs-{first}"),
-        AcceptedSqsMessage(f"sqs-{last}"),
+        MessageAccepted(f"sqs-{first}"),
+        MessageAccepted(f"sqs-{last}"),
     )
     client.send_message_batch.assert_called_once_with(
         QueueUrl=QUEUE_URL,
@@ -280,9 +281,14 @@ async def test_missing_credentials_fail_at_signing_for_all_ids(monkeypatch):
     async with open_sqs_message_sender(
         client_factory=create_client, queue_url=QUEUE_URL
     ) as sender:
-        results = await sender.send_batch({UUID(int=1): "{}", UUID(int=2): "[]"})
+        results = await sender.send_batch(
+            [
+                (UUID(int=1), EventMessage(UUID(int=1), "{}")),
+                (UUID(int=2), EventMessage(UUID(int=2), "[]")),
+            ]
+        )
 
-    assert [(type(error), error.reason) for error in results.values()] == [
+    assert [(type(error), error.reason) for _, error in results] == [
         (MessageSendConfigurationError, "missing_credentials")
     ] * 2
     assert len(created) == 1
