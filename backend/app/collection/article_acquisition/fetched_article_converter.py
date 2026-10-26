@@ -13,6 +13,8 @@ from app.collection.sources.source_metadata import SourceMetadata
 from app.log_policy.policies.external_content import EXTERNAL_CONTENT_LOG_RULES
 from app.log_policy.runtime import create_policy_json_logger
 
+logger = create_policy_json_logger(__name__, EXTERNAL_CONTENT_LOG_RULES)
+
 
 def convert_fetched_article(
     fetched: FetchedArticle,
@@ -41,7 +43,7 @@ def convert_fetched_article(
             source_url=fetched.url,
         )
         if article is not None:
-            create_policy_json_logger(__name__, EXTERNAL_CONTENT_LOG_RULES).info(
+            logger.info(
                 "fetched_article_converted",
                 article_type="analyzable",
                 source_name=str(source_name),
@@ -57,7 +59,7 @@ def convert_fetched_article(
         published_at=published_at,
         origin=origin,
     )
-    create_policy_json_logger(__name__, EXTERNAL_CONTENT_LOG_RULES).info(
+    logger.info(
         "fetched_article_converted",
         article_type="observed",
         source_name=str(source_name),

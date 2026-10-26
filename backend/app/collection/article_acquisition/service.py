@@ -35,6 +35,8 @@ from app.log_policy.policies.external_content import EXTERNAL_CONTENT_LOG_RULES
 from app.log_policy.runtime import create_policy_json_logger
 from app.models.outbox_event import OutboxEvent
 
+logger = create_policy_json_logger(__name__, EXTERNAL_CONTENT_LOG_RULES)
+
 
 class ArticleAcquisitionService:
     """取得失敗は発生した例外のまま呼び出し側へ伝える。"""
@@ -66,9 +68,7 @@ class ArticleAcquisitionService:
                         source_id=source_id,
                     )
                 except (ArticleUrlInvalidError, FetchedArticleTitleMissingError) as exc:
-                    create_policy_json_logger(
-                        __name__, EXTERNAL_CONTENT_LOG_RULES
-                    ).warning(
+                    logger.warning(
                         "article_conversion_rejected",
                         source_name=source_name,
                         exc_info=exc,
@@ -79,9 +79,7 @@ class ArticleAcquisitionService:
                     continue
                 except Exception as exc:
                     # entry 単位の変換 bug は source 全体を止めず rejected に畳む。
-                    create_policy_json_logger(
-                        __name__, EXTERNAL_CONTENT_LOG_RULES
-                    ).error(
+                    logger.error(
                         "fetched_article_conversion_unexpected",
                         source_name=source_name,
                         exc_info=exc,

@@ -14,8 +14,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from structlog.typing import FilteringBoundLogger
-
 from app.collection.sources.errors import SourceNotRegisteredError
 from app.collection.sources.fetch_cadence import FetchCadence
 from app.collection.sources.registry import acquisition_source_for
@@ -24,6 +22,8 @@ from app.collection.sources.source_name import SourceName
 from app.db.session import SessionFactory
 from app.log_policy.policies.pipeline_control import PIPELINE_CONTROL_LOG_RULES
 from app.log_policy.runtime import create_policy_json_logger
+
+logger = create_policy_json_logger(__name__, PIPELINE_CONTROL_LOG_RULES)
 
 
 @dataclass(frozen=True, slots=True)
@@ -56,17 +56,16 @@ class SourceDispatchService:
         """
         async with self._session_factory() as session:
             sources = await SourceRepository(session).list_active()
-        logger = create_policy_json_logger(__name__, PIPELINE_CONTROL_LOG_RULES)
         targets: list[SourceDispatchTarget] = []
         for source in sources:
-            target = _select_dispatch_target(source, cadence, logger)
+            target = _select_dispatch_target(source, cadence)
             if target is not None:
                 targets.append(target)
         return tuple(targets)
 
 
 def _select_dispatch_target(
-    source: RecordedSource, cadence: FetchCadence, logger: FilteringBoundLogger
+    source: RecordedSource, cadence: FetchCadence
 ) -> SourceDispatchTarget | None:
     """有効ソースの登録状態と頻度から、投入対象を返す。"""
     try:

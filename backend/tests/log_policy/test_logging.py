@@ -1,6 +1,8 @@
 """実際のロガー生成口からJSON標準出力までの振る舞い。"""
 
+import io
 import json
+import sys
 from collections.abc import Iterator
 from datetime import datetime
 
@@ -76,3 +78,29 @@ def test_inherited_policy_is_applied_to_the_final_json_log(capsys) -> None:
         "_denied_keys": ["private_note"],
         "_unregistered_count": 1,
     }
+
+
+def test_logger_writes_to_stdout_replaced_after_creation(monkeypatch) -> None:
+    """作った後に差し替えた標準出力へ、ログを1件のJSONで出す。"""
+    rules = LogPolicyRules(
+        policy=LogPolicy.INFRASTRUCTURE, allow=frozenset({"operation"})
+    )
+    # モジュールの冒頭で作るロガーと同じく、標準出力の差し替えより前に作る。
+    logger = create_policy_json_logger("test.logging", rules)
+    replaced = io.StringIO()
+    monkeypatch.setattr(sys, "stdout", replaced)
+
+    logger.info("upstream_checked", operation="healthcheck")
+
+    entries = [json.loads(line) for line in replaced.getvalue().splitlines()]
+    for entry in entries:
+        # 出力時刻は実行ごとに変わるため、比較から外す。
+        entry.pop("timestamp")
+    assert entries == [
+        {
+            "event": "upstream_checked",
+            "level": "info",
+            "log_policy": "infrastructure",
+            "operation": "healthcheck",
+        }
+    ]

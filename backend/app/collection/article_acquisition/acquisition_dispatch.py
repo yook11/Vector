@@ -23,6 +23,8 @@ from app.outbox.relay.retry_policy import is_resolvable_by_retry
 from app.outbox.relay.sender import MessageSendError
 from app.shared.errors import ApplicationError
 
+logger = create_policy_json_logger(__name__, PIPELINE_CONTROL_LOG_RULES)
+
 
 class AcquisitionDispatchError(ApplicationError):
     """送れなかった件数を持ち、再試行してよい失敗だけなら調査不要とする。"""
@@ -89,7 +91,6 @@ class SourceAcquisitionDispatcher:
                     if not to_send:
                         break
         if failures:
-            logger = create_policy_json_logger(__name__, PIPELINE_CONTROL_LOG_RULES)
             for failure in failures:
                 # 再試行してよい失敗を回数で諦めただけなら想定内として warning にする。
                 (

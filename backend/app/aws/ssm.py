@@ -7,10 +7,11 @@ from pydantic import SecretStr
 from app.log_policy.policies.secret_access import SECRET_ACCESS_LOG_RULES
 from app.log_policy.runtime import create_policy_json_logger
 
+logger = create_policy_json_logger(__name__, SECRET_ACCESS_LOG_RULES)
+
 
 def get_secret_parameter(*, region: str, path: str) -> SecretStr:
     """キャッシュせず、復号した値だけを秘密情報型で返す。"""
-    logger = create_policy_json_logger(__name__, SECRET_ACCESS_LOG_RULES)
     client = Session().create_client(
         "ssm",
         region_name=region,
