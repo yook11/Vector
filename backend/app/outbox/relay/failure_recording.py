@@ -14,6 +14,8 @@ from app.outbox.relay.sender import (
     MessageServiceErrorReason,
 )
 
+logger = create_policy_json_logger(__name__, PIPELINE_CONTROL_LOG_RULES)
+
 CONFIGURATION_FAILURE_METRIC = "outbox_publish_configuration_failure"
 
 
@@ -45,7 +47,6 @@ def record_publish_failure(
     stop_reason: NonRetryableReason,
 ) -> None:
     """停止確定後に呼び、記録の通常失敗を配信処理へ戻さない。"""
-    logger = create_policy_json_logger(__name__, PIPELINE_CONTROL_LOG_RULES)
     requires_fix = isinstance(error, MessageSendError) and _requires_configuration_fix(
         error
     )

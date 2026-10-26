@@ -10,12 +10,12 @@ from app.log_policy.logger import create_policy_logger
 
 
 def create_policy_json_logger(name: str, rules: LogPolicyRules) -> FilteringBoundLogger:
-    """生成時の標準出力を使い、呼び出し間でロガーや相関情報を共有しない。"""
+    """書き込み時の標準出力へ出すので、モジュールで一度作って使い回せる。"""
     return structlog.wrap_logger(
         create_policy_logger(
             name,
             rules,
-            output_logger_factory=structlog.WriteLoggerFactory(),
+            output_logger_factory=structlog.PrintLoggerFactory(),
         ),
         processors=build_processors(structlog.processors.JSONRenderer()),
         wrapper_class=ApplicationBoundLogger,

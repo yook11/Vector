@@ -34,6 +34,8 @@ from app.log_policy.runtime import create_policy_json_logger
 if TYPE_CHECKING:
     from app.config import Settings
 
+logger = create_policy_json_logger(__name__, CACHE_REVALIDATION_LOG_RULES)
+
 
 class RevalidateNotifier(Protocol):
     """notify 1 メソッドだけを持つ抽象。"""
@@ -66,7 +68,6 @@ class FrontendRevalidateNotifier:
         )
 
     async def notify(self, *, tags: Sequence[str]) -> None:
-        logger = create_policy_json_logger(__name__, CACHE_REVALIDATION_LOG_RULES)
         operation = "get_secret"
         try:
             secret = await self._secret_provider()

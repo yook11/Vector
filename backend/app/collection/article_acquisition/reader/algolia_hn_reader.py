@@ -16,6 +16,8 @@ from app.collection.article_acquisition.tools.source_http import get_source_resp
 from app.log_policy.policies.external_content import EXTERNAL_CONTENT_LOG_RULES
 from app.log_policy.runtime import create_policy_json_logger
 
+logger = create_policy_json_logger(__name__, EXTERNAL_CONTENT_LOG_RULES)
+
 
 @dataclass(frozen=True, slots=True)
 class HackerNewsEntry:
@@ -113,7 +115,5 @@ class HackerNewsReader:
             )
         hits: list[dict[str, Any]] = hits_raw
         if not hits:
-            create_policy_json_logger(__name__, EXTERNAL_CONTENT_LOG_RULES).info(
-                "hn_no_new_stories", source_name=source_name
-            )
+            logger.info("hn_no_new_stories", source_name=source_name)
         return [normalize_hit(hit) for hit in hits]

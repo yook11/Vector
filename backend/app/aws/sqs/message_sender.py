@@ -28,6 +28,8 @@ from app.outbox.relay.sender import (
     MessageSendError,
 )
 
+logger = create_policy_json_logger(__name__, PIPELINE_CONTROL_LOG_RULES)
+
 
 class SqsClient(Protocol):
     def send_message(self, *, QueueUrl: str, MessageBody: str) -> object: ...
@@ -132,9 +134,7 @@ async def _close_client(client: SqsClient) -> None:
     try:
         await asyncio.to_thread(client.close)
     except Exception as exc:
-        create_policy_json_logger(__name__, PIPELINE_CONTROL_LOG_RULES).warning(
-            "sqs_send_client_cleanup_failed", exc_info=exc
-        )
+        logger.warning("sqs_send_client_cleanup_failed", exc_info=exc)
 
 
 @asynccontextmanager
