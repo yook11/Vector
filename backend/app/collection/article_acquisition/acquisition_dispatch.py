@@ -7,9 +7,7 @@ from collections.abc import Awaitable, Callable
 from contextlib import AbstractAsyncContextManager, AsyncExitStack
 from dataclasses import dataclass
 
-from app.aws.sqs.errors import MessageSendError
 from app.aws.sqs.message_sender import SqsMessageSender
-from app.aws.sqs.retry_prospect import is_resolvable_by_retry
 from app.collection.article_acquisition.acquisition_retry import (
     MAX_ACQUISITION_SEND_ATTEMPTS,
     should_retry_acquisition_send,
@@ -21,6 +19,8 @@ from app.collection.sources.acquisition_request import (
 from app.collection.sources.dispatch import SourceDispatchService
 from app.log_policy.policies.pipeline_control import PIPELINE_CONTROL_LOG_RULES
 from app.log_policy.runtime import create_policy_json_logger
+from app.outbox.relay.retry_policy import is_resolvable_by_retry
+from app.outbox.relay.sender import MessageSendError
 from app.shared.errors import ApplicationError
 
 

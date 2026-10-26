@@ -7,7 +7,8 @@ from enum import StrEnum
 from hashlib import md5
 from types import MappingProxyType
 
-from app.aws.sqs.errors import MessageSendError, to_sqs_service_error
+from app.aws.sqs.errors import to_sqs_service_error
+from app.outbox.relay.sender import MessageAccepted, MessageSendError
 
 # SQSのメッセージ1件と、SendMessageBatch 1回分の本文合計の上限(UTF-8のバイト数)。
 MAX_MESSAGE_BYTES = 1_048_576
@@ -93,13 +94,6 @@ def _required_string(
 
 
 @dataclass(frozen=True, slots=True)
-class AcceptedSqsMessage:
-    """SQSに受け付けられ、SQSが受け取った本文が送った本文と一致したメッセージ。"""
-
-    message_id: str
-
-
-@dataclass(frozen=True, slots=True)
 class OutgoingSqsMessage:
     """送る本文から期待するMD5を確定し、SQSが受け付けたと返した項目がその本文かを照合する。"""
 
@@ -114,7 +108,7 @@ class OutgoingSqsMessage:
             self, "body_md5", md5(encoded, usedforsecurity=False).hexdigest()
         )
 
-    def verify(self, result: object) -> AcceptedSqsMessage:
+    def verify(self, result: object) -> MessageAccepted:
         if not isinstance(result, dict):
             raise SqsResponseInvalidError(
                 reason=SqsResponseInvalidReason.INVALID_TYPE,
@@ -131,7 +125,7 @@ class OutgoingSqsMessage:
             )
         if checksum.lower() != self.body_md5:
             raise MessageBodyMismatchError()
-        return AcceptedSqsMessage(message_id)
+        return MessageAccepted(message_id)
 
 
 @dataclass(frozen=True, slots=True)
@@ -159,7 +153,7 @@ class OutgoingSqsMessageBatch:
 
     def verify(
         self, response: object
-    ) -> Mapping[str, AcceptedSqsMessage | MessageSendError]:
+    ) -> Mapping[str, MessageAccepted | MessageSendError]:
         if not isinstance(response, dict):
             raise SqsResponseInvalidError(
                 reason=SqsResponseInvalidReason.INVALID_TYPE,
@@ -178,7 +172,7 @@ class OutgoingSqsMessageBatch:
                 field=SqsResponseField.FAILED_ENTRIES,
             )
         seen: set[str] = set()
-        results: dict[str, AcceptedSqsMessage | MessageSendError] = {}
+        results: dict[str, MessageAccepted | MessageSendError] = {}
         for entry in successful:
             if not isinstance(entry, dict):
                 raise SqsResponseInvalidError(

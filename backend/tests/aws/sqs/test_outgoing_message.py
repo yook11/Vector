@@ -7,15 +7,14 @@ from unittest.mock import Mock
 
 import pytest
 
-from app.aws.sqs.errors import SqsServiceError
 from app.aws.sqs.outgoing_message import (
-    AcceptedSqsMessage,
     MessageBodyMismatchError,
     MessageTooLargeError,
     OutgoingSqsMessage,
     OutgoingSqsMessageBatch,
     SqsResponseInvalidError,
 )
+from app.outbox.relay.sender import MessageAccepted, MessageServiceError
 
 # SQSのメッセージ1件と1回のバッチ全体の上限で、どちらもUTF-8のバイト数で数える。
 SQS_MAX_BYTES = 1_048_576
@@ -129,7 +128,7 @@ def test_verify_compares_checksum_with_sent_body(checksum, mismatch):
     """大文字小文字を区別せずMD5を比べ、一致すればSQSが振ったIDで受付を返し、違えば本文不一致にする。"""
     result = {"MessageId": "id", "MD5OfMessageBody": checksum}
     if not mismatch:
-        assert OutgoingSqsMessage("{}").verify(result) == AcceptedSqsMessage("id")
+        assert OutgoingSqsMessage("{}").verify(result) == MessageAccepted("id")
         return
     with pytest.raises(MessageBodyMismatchError) as caught:
         OutgoingSqsMessage("{}").verify(result)
@@ -176,8 +175,8 @@ def test_verify_matches_entries_by_id_and_returns_them_in_sent_order():
     }
     before = deepcopy(response)
     assert list(batch.verify(response).items()) == [
-        ("a", AcceptedSqsMessage("sqs-a")),
-        ("b", AcceptedSqsMessage("sqs-b")),
+        ("a", MessageAccepted("sqs-a")),
+        ("b", MessageAccepted("sqs-b")),
     ]
     assert response == before
 
@@ -190,8 +189,8 @@ def test_verify_keeps_mismatch_and_rejection_to_their_own_ids():
             "Failed": [_failure("b", "RequestThrottled")],
         }
     )
-    assert results["a"] == AcceptedSqsMessage("message-id")
-    assert isinstance(results["b"], SqsServiceError)
+    assert results["a"] == MessageAccepted("message-id")
+    assert isinstance(results["b"], MessageServiceError)
     assert (results["b"].reason, results["b"].service_code) == (
         "throttled",
         "RequestThrottled",

@@ -1,7 +1,6 @@
 """SQSへの送信でSDKの呼び出しが失敗したことを、起きたことごとの例外で伝える。"""
 
 import re
-from enum import StrEnum
 
 from botocore.exceptions import (
     ClientError,
@@ -11,78 +10,15 @@ from botocore.exceptions import (
     PartialCredentialsError,
 )
 
-from app.http.failure import HttpTransportFailure, classify_botocore
-from app.shared.errors import ApplicationError
-
-
-class SqsServiceErrorReason(StrEnum):
-    """SQSが返したエラーコードを、何が起きたかの意味で分けた理由。"""
-
-    THROTTLED = "throttled"
-    SERVICE_UNAVAILABLE = "service_unavailable"
-    AUTHENTICATION_FAILED = "authentication_failed"
-    ACCESS_DENIED = "access_denied"
-    DESTINATION_NOT_FOUND = "destination_not_found"
-    REQUEST_REJECTED = "request_rejected"
-    SECURITY_REJECTED = "security_rejected"
-    REQUEST_EXPIRED = "request_expired"
-    ENCRYPTION_ERROR = "encryption_error"
-    UNKNOWN = "unknown"
-
-
-class MessageSendConfigurationReason(StrEnum):
-    """送信に必要な設定のうち、何がなかったか。"""
-
-    MISSING_CREDENTIALS = "missing_credentials"
-    INCOMPLETE_CREDENTIALS = "incomplete_credentials"
-    MISSING_REGION = "missing_region"
-    MISSING_QUEUE_URL = "missing_queue_url"
-
-
-class MessageSendError(ApplicationError):
-    """送れなかった失敗の基底で、再送するかは受け取った工程が事実から決める。"""
-
-
-class MessageSendTransportError(MessageSendError):
-    """通信が完了しなかった失敗で、SQSが受け付けたかは断定しない。"""
-
-    def __init__(self, *, failure: HttpTransportFailure, exception_type: str) -> None:
-        self.failure = failure
-        self.exception_type = exception_type
-        super().__init__(
-            "メッセージの送信で通信が完了しませんでした",
-            details={
-                "stage": self.failure.stage.value,
-                "reason": self.failure.reason.value,
-                "proxy_status": self.failure.proxy_status,
-                "exception_type": self.exception_type,
-            },
-        )
-
-
-class SqsServiceError(MessageSendError):
-    """SQSがエラーコードを返して送信を終えた。"""
-
-    def __init__(
-        self, *, reason: SqsServiceErrorReason, service_code: str | None
-    ) -> None:
-        self.reason = reason
-        self.service_code = service_code
-        super().__init__(
-            "SQSがエラーを返し、メッセージを送信できませんでした",
-            details={"reason": self.reason.value, "service_code": self.service_code},
-        )
-
-
-class MessageSendConfigurationError(MessageSendError):
-    """資格情報・リージョン・送信先のキューなど、送信に必要な設定がない。"""
-
-    def __init__(self, *, reason: MessageSendConfigurationReason) -> None:
-        self.reason = reason
-        super().__init__(
-            "メッセージの送信に必要な設定がありません",
-            details={"reason": self.reason.value},
-        )
+from app.http.failure import classify_botocore
+from app.outbox.relay.sender import (
+    MessageSendConfigurationError,
+    MessageSendConfigurationReason,
+    MessageSendError,
+    MessageSendTransportError,
+    MessageServiceError,
+    MessageServiceErrorReason,
+)
 
 
 class MessageSendCredentialsError(MessageSendError):
@@ -108,28 +44,28 @@ class MessageSendUnexpectedError(MessageSendError):
 
 
 _CODES_BY_REASON = {
-    SqsServiceErrorReason.THROTTLED: (
+    MessageServiceErrorReason.THROTTLED: (
         "RequestThrottled",
         "KmsThrottled",
         "ThrottlingException",
     ),
-    SqsServiceErrorReason.SERVICE_UNAVAILABLE: (
+    MessageServiceErrorReason.SERVICE_UNAVAILABLE: (
         "InternalFailure",
         "ServiceUnavailable",
     ),
-    SqsServiceErrorReason.AUTHENTICATION_FAILED: (
+    MessageServiceErrorReason.AUTHENTICATION_FAILED: (
         "InvalidClientTokenId",
         "MissingAuthenticationToken",
     ),
-    SqsServiceErrorReason.ACCESS_DENIED: (
+    MessageServiceErrorReason.ACCESS_DENIED: (
         "AccessDenied",
         "AccessDeniedException",
         "NotAuthorized",
         "KmsAccessDenied",
         "OptInRequired",
     ),
-    SqsServiceErrorReason.DESTINATION_NOT_FOUND: ("QueueDoesNotExist",),
-    SqsServiceErrorReason.REQUEST_REJECTED: (
+    MessageServiceErrorReason.DESTINATION_NOT_FOUND: ("QueueDoesNotExist",),
+    MessageServiceErrorReason.REQUEST_REJECTED: (
         "InvalidAddress",
         "InvalidMessageContents",
         "UnsupportedOperation",
@@ -147,9 +83,12 @@ _CODES_BY_REASON = {
         "InvalidBatchEntryId",
         "TooManyEntriesInBatchRequest",
     ),
-    SqsServiceErrorReason.SECURITY_REJECTED: ("InvalidSecurity", "IncompleteSignature"),
-    SqsServiceErrorReason.REQUEST_EXPIRED: ("RequestExpired",),
-    SqsServiceErrorReason.ENCRYPTION_ERROR: (
+    MessageServiceErrorReason.SECURITY_REJECTED: (
+        "InvalidSecurity",
+        "IncompleteSignature",
+    ),
+    MessageServiceErrorReason.REQUEST_EXPIRED: ("RequestExpired",),
+    MessageServiceErrorReason.ENCRYPTION_ERROR: (
         "KmsDisabled",
         "KmsInvalidState",
         "KmsNotFound",
@@ -164,7 +103,7 @@ _REASON_BY_CODE = {
 
 def to_sqs_service_error(
     code: str | None, *, status_code: int | None = None
-) -> SqsServiceError:
+) -> MessageServiceError:
     """SQSが返したエラーコードを何が起きたかの理由へ翻訳し、形の不正なコードは持たない。"""
     if code is not None and re.fullmatch(r"[A-Za-z0-9_.:-]{1,128}", code) is None:
         code = None
@@ -172,11 +111,11 @@ def to_sqs_service_error(
     if reason is None:
         # 既知のコードはstatusより優先し、未知のコードだけ5xxをSQS側の障害とみなす。
         reason = (
-            SqsServiceErrorReason.SERVICE_UNAVAILABLE
+            MessageServiceErrorReason.SERVICE_UNAVAILABLE
             if status_code is not None and 500 <= status_code <= 599
-            else SqsServiceErrorReason.UNKNOWN
+            else MessageServiceErrorReason.UNKNOWN
         )
-    return SqsServiceError(reason=reason, service_code=code)
+    return MessageServiceError(reason=reason, service_code=code)
 
 
 def to_message_send_error(exc: Exception) -> MessageSendError:

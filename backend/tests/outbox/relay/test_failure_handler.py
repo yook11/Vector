@@ -11,11 +11,6 @@ from sqlalchemy import event as sqlalchemy_event
 from sqlalchemy import func, select
 from sqlalchemy.exc import SQLAlchemyError
 
-from app.aws.sqs.errors import (
-    MessageSendConfigurationError,
-    MessageSendConfigurationReason,
-    MessageSendTransportError,
-)
 from app.db.errors import DatabaseError
 from app.db.session import caller_managed_session_factory
 from app.http.failure import (
@@ -31,9 +26,14 @@ from app.outbox.relay.failure_handler import (
     OutboxDeliveryFailureHandler,
     RetryScheduled,
 )
-from app.outbox.relay.failures import PublishFailed, PublishFailure
+from app.outbox.relay.failures import PublishFailure
 from app.outbox.relay.repository import LeasedOutboxEvent
 from app.outbox.relay.retry_policy import NonRetryableReason
+from app.outbox.relay.sender import (
+    MessageSendConfigurationError,
+    MessageSendConfigurationReason,
+    MessageSendTransportError,
+)
 from tests.outbox.helpers import FUTURE, PAST, insert_event, read_event
 
 pytestmark = pytest.mark.asyncio
@@ -127,7 +127,7 @@ async def test_result_means_committed_update_visible_from_another_session(
     assert (
         await handler.handle(
             leased_event=leased_event,
-            failure=PublishFailed(leased_event.envelope.event_id, error),
+            error=error,
         )
         == expected
     )
@@ -158,7 +158,7 @@ async def test_result_means_committed_update_visible_from_another_session(
     assert (
         await handler.handle(
             leased_event=leased_event,
-            failure=PublishFailed(leased_event.envelope.event_id, error),
+            error=error,
         )
         == DeliveryUpdateSkipped()
     )
@@ -216,7 +216,7 @@ async def test_invalid_update_conditions_skip_without_modifying_rows(
 
     result = await OutboxDeliveryFailureHandler(factory, jitter=lambda: 0.5).handle(
         leased_event=leased_event,
-        failure=PublishFailed(leased_event.envelope.event_id, error),
+        error=error,
     )
     assert result == DeliveryUpdateSkipped()
     record_stop.assert_not_called()
@@ -258,7 +258,7 @@ async def test_database_failure_propagates_and_uncommitted_update_is_rolled_back
     with pytest.raises(DatabaseError) as caught:
         await OutboxDeliveryFailureHandler(factory, jitter=lambda: 0.5).handle(
             leased_event=leased_event,
-            failure=PublishFailed(leased_event.envelope.event_id, error),
+            error=error,
         )
     record_stop.assert_not_called()
     assert not isinstance(caught.value, PublishFailure)
@@ -284,7 +284,7 @@ async def test_session_exit_failure_does_not_return_success_or_undo_commit(
     with pytest.raises(RuntimeError) as caught:
         await OutboxDeliveryFailureHandler(factory, jitter=lambda: 0.5).handle(
             leased_event=leased_event,
-            failure=PublishFailed(leased_event.envelope.event_id, _configuration()),
+            error=_configuration(),
         )
     record_stop.assert_not_called()
     assert caught.value is failure
@@ -319,7 +319,7 @@ async def test_invalid_policy_input_never_opens_session(
     with pytest.raises(exception_type):
         await OutboxDeliveryFailureHandler(factory, jitter=generate).handle(
             leased_event=leased_event,
-            failure=PublishFailed(leased_event.envelope.event_id, error),
+            error=error,
         )
     record_stop.assert_not_called()
     factory.assert_not_called()
@@ -338,30 +338,28 @@ async def test_jitter_generation_failure_is_not_reclassified(failure, record_sto
             factory, jitter=Mock(side_effect=failure)
         ).handle(
             leased_event=leased_event,
-            failure=PublishFailed(leased_event.envelope.event_id, _transport()),
+            error=_transport(),
         )
     record_stop.assert_not_called()
     assert caught.value is failure
     factory.assert_not_called()
 
 
-@pytest.mark.parametrize("case", ["raw_error", "none", "wrong_id"])
+@pytest.mark.parametrize(
+    "error", [None, RuntimeError("private-error"), SQLAlchemyError("db failed")]
+)
 async def test_invalid_failure_is_rejected_before_jitter_session_or_record(
-    case, record_stop
+    error, record_stop
 ):
-    """別イベントの失敗や失敗結果以外の入力で副作用を起こさない。"""
+    """配信の失敗以外の入力は、jitter・DB・記録の前に値を漏らさず拒否する。"""
     leased_event = _leased_event()
-    failure = {
-        "raw_error": _configuration(),
-        "none": None,
-        "wrong_id": PublishFailed(uuid4(), _configuration()),
-    }[case]
     factory = Mock()
     jitter = Mock(return_value=0.5)
-    with pytest.raises(ValueError if case == "wrong_id" else TypeError):
+    with pytest.raises(TypeError, match="error must be a PublishFailure") as caught:
         await OutboxDeliveryFailureHandler(factory, jitter=jitter).handle(
-            leased_event=leased_event, failure=failure
+            leased_event=leased_event, error=error
         )
+    assert "private-error" not in str(caught.value)
     jitter.assert_not_called()
     factory.assert_not_called()
     record_stop.assert_not_called()

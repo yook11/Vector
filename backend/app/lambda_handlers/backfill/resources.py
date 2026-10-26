@@ -7,14 +7,13 @@ from dataclasses import dataclass
 from botocore.config import Config
 from botocore.session import Session
 
-from app.aws.sqs.message_sender import create_sqs_client
+from app.aws.sqs.message_sender import create_sqs_client, open_sqs_message_sender
 from app.db.engine import BackfillStage, create_backfill_engine
 from app.db.iam import build_iam_password_provider
 from app.db.session import SessionFactory, caller_managed_session_factory
 from app.lambda_handlers.backfill.failure_recorder import record_failure
 from app.lambda_handlers.backfill.settings import BackfillConnectionSettings
 from app.outbox.relay.sender import MessageSenderFactory
-from app.outbox.relay.sqs_sender import open_sqs_event_message_sender
 
 
 @dataclass(frozen=True)
@@ -71,7 +70,7 @@ async def open_backfill_resources(
             sqs_session = Session()
             resources = BackfillResources(
                 session_factory,
-                lambda: open_sqs_event_message_sender(
+                lambda: open_sqs_message_sender(
                     client_factory=lambda: create_sqs_client(
                         session=sqs_session,
                         region=settings.aws_region,

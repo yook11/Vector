@@ -9,7 +9,7 @@ from random import random
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.outbox.relay.failure_recording import record_publish_failure
-from app.outbox.relay.failures import PublishFailed
+from app.outbox.relay.failures import PublishFailure
 from app.outbox.relay.repository import LeasedOutboxEvent, OutboxDeliveryRepository
 from app.outbox.relay.retry_policy import (
     NonRetryableReason,
@@ -53,15 +53,13 @@ class OutboxDeliveryFailureHandler:
         self,
         *,
         leased_event: LeasedOutboxEvent,
-        failure: PublishFailed,
+        error: PublishFailure,
     ) -> RetryScheduled | DeliveryStopped | DeliveryUpdateSkipped:
         """確保済みイベントの再試行予約または停止を確定する。"""
-        if not isinstance(failure, PublishFailed):
-            raise TypeError("failure must be PublishFailed")
-        if failure.event_id != leased_event.envelope.event_id:
-            raise ValueError("failure event_id must match the leased event")
+        if not isinstance(error, PublishFailure):
+            raise TypeError("error must be a PublishFailure")
         decision = decide_publish_retry(
-            failure.error,
+            error,
             attempt_count=leased_event.attempt_count,
             jitter=self._jitter(),
         )
@@ -90,7 +88,7 @@ class OutboxDeliveryFailureHandler:
         if isinstance(outcome, DeliveryStopped):
             record_publish_failure(
                 leased_event=leased_event,
-                error=failure.error,
+                error=error,
                 stop_reason=outcome.reason,
             )
         return outcome

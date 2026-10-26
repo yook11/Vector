@@ -1,7 +1,7 @@
 """取得依頼の送信の失敗が送り直しで解消しうるかと試行回数から、送り直すかを決める。"""
 
-from app.aws.sqs.errors import MessageSendError
-from app.aws.sqs.retry_prospect import is_resolvable_by_retry
+from app.outbox.relay.retry_policy import is_resolvable_by_retry
+from app.outbox.relay.sender import MessageSendError
 
 MAX_ACQUISITION_SEND_ATTEMPTS = 3
 

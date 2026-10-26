@@ -18,15 +18,7 @@ from app.analysis.assessment.events import (
 from app.analysis.curation.events import (
     CuratedEventInvalidError,
 )
-from app.aws.sqs.errors import (
-    MessageSendConfigurationError,
-    MessageSendConfigurationReason,
-    MessageSendCredentialsError,
-    MessageSendTransportError,
-    MessageSendUnexpectedError,
-    SqsServiceError,
-    SqsServiceErrorReason,
-)
+from app.aws.sqs.errors import MessageSendCredentialsError, MessageSendUnexpectedError
 from app.aws.sqs.outgoing_message import (
     MessageBodyMismatchError,
     MessageTooLargeError,
@@ -54,9 +46,15 @@ from app.outbox.relay.failure_handler import (
     DeliveryUpdateSkipped,
     OutboxDeliveryFailureHandler,
 )
-from app.outbox.relay.failures import PublishFailed
 from app.outbox.relay.repository import LeasedOutboxEvent
 from app.outbox.relay.retry_policy import NonRetryableReason
+from app.outbox.relay.sender import (
+    MessageSendConfigurationError,
+    MessageSendConfigurationReason,
+    MessageSendTransportError,
+    MessageServiceError,
+    MessageServiceErrorReason,
+)
 from app.shared.event_contract import (
     EventInvalid,
     EventInvalidReason,
@@ -75,7 +73,7 @@ def _missing_credentials():
 
 
 def _sqs_rejection(reason, service_code):
-    return SqsServiceError(reason=reason, service_code=service_code)
+    return MessageServiceError(reason=reason, service_code=service_code)
 
 
 def _logs(out):
@@ -126,7 +124,7 @@ def leased_event():
             _missing_credentials(),
             True,
             {
-                "error_class": "app.aws.sqs.errors.MessageSendConfigurationError",
+                "error_class": "app.outbox.relay.sender.MessageSendConfigurationError",
                 "error_message": "メッセージの送信に必要な設定がありません",
                 "error_details": {"reason": "missing_credentials"},
             },
@@ -137,7 +135,7 @@ def leased_event():
             ),
             True,
             {
-                "error_class": "app.aws.sqs.errors.MessageSendConfigurationError",
+                "error_class": "app.outbox.relay.sender.MessageSendConfigurationError",
                 "error_message": "メッセージの送信に必要な設定がありません",
                 "error_details": {"reason": "incomplete_credentials"},
             },
@@ -148,7 +146,7 @@ def leased_event():
             ),
             True,
             {
-                "error_class": "app.aws.sqs.errors.MessageSendConfigurationError",
+                "error_class": "app.outbox.relay.sender.MessageSendConfigurationError",
                 "error_message": "メッセージの送信に必要な設定がありません",
                 "error_details": {"reason": "missing_region"},
             },
@@ -164,12 +162,14 @@ def leased_event():
         ),
         (
             _sqs_rejection(
-                SqsServiceErrorReason.AUTHENTICATION_FAILED, "InvalidClientTokenId"
+                MessageServiceErrorReason.AUTHENTICATION_FAILED, "InvalidClientTokenId"
             ),
             True,
             {
-                "error_class": "app.aws.sqs.errors.SqsServiceError",
-                "error_message": "SQSがエラーを返し、メッセージを送信できませんでした",
+                "error_class": "app.outbox.relay.sender.MessageServiceError",
+                "error_message": (
+                    "送信先がエラーを返し、メッセージを送信できませんでした"
+                ),
                 "error_details": {
                     "reason": "authentication_failed",
                     "service_code": "InvalidClientTokenId",
@@ -177,11 +177,13 @@ def leased_event():
             },
         ),
         (
-            _sqs_rejection(SqsServiceErrorReason.ACCESS_DENIED, "AccessDenied"),
+            _sqs_rejection(MessageServiceErrorReason.ACCESS_DENIED, "AccessDenied"),
             True,
             {
-                "error_class": "app.aws.sqs.errors.SqsServiceError",
-                "error_message": "SQSがエラーを返し、メッセージを送信できませんでした",
+                "error_class": "app.outbox.relay.sender.MessageServiceError",
+                "error_message": (
+                    "送信先がエラーを返し、メッセージを送信できませんでした"
+                ),
                 "error_details": {
                     "reason": "access_denied",
                     "service_code": "AccessDenied",
@@ -190,12 +192,14 @@ def leased_event():
         ),
         (
             _sqs_rejection(
-                SqsServiceErrorReason.DESTINATION_NOT_FOUND, "QueueDoesNotExist"
+                MessageServiceErrorReason.DESTINATION_NOT_FOUND, "QueueDoesNotExist"
             ),
             True,
             {
-                "error_class": "app.aws.sqs.errors.SqsServiceError",
-                "error_message": "SQSがエラーを返し、メッセージを送信できませんでした",
+                "error_class": "app.outbox.relay.sender.MessageServiceError",
+                "error_message": (
+                    "送信先がエラーを返し、メッセージを送信できませんでした"
+                ),
                 "error_details": {
                     "reason": "destination_not_found",
                     "service_code": "QueueDoesNotExist",
@@ -203,11 +207,13 @@ def leased_event():
             },
         ),
         (
-            _sqs_rejection(SqsServiceErrorReason.THROTTLED, "RequestThrottled"),
+            _sqs_rejection(MessageServiceErrorReason.THROTTLED, "RequestThrottled"),
             False,
             {
-                "error_class": "app.aws.sqs.errors.SqsServiceError",
-                "error_message": "SQSがエラーを返し、メッセージを送信できませんでした",
+                "error_class": "app.outbox.relay.sender.MessageServiceError",
+                "error_message": (
+                    "送信先がエラーを返し、メッセージを送信できませんでした"
+                ),
                 "error_details": {
                     "reason": "throttled",
                     "service_code": "RequestThrottled",
@@ -216,12 +222,14 @@ def leased_event():
         ),
         (
             _sqs_rejection(
-                SqsServiceErrorReason.SERVICE_UNAVAILABLE, "ServiceUnavailable"
+                MessageServiceErrorReason.SERVICE_UNAVAILABLE, "ServiceUnavailable"
             ),
             False,
             {
-                "error_class": "app.aws.sqs.errors.SqsServiceError",
-                "error_message": "SQSがエラーを返し、メッセージを送信できませんでした",
+                "error_class": "app.outbox.relay.sender.MessageServiceError",
+                "error_message": (
+                    "送信先がエラーを返し、メッセージを送信できませんでした"
+                ),
                 "error_details": {
                     "reason": "service_unavailable",
                     "service_code": "ServiceUnavailable",
@@ -230,12 +238,14 @@ def leased_event():
         ),
         (
             _sqs_rejection(
-                SqsServiceErrorReason.REQUEST_REJECTED, "InvalidParameterValue"
+                MessageServiceErrorReason.REQUEST_REJECTED, "InvalidParameterValue"
             ),
             False,
             {
-                "error_class": "app.aws.sqs.errors.SqsServiceError",
-                "error_message": "SQSがエラーを返し、メッセージを送信できませんでした",
+                "error_class": "app.outbox.relay.sender.MessageServiceError",
+                "error_message": (
+                    "送信先がエラーを返し、メッセージを送信できませんでした"
+                ),
                 "error_details": {
                     "reason": "request_rejected",
                     "service_code": "InvalidParameterValue",
@@ -244,12 +254,14 @@ def leased_event():
         ),
         (
             _sqs_rejection(
-                SqsServiceErrorReason.SECURITY_REJECTED, "IncompleteSignature"
+                MessageServiceErrorReason.SECURITY_REJECTED, "IncompleteSignature"
             ),
             False,
             {
-                "error_class": "app.aws.sqs.errors.SqsServiceError",
-                "error_message": "SQSがエラーを返し、メッセージを送信できませんでした",
+                "error_class": "app.outbox.relay.sender.MessageServiceError",
+                "error_message": (
+                    "送信先がエラーを返し、メッセージを送信できませんでした"
+                ),
                 "error_details": {
                     "reason": "security_rejected",
                     "service_code": "IncompleteSignature",
@@ -257,11 +269,13 @@ def leased_event():
             },
         ),
         (
-            _sqs_rejection(SqsServiceErrorReason.REQUEST_EXPIRED, "RequestExpired"),
+            _sqs_rejection(MessageServiceErrorReason.REQUEST_EXPIRED, "RequestExpired"),
             False,
             {
-                "error_class": "app.aws.sqs.errors.SqsServiceError",
-                "error_message": "SQSがエラーを返し、メッセージを送信できませんでした",
+                "error_class": "app.outbox.relay.sender.MessageServiceError",
+                "error_message": (
+                    "送信先がエラーを返し、メッセージを送信できませんでした"
+                ),
                 "error_details": {
                     "reason": "request_expired",
                     "service_code": "RequestExpired",
@@ -269,11 +283,13 @@ def leased_event():
             },
         ),
         (
-            _sqs_rejection(SqsServiceErrorReason.ENCRYPTION_ERROR, "KmsDisabled"),
+            _sqs_rejection(MessageServiceErrorReason.ENCRYPTION_ERROR, "KmsDisabled"),
             False,
             {
-                "error_class": "app.aws.sqs.errors.SqsServiceError",
-                "error_message": "SQSがエラーを返し、メッセージを送信できませんでした",
+                "error_class": "app.outbox.relay.sender.MessageServiceError",
+                "error_message": (
+                    "送信先がエラーを返し、メッセージを送信できませんでした"
+                ),
                 "error_details": {
                     "reason": "encryption_error",
                     "service_code": "KmsDisabled",
@@ -281,11 +297,13 @@ def leased_event():
             },
         ),
         (
-            _sqs_rejection(SqsServiceErrorReason.UNKNOWN, "FutureError"),
+            _sqs_rejection(MessageServiceErrorReason.UNKNOWN, "FutureError"),
             False,
             {
-                "error_class": "app.aws.sqs.errors.SqsServiceError",
-                "error_message": "SQSがエラーを返し、メッセージを送信できませんでした",
+                "error_class": "app.outbox.relay.sender.MessageServiceError",
+                "error_message": (
+                    "送信先がエラーを返し、メッセージを送信できませんでした"
+                ),
                 "error_details": {"reason": "unknown", "service_code": "FutureError"},
             },
         ),
@@ -298,7 +316,7 @@ def leased_event():
             ),
             False,
             {
-                "error_class": "app.aws.sqs.errors.MessageSendTransportError",
+                "error_class": "app.outbox.relay.sender.MessageSendTransportError",
                 "error_message": "メッセージの送信で通信が完了しませんでした",
                 "error_details": {
                     "stage": "unknown",
@@ -483,7 +501,7 @@ def test_retry_exhaustion_is_warning_and_not_alarm_target(leased_event, capsys):
             "attempt_count": 1,
             "stop_reason": "retry_exhausted",
             "requires_configuration_fix": False,
-            "error_class": "app.aws.sqs.errors.MessageSendTransportError",
+            "error_class": "app.outbox.relay.sender.MessageSendTransportError",
             "error_message": "メッセージの送信で通信が完了しませんでした",
             "error_details": {
                 "stage": "receive",
@@ -636,7 +654,7 @@ async def test_handler_composition_records_only_committed_stops(
             error = _missing_credentials()
         result = await OutboxDeliveryFailureHandler(factory, jitter=lambda: 0.5).handle(
             leased_event=leased_event,
-            failure=PublishFailed(leased_event.envelope.event_id, error),
+            error=error,
         )
         async with session_factory() as reader:
             saved = await read_event(reader, event_id)
@@ -701,9 +719,9 @@ async def test_handler_returns_committed_stop_despite_output_failure(
     if failed_sink in ("log", "both"):
         monkeypatch.setattr(sys, "stdout", _BrokenOutput(OSError("log sink failed")))
     handler = OutboxDeliveryFailureHandler(session_factory, jitter=lambda: 0.5)
-    failure = PublishFailed(event_id, _missing_credentials())
+    failure = _missing_credentials()
     assert await handler.handle(
-        leased_event=leased_event, failure=failure
+        leased_event=leased_event, error=failure
     ) == DeliveryStopped(STOP_REASON)
     async with session_factory() as reader:
         saved = await read_event(reader, event_id)
@@ -711,7 +729,7 @@ async def test_handler_returns_committed_stop_despite_output_failure(
     assert saved["delivery_stopped_at"] is not None
     assert saved["lease_token"] is None
     assert (
-        await handler.handle(leased_event=leased_event, failure=failure)
+        await handler.handle(leased_event=leased_event, error=failure)
         == DeliveryUpdateSkipped()
     )
     metric.assert_called_once()

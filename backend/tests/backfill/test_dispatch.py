@@ -13,12 +13,7 @@ from app.analysis.assessment.events import (
     ArticleAssessedInScopeEvent,
 )
 from app.analysis.curation.events import ArticleCuratedSignal, ArticleCuratedSignalEvent
-from app.aws.sqs.errors import (
-    MessageSendConfigurationError,
-    MessageSendConfigurationReason,
-    MessageSendUnexpectedError,
-)
-from app.aws.sqs.outgoing_message import AcceptedSqsMessage
+from app.aws.sqs.errors import MessageSendUnexpectedError
 from app.backfill import service
 from app.backfill.targets import BackfillEventTarget
 from app.collection.article_acquisition.events import (
@@ -34,6 +29,11 @@ from app.outbox.event.assessed_in_scope import build_assessed_in_scope_message
 from app.outbox.event.curated_signal import build_curated_signal_message
 from app.outbox.event.incomplete_recorded import build_incomplete_recorded_message
 from app.outbox.relay.route import EventDeliveryRoute
+from app.outbox.relay.sender import (
+    MessageAccepted,
+    MessageSendConfigurationError,
+    MessageSendConfigurationReason,
+)
 from tests.backfill.helpers import delivery_arguments
 
 NOW = datetime(2026, 9, 14, 0, 0, tzinfo=UTC)
@@ -58,7 +58,7 @@ def accepting_sender():
     return Mock(
         send_batch=AsyncMock(
             side_effect=lambda sendable: [
-                (target, AcceptedSqsMessage(f"sqs-{message.event_id}"))
+                (target, MessageAccepted(f"sqs-{message.event_id}"))
                 for target, message in sendable
             ]
         )
@@ -134,7 +134,7 @@ async def test_failed_items_do_not_stop_later_batches(failed_ids):
                     target,
                     error
                     if analyzable_ids([message.body])[0] in failed_ids
-                    else AcceptedSqsMessage(f"sqs-{message.event_id}"),
+                    else MessageAccepted(f"sqs-{message.event_id}"),
                 )
                 for target, message in sendable
             ]
@@ -255,7 +255,7 @@ async def test_conversion_failure_and_send_failure_count_only_success(monkeypatc
     def send(sendable):
         assert analyzable_ids([message.body for _, message in sendable]) == [2, 3]
         (first, _), (second, _) = sendable
-        return [(first, error), (second, AcceptedSqsMessage("sqs-id"))]
+        return [(first, error), (second, MessageAccepted("sqs-id"))]
 
     sender = Mock(send_batch=AsyncMock(side_effect=send))
     recorded = Mock()

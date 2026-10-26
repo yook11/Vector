@@ -1,15 +1,41 @@
 """停止確定後に、診断ログと必要なメトリクスを書く。"""
 
-from app.aws.sqs.configuration_fix import requires_configuration_fix
-from app.aws.sqs.errors import MessageSendError
 from app.cloudwatch.emf import emit_metric
 from app.log_policy.policies.pipeline_control import PIPELINE_CONTROL_LOG_RULES
 from app.log_policy.runtime import create_policy_json_logger
 from app.outbox.relay.failures import PublishFailure
 from app.outbox.relay.repository import LeasedOutboxEvent
 from app.outbox.relay.retry_policy import NonRetryableReason
+from app.outbox.relay.sender import (
+    MessageSendConfigurationError,
+    MessageSendConfigurationReason,
+    MessageSendError,
+    MessageServiceError,
+    MessageServiceErrorReason,
+)
 
 CONFIGURATION_FAILURE_METRIC = "outbox_publish_configuration_failure"
+
+
+def _requires_configuration_fix(error: MessageSendError) -> bool:
+    """資格情報・region・権限・送信先のキューを直すまで解消しない送信の失敗かを返す。"""
+    match error:
+        case MessageSendConfigurationError():
+            # キューのURLが空なのは、設定層が起動時に弾いた後の呼び出し側の誤り。
+            return error.reason in (
+                MessageSendConfigurationReason.MISSING_CREDENTIALS,
+                MessageSendConfigurationReason.INCOMPLETE_CREDENTIALS,
+                MessageSendConfigurationReason.MISSING_REGION,
+            )
+        case MessageServiceError():
+            return error.reason in (
+                MessageServiceErrorReason.AUTHENTICATION_FAILED,
+                MessageServiceErrorReason.ACCESS_DENIED,
+                MessageServiceErrorReason.DESTINATION_NOT_FOUND,
+            )
+        # 資格情報の取得の失敗は、一時的か恒久的かを型から区別できない。
+        case _:
+            return False
 
 
 def record_publish_failure(
@@ -20,7 +46,7 @@ def record_publish_failure(
 ) -> None:
     """停止確定後に呼び、記録の通常失敗を配信処理へ戻さない。"""
     logger = create_policy_json_logger(__name__, PIPELINE_CONTROL_LOG_RULES)
-    requires_fix = isinstance(error, MessageSendError) and requires_configuration_fix(
+    requires_fix = isinstance(error, MessageSendError) and _requires_configuration_fix(
         error
     )
     # 送り直せる失敗で回数を使い切った記事は、backfillがDBの状態から再投入する。

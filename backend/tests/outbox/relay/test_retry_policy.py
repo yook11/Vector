@@ -11,16 +11,7 @@ from app.analysis.assessment.events import (
 from app.analysis.curation.events import (
     CuratedEventInvalidError,
 )
-from app.aws.sqs.errors import (
-    MessageSendConfigurationError,
-    MessageSendConfigurationReason,
-    MessageSendCredentialsError,
-    MessageSendError,
-    MessageSendTransportError,
-    MessageSendUnexpectedError,
-    SqsServiceError,
-    SqsServiceErrorReason,
-)
+from app.aws.sqs.errors import MessageSendCredentialsError, MessageSendUnexpectedError
 from app.aws.sqs.outgoing_message import (
     MessageBodyMismatchError,
     MessageTooLargeError,
@@ -47,6 +38,14 @@ from app.outbox.relay.retry_policy import (
     RetryDelay,
     decide_publish_retry,
 )
+from app.outbox.relay.sender import (
+    MessageSendConfigurationError,
+    MessageSendConfigurationReason,
+    MessageSendError,
+    MessageSendTransportError,
+    MessageServiceError,
+    MessageServiceErrorReason,
+)
 from app.shared.event_contract import (
     EventInvalid,
     EventInvalidReason,
@@ -54,8 +53,8 @@ from app.shared.event_contract import (
 
 
 def _throttled():
-    return SqsServiceError(
-        reason=SqsServiceErrorReason.THROTTLED, service_code="RequestThrottled"
+    return MessageServiceError(
+        reason=MessageServiceErrorReason.THROTTLED, service_code="RequestThrottled"
     )
 
 
@@ -77,11 +76,11 @@ def test_resolvable_sqs_failure_is_retried_after_first_delay(error):
 @pytest.mark.parametrize(
     "error",
     [
-        SqsServiceError(
-            reason=SqsServiceErrorReason.ACCESS_DENIED, service_code="AccessDenied"
+        MessageServiceError(
+            reason=MessageServiceErrorReason.ACCESS_DENIED, service_code="AccessDenied"
         ),
-        SqsServiceError(
-            reason=SqsServiceErrorReason.UNKNOWN, service_code="FutureError"
+        MessageServiceError(
+            reason=MessageServiceErrorReason.UNKNOWN, service_code="FutureError"
         ),
         _transport(HttpTransportFailureReason.CERTIFICATE_VERIFICATION),
         _transport(HttpTransportFailureReason.UNKNOWN),
@@ -137,8 +136,8 @@ def test_unrecognized_send_failure_is_not_retried():
         MessageSendConfigurationError(
             reason=MessageSendConfigurationReason.MISSING_CREDENTIALS
         ),
-        SqsServiceError(
-            reason=SqsServiceErrorReason.UNKNOWN, service_code="FutureError"
+        MessageServiceError(
+            reason=MessageServiceErrorReason.UNKNOWN, service_code="FutureError"
         ),
         MessageSendUnexpectedError(exception_type="ParamValidationError"),
     ],

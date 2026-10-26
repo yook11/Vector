@@ -7,9 +7,14 @@ from datetime import timedelta
 from enum import StrEnum
 from math import isfinite
 
-from app.aws.sqs.errors import MessageSendError
-from app.aws.sqs.retry_prospect import is_resolvable_by_retry
+from app.http import retry_prospect as http_retry_prospect
 from app.outbox.relay.failures import PublishFailure
+from app.outbox.relay.sender import (
+    MessageSendError,
+    MessageSendTransportError,
+    MessageServiceError,
+    MessageServiceErrorReason,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -59,9 +64,19 @@ MAX_PUBLISH_ATTEMPTS = 5
 _RETRY_DELAYS = (30, 120, 600, 1800)
 
 
-def _is_retry_candidate(error: PublishFailure) -> bool:
-    """回数を見ず、失敗の性質として再試行対象かを返す。"""
-    return isinstance(error, MessageSendError) and is_resolvable_by_retry(error)
+def is_resolvable_by_retry(error: MessageSendError) -> bool:
+    """同じメッセージを送り直すだけで解消しうる送信の失敗かを返す。"""
+    match error:
+        case MessageSendTransportError():
+            return http_retry_prospect.is_resolvable_by_retry(error.failure)
+        case MessageServiceError():
+            return error.reason in (
+                MessageServiceErrorReason.THROTTLED,
+                MessageServiceErrorReason.SERVICE_UNAVAILABLE,
+            )
+        # 設定・資格情報・本文や応答の問題と想定外の失敗は、直すまで変わらない。
+        case _:
+            return False
 
 
 def _retry_delay(*, attempt_count: int, jitter: float) -> timedelta:
@@ -87,7 +102,7 @@ def decide_publish_retry(
     if not 0 <= jitter <= 1 or not isfinite(jitter):
         raise ValueError("jitter must be finite and between zero and one")
 
-    if not _is_retry_candidate(error):
+    if not (isinstance(error, MessageSendError) and is_resolvable_by_retry(error)):
         return NonRetryable(NonRetryableReason.NON_RETRYABLE_FAILURE)
     if attempt_count >= MAX_PUBLISH_ATTEMPTS:
         return NonRetryable(NonRetryableReason.RETRY_EXHAUSTED)

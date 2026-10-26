@@ -20,7 +20,7 @@ IAM認証を必須とし、パスワード入りURLの拒否とproductionのTLS�
 - 呼び出しごとにRDS署名クライアント・engine・Senderを準備する。engineのpoolは1接続、overflowは0、接続・コマンド・pool待機は各5秒。
 - DB接続識別名は `vector-backfill-curation`・`vector-backfill-assessment`・`vector-backfill-embedding`・`vector-backfill-completion` とする。
 - session factoryは開閉だけを担い、記事単位のトランザクションはbackfill本体が所有する。
-- BackfillResourcesはsession factoryとSenderを返し、入口が工程別の配送定義・本文builderとともに本体へ渡す。SQSクライアントはSqsSenderが送信ごとに解放する。
+- BackfillResourcesはsession factoryとSenderを返し、入口が工程別の配送定義・本文builderとともに本体へ渡す。SQSクライアントはopen_sqs_message_senderが各バッチのスコープ終了時に解放する。
 - 正常・初期化失敗・本体失敗・キャンセル時も、取得済みengineとRDSクライアントを逆順に解放する。
 - 終了単独の失敗は実行失敗とする。先行した例外やキャンセルがある場合はそれを維持する。
 - 入口の失敗ログは工程・箇所・例外クラスだけを記録し、本文や設定値を含めない。ログ障害で元の例外を変更しない。

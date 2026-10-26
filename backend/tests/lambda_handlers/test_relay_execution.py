@@ -39,7 +39,7 @@ def execution_dependencies(monkeypatch):
     create_relay = Mock(return_value=relay)
     monkeypatch.setattr(execution, "create_lambda_engine", create_engine)
     monkeypatch.setattr(execution, "caller_managed_session_factory", create_factory)
-    monkeypatch.setattr(execution, "open_sqs_event_message_sender", open_sender)
+    monkeypatch.setattr(execution, "open_sqs_message_sender", open_sender)
     monkeypatch.setattr(execution, "create_sqs_client", create_client)
     monkeypatch.setattr(
         execution, "OutboxDeliveryFailureHandler", create_failure_handler

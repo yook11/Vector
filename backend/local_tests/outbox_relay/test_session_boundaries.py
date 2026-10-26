@@ -5,7 +5,7 @@ from unittest.mock import AsyncMock, Mock
 
 import pytest
 
-from app.aws.sqs.outgoing_message import AcceptedSqsMessage
+from app.outbox.relay.sender import MessageAccepted
 from local_tests.outbox_relay.support import (
     make_relay,
     read_saved,
@@ -43,7 +43,7 @@ async def test_preparation_sessions_are_closed_before_send(
         assert relay_engine.pool.checkedout() == 0
         [(leased_event, message)] = sendable
         assert message.event_id == ready.event_id
-        return [(leased_event, AcceptedSqsMessage("sqs-id"))]
+        return [(leased_event, MessageAccepted("sqs-id"))]
 
     sender = Mock(send_batch=AsyncMock(side_effect=send))
     await make_relay(relay_sessions, sender).run_once()

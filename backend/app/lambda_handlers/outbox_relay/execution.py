@@ -6,7 +6,7 @@ from collections.abc import Callable
 
 from botocore.session import Session
 
-from app.aws.sqs.message_sender import create_sqs_client
+from app.aws.sqs.message_sender import create_sqs_client, open_sqs_message_sender
 from app.db.engine import create_lambda_engine
 from app.db.session import caller_managed_session_factory
 from app.lambda_handlers.outbox_relay.settings import OutboxRelayConnectionSettings
@@ -15,7 +15,6 @@ from app.outbox.event.message import EventMessage
 from app.outbox.relay.failure_handler import OutboxDeliveryFailureHandler
 from app.outbox.relay.relay import OutboxRelay
 from app.outbox.relay.route import EventDeliveryRoute
-from app.outbox.relay.sqs_sender import open_sqs_event_message_sender
 
 
 async def run_relay(
@@ -31,7 +30,7 @@ async def run_relay(
         failure_handler = OutboxDeliveryFailureHandler(session_factory)
         relay = OutboxRelay(
             session_factory,
-            lambda: open_sqs_event_message_sender(
+            lambda: open_sqs_message_sender(
                 client_factory=lambda: create_sqs_client(
                     session=sqs_session, region=settings.aws_region, max_attempts=1
                 ),

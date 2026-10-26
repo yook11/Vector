@@ -1,7 +1,7 @@
 """SDKへメッセージ本文を渡し、送信応答と通信資源を管理する。"""
 
 import asyncio
-from collections.abc import AsyncIterator, Callable, Mapping
+from collections.abc import AsyncIterator, Callable, Mapping, Sequence
 from contextlib import asynccontextmanager
 from types import MappingProxyType
 from typing import Protocol, cast
@@ -10,14 +10,8 @@ from uuid import UUID
 from botocore.config import Config
 from botocore.session import Session
 
-from app.aws.sqs.errors import (
-    MessageSendConfigurationError,
-    MessageSendConfigurationReason,
-    MessageSendError,
-    to_message_send_error,
-)
+from app.aws.sqs.errors import to_message_send_error
 from app.aws.sqs.outgoing_message import (
-    AcceptedSqsMessage,
     MessageTooLargeError,
     OutgoingSqsMessage,
     OutgoingSqsMessageBatch,
@@ -25,6 +19,14 @@ from app.aws.sqs.outgoing_message import (
 )
 from app.log_policy.policies.pipeline_control import PIPELINE_CONTROL_LOG_RULES
 from app.log_policy.runtime import create_policy_json_logger
+from app.outbox.event.message import EventMessage
+from app.outbox.relay.sender import (
+    MessageAccepted,
+    MessageSendConfigurationError,
+    MessageSendConfigurationReason,
+    MessageSender,
+    MessageSendError,
+)
 
 
 class SqsClient(Protocol):
@@ -67,7 +69,7 @@ async def _run_until_transport_ends[T](call: Callable[[], T]) -> T:
         raise
 
 
-class SqsMessageSender:
+class SqsMessageSender(MessageSender):
     def __init__(self, *, client: SqsClient, queue_url: str) -> None:
         self._client = client
         self._queue_url = queue_url
@@ -87,8 +89,8 @@ class SqsMessageSender:
 
     def _send_batch(
         self, bodies: Mapping[UUID, str]
-    ) -> Mapping[UUID, AcceptedSqsMessage | MessageSendError]:
-        results: dict[str, AcceptedSqsMessage | MessageSendError] = {}
+    ) -> Mapping[UUID, MessageAccepted | MessageSendError]:
+        results: dict[str, MessageAccepted | MessageSendError] = {}
         messages: dict[str, OutgoingSqsMessage] = {}
         for key, body in bodies.items():
             # SQSのentry IDは文字列で、UUIDの文字列表記は長さと文字の制約を満たす。
@@ -112,14 +114,18 @@ class SqsMessageSender:
                     results.update(dict.fromkeys(messages, error))
         return MappingProxyType({key: results[str(key)] for key in bodies})
 
-    async def send_batch(
-        self, bodies: Mapping[UUID, str]
-    ) -> Mapping[UUID, AcceptedSqsMessage | MessageSendError]:
-        """UUIDごとの本文を1回のSendMessageBatchで送り、UUIDごとの受付か失敗を渡した順で返す。"""
-        bodies = dict(bodies)
-        if not 1 <= len(bodies) <= 10:
+    async def send_batch[T](
+        self, sendable: Sequence[tuple[T, EventMessage]]
+    ) -> list[tuple[T, MessageAccepted | MessageSendError]]:
+        """送信対象は解釈せず、対応する本文の受付か失敗と組にして入力順で返す。"""
+        items = tuple(sendable)
+        if not 1 <= len(items) <= 10:
             raise ValueError("batch must contain between one and ten messages")
-        return await _run_until_transport_ends(lambda: self._send_batch(bodies))
+        bodies = {message.event_id: message.body for _, message in items}
+        if len(bodies) != len(items):
+            raise ValueError("event IDs must be unique")
+        results = await _run_until_transport_ends(lambda: self._send_batch(bodies))
+        return [(target, results[message.event_id]) for target, message in items]
 
 
 async def _close_client(client: SqsClient) -> None:
