@@ -15,12 +15,12 @@ from app.models.analyzable_article_record import AnalyzableArticleRecord
 from app.models.analyzed_article_record import AnalyzedArticleRecord
 from app.models.article_curation import ArticleCuration
 from app.models.incomplete_article import IncompleteArticle
-from app.outbox.publishing.analyzable_created import build_analyzable_created_message
-from app.outbox.publishing.assessed_in_scope import build_assessed_in_scope_message
-from app.outbox.publishing.contracts import EventEnvelope
-from app.outbox.publishing.curated_signal import build_curated_signal_message
-from app.outbox.publishing.incomplete_recorded import build_incomplete_recorded_message
-from app.outbox.publishing.route import EventDeliveryRoute
+from app.outbox.event.analyzable_created import build_analyzable_created_message
+from app.outbox.event.assessed_in_scope import build_assessed_in_scope_message
+from app.outbox.event.curated_signal import build_curated_signal_message
+from app.outbox.event.envelope import EventEnvelope
+from app.outbox.event.incomplete_recorded import build_incomplete_recorded_message
+from app.outbox.relay.route import EventDeliveryRoute
 
 
 @dataclass(frozen=True)

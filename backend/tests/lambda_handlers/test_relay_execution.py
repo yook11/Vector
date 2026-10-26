@@ -8,7 +8,7 @@ from unittest.mock import AsyncMock, Mock
 import pytest
 
 from app.lambda_handlers.outbox_relay.settings import OutboxRelayConnectionSettings
-from app.outbox.publishing.route import EventDeliveryRoute
+from app.outbox.relay.route import EventDeliveryRoute
 
 execution = import_module("app.lambda_handlers.outbox_relay.execution")
 

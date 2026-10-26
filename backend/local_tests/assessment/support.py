@@ -11,8 +11,8 @@ from uuid import uuid4
 import httpx2
 
 from app.analysis.curation.events import ArticleCuratedSignal
-from app.outbox.publishing.contracts import EventEnvelope
-from app.outbox.publishing.curated_signal import build_curated_signal_message
+from app.outbox.event.curated_signal import build_curated_signal_message
+from app.outbox.event.envelope import EventEnvelope
 
 handler_module = import_module("app.lambda_handlers.assessment.handler")
 

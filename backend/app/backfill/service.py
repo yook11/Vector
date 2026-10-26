@@ -26,14 +26,11 @@ from app.backfill.policy import (
 from app.backfill.repository import PipelineBacklog
 from app.backfill.targets import BackfillEventTarget
 from app.db.session import SessionFactory
-from app.outbox.publishing.contracts import EventEnvelope
-from app.outbox.publishing.preparation import build_sendable_message
-from app.outbox.publishing.route import (
-    EventDeliveryRoute,
-    EventMessage,
-    EventRouteMismatchError,
-)
-from app.outbox.publishing.sender import MessageSenderFactory
+from app.outbox.event.envelope import EventEnvelope
+from app.outbox.event.message import EventMessage
+from app.outbox.relay.preparation import build_sendable_message
+from app.outbox.relay.route import EventDeliveryRoute, EventRouteMismatchError
+from app.outbox.relay.sender import MessageSenderFactory
 from app.shared.event_contract import EventInvalidError
 
 logger = structlog.get_logger(__name__)

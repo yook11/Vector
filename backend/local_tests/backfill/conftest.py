@@ -13,8 +13,8 @@ from sqlalchemy.ext.asyncio import AsyncEngine
 
 from app.lambda_handlers.backfill import resources
 from app.lambda_handlers.backfill.settings import CurationBackfillSettings
-from app.outbox.publishing.analyzable_created import build_analyzable_created_message
-from app.outbox.publishing.route import EventDeliveryRoute
+from app.outbox.event.analyzable_created import build_analyzable_created_message
+from app.outbox.relay.route import EventDeliveryRoute
 from tests.iam_fixtures import inject_test_db_signer
 
 

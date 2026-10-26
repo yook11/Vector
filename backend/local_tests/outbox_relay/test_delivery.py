@@ -25,9 +25,9 @@ from app.http.failure import (
     HttpTransportStage,
 )
 from app.models.outbox_event import OutboxEvent
-from app.outbox.publishing.assessed_in_scope import build_assessed_in_scope_message
-from app.outbox.publishing.contracts import PublishFailure
-from app.outbox.publishing.sqs_sender import open_sqs_event_message_sender
+from app.outbox.event.assessed_in_scope import build_assessed_in_scope_message
+from app.outbox.relay.failures import PublishFailure
+from app.outbox.relay.sqs_sender import open_sqs_event_message_sender
 from local_tests.outbox_relay.support import (
     ClaimHold,
     answer_by_event_id,

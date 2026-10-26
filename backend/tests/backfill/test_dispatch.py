@@ -29,11 +29,11 @@ from app.collection.events import (
     AnalyzableArticleCreated,
     AnalyzableArticleCreatedEvent,
 )
-from app.outbox.publishing.analyzable_created import build_analyzable_created_message
-from app.outbox.publishing.assessed_in_scope import build_assessed_in_scope_message
-from app.outbox.publishing.curated_signal import build_curated_signal_message
-from app.outbox.publishing.incomplete_recorded import build_incomplete_recorded_message
-from app.outbox.publishing.route import EventDeliveryRoute
+from app.outbox.event.analyzable_created import build_analyzable_created_message
+from app.outbox.event.assessed_in_scope import build_assessed_in_scope_message
+from app.outbox.event.curated_signal import build_curated_signal_message
+from app.outbox.event.incomplete_recorded import build_incomplete_recorded_message
+from app.outbox.relay.route import EventDeliveryRoute
 from tests.backfill.helpers import delivery_arguments
 
 NOW = datetime(2026, 9, 14, 0, 0, tzinfo=UTC)

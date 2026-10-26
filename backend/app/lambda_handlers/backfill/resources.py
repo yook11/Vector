@@ -13,8 +13,8 @@ from app.db.iam import build_iam_password_provider
 from app.db.session import SessionFactory, caller_managed_session_factory
 from app.lambda_handlers.backfill.failure_recorder import record_failure
 from app.lambda_handlers.backfill.settings import BackfillConnectionSettings
-from app.outbox.publishing.sender import MessageSenderFactory
-from app.outbox.publishing.sqs_sender import open_sqs_event_message_sender
+from app.outbox.relay.sender import MessageSenderFactory
+from app.outbox.relay.sqs_sender import open_sqs_event_message_sender
 
 
 @dataclass(frozen=True)
