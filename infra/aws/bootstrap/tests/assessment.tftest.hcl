@@ -80,7 +80,6 @@ run "boundary_pairing_guards_remain_complete" {
         jsondecode(aws_iam_policy.apply_acquisition_consumer.policy).Statement,
         jsondecode(aws_iam_policy.apply_embedding_consumer.policy).Statement,
         jsondecode(aws_iam_policy.apply_assessment_consumer.policy).Statement,
-        jsondecode(aws_iam_policy.apply_backfill.policy).Statement,
         jsondecode(aws_iam_policy.apply_source_dispatch.policy).Statement,
         jsondecode(aws_iam_policy.apply_auth_rate_limit_cleanup.policy).Statement
       ) : jsonencode(actual) if actual.Sid == expected.Sid] == [jsonencode(expected)]

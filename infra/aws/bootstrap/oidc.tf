@@ -35,14 +35,14 @@ locals {
   ]
   outbox_service_roles = {
     Lambda = {
-      arns = concat([local.backfill_lambda_role_arn, local.article_analysis_lambda_role_arn, local.article_fetch_lambda_role_arn], [local.source_dispatch_lambda_role_arn,
+      arns = concat([local.article_analysis_lambda_role_arn, local.article_fetch_lambda_role_arn], [local.source_dispatch_lambda_role_arn,
         "arn:aws:iam::${local.account_id}:role/${var.name_prefix}/${var.name_prefix}-outbox-relay-lambda",
         local.auth_rate_limit_cleanup_lambda_role_arn,
       ])
       service = "lambda.amazonaws.com"
     }
     Scheduler = {
-      arns    = concat([local.backfill_scheduler_role_arn], [local.source_dispatch_scheduler_role_arn, local.auth_rate_limit_cleanup_scheduler_role_arn], ["arn:aws:iam::${local.account_id}:role/${var.name_prefix}/${var.name_prefix}-outbox-relay-scheduler"])
+      arns    = concat([local.source_dispatch_scheduler_role_arn, local.auth_rate_limit_cleanup_scheduler_role_arn], ["arn:aws:iam::${local.account_id}:role/${var.name_prefix}/${var.name_prefix}-outbox-relay-scheduler"])
       service = "scheduler.amazonaws.com"
     }
   }
@@ -150,7 +150,7 @@ locals {
   ]
   inline_boundary_pairing_statements = [
     for key, statement in local.boundary_pairing_statements_by_group : statement
-    if !contains(setunion(local.outbox_boundary_groups, toset(keys(local.backfill_role_boundary_groups)), toset(keys(local.source_dispatch_role_boundary_groups)), toset(["AuthRateLimitCleanupLambda", "AuthRateLimitCleanupScheduler"])), key)
+    if !contains(setunion(local.outbox_boundary_groups, toset(keys(local.source_dispatch_role_boundary_groups)), toset(["AuthRateLimitCleanupLambda", "AuthRateLimitCleanupScheduler"])), key)
   ]
 
   # CI が assume できるロール。name は「何をするロールか」で付ける
@@ -335,7 +335,6 @@ resource "aws_iam_role_policy" "apply" {
     aws_iam_role_policy_attachment.apply_curation_consumer,
     aws_iam_role_policy_attachment.apply_completion_consumer,
     aws_iam_role_policy_attachment.apply_acquisition_consumer,
-    aws_iam_role_policy_attachment.apply_backfill,
     aws_iam_role_policy_attachment.apply_auth_rate_limit_cleanup,
     aws_iam_role_policy_attachment.apply_source_dispatch,
     aws_iam_role_policy_attachment.apply_role_creation,

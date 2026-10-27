@@ -100,18 +100,6 @@ override_resource {
 
 override_resource {
   override_during = plan
-  target          = aws_iam_policy.backfill_lambda_boundary
-  values          = { arn = "arn:aws:iam::123456789012:policy/slice-test-ci/slice-test-backfill-lambda-boundary" }
-}
-
-override_resource {
-  override_during = plan
-  target          = aws_iam_policy.backfill_scheduler_boundary
-  values          = { arn = "arn:aws:iam::123456789012:policy/slice-test-ci/slice-test-backfill-scheduler-boundary" }
-}
-
-override_resource {
-  override_during = plan
   target          = aws_iam_policy.chatbot_boundary
   values          = { arn = "arn:aws:iam::123456789012:policy/slice-test-ci/slice-test-chatbot-boundary" }
 }
