@@ -252,7 +252,6 @@ same-tabの主要page navigationでは、link横のdotだけでなく、viewport
 | `/trends` | `トレンドを読み込み中…` |
 | `/watchlist` | `ウォッチリストを読み込み中…` |
 | `/settings` | `Settingsを読み込み中…` |
-| `/admin/pipeline-status` | `Pipeline Statusを読み込み中…` |
 | `/admin/source-health` | `Source Healthを読み込み中…` |
 | 未分類の内部route | `画面を読み込み中…` |
 
@@ -504,7 +503,7 @@ overlayを描画する。Research内部pending時はglobal stateを開始しな�
 | home | `SlimMasthead` / `Header` / Dashboard wordmark、Watchlist empty、protected not-foundから`/`へ戻るlink |
 | news | Dashboard / Watchlist / 関連記事の`PaperArticleCard`、Briefing内記事、Research citationから`/news/[id]`、detailから一覧へ戻るlink |
 | Briefing | `BriefingBandCard`からcategory detail、detail / empty stateからBriefing一覧へ戻るlink |
-| Admin | SettingsからPipeline Status / Source Healthへ移るlink |
+| Admin | SettingsからSource Healthへ移るlink |
 
 次はglobal page pendingへ接続しない。
 

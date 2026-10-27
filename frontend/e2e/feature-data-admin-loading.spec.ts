@@ -63,18 +63,6 @@ test.describe("admin feature-data loading feedback", () => {
     });
   });
 
-  test("pipeline status keeps its in-page fallback while health data is pending", async ({
-    browser,
-  }) => {
-    await runAdminFeatureDataScenario(browser, {
-      scenario: "admin-pipeline-status",
-      heldPathname: "/api/v1/admin/pipeline/health",
-      pathname: "/admin/pipeline-status",
-      status: "パイプライン状況を読み込み中…",
-      heading: "Pipeline Status",
-    });
-  });
-
   test("source health keeps its in-page fallback while health data is pending", async ({
     browser,
   }) => {

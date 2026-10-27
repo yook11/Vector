@@ -6,7 +6,7 @@
 
 ## Evidence
 
-- `app.backfill.repository.PipelineBacklog`：新経路のイベント対象抽出・件数観測・期限切れ整理の照会。旧 Taskiq Curation の対象取得は `app.queue.helpers.backlog`、管理画面の集計は `app.admin.pipeline_health.repository` が担う。
+- `app.backfill.repository.PipelineBacklog`：新経路のイベント対象抽出・件数観測・期限切れ整理の照会。旧 Taskiq Curation の対象取得は `app.queue.helpers.backlog` が担う。
 - `app.backfill.targets`：再投入する保存済み事実。
 - `app.backfill.policy`：元記事の年齢窓と一回の処理上限。
 - 各consumerの共有イベント型と、共通の本文生成関数・`MessageSender`。
@@ -47,7 +47,7 @@ Backfillは`(EventEnvelope, EventMessage)`の組をSenderへ渡し、Senderは�
 
 ## Compatibility / Non-goals
 
-旧Taskiq Curationタスクの対象取得・件数観測は `app.queue.helpers.backlog` に残す。期間判定・整理・metric・一回上限は新経路の共通部分を参照する。Curationの日次予算・stage hold・Taskiq投入・定期実行は残す。旧Assessment・EmbeddingのTaskiq backfillは撤去し、Lambdaからの再投入と共有cleanupを維持する。管理画面の件数・最古時刻の集計は `app.admin.pipeline_health.repository` が持ち、期間判定は共通部分を参照する。
+旧Taskiq Curationタスクの対象取得・件数観測は `app.queue.helpers.backlog` に残す。期間判定・整理・metric・一回上限は新経路の共通部分を参照する。Curationの日次予算・stage hold・Taskiq投入・定期実行は残す。旧Assessment・EmbeddingのTaskiq backfillは撤去し、Lambdaからの再投入と共有cleanupを維持する。
 
 Lambda入口、Scheduler、AWS権限・ネットワーク、デプロイ、旧経路の停止・撤去は後続スライスとする。DB schema・consumer・受信契約・新規dependencyは変更しない。後続Schedulerでは既存の30分間隔と工程別オフセットを引き継ぐ。
 

@@ -108,47 +108,6 @@ async def seed_curation(
         )
 
 
-async def seed_out_of_scope(database, *, curation_id: int) -> None:
-    async with database.connect("vector") as connection:
-        await connection.execute(
-            "INSERT INTO out_of_scope_articles "
-            "(curation_id, translated_title, summary, investor_take) "
-            "VALUES ($1, 'title', 'summary', 'take')",
-            curation_id,
-        )
-
-
-async def seed_curation_noise(database, *, analyzable_article_id: int) -> None:
-    async with database.connect("vector") as connection:
-        await connection.execute(
-            "INSERT INTO curation_noises "
-            "(analyzable_article_id, translated_title, summary) "
-            "VALUES ($1, 'noise', 'noise')",
-            analyzable_article_id,
-        )
-
-
-async def seed_assessment_exclusion(database, *, curation_id: int) -> None:
-    """期限を過ぎて判定の救済から外したcurationの記録を作る。"""
-    async with database.connect("vector") as connection:
-        await connection.execute(
-            "INSERT INTO assessment_backfill_exclusions (curation_id, reason_code) "
-            "VALUES ($1, 'backfill_assessment_aged_out')",
-            curation_id,
-        )
-
-
-async def seed_embedding_exclusion(database, *, analyzed_article_id: int) -> None:
-    """期限を過ぎて埋め込みの救済から外した分析結果の記録を作る。"""
-    async with database.connect("vector") as connection:
-        await connection.execute(
-            "INSERT INTO embedding_backfill_exclusions "
-            "(analyzed_article_id, reason_code) "
-            "VALUES ($1, 'backfill_embedding_aged_out')",
-            analyzed_article_id,
-        )
-
-
 async def seed_article(
     database,
     *,
