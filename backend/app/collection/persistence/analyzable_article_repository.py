@@ -6,7 +6,7 @@
 
 from __future__ import annotations
 
-from sqlalchemy import delete, select
+from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -56,16 +56,3 @@ class AnalyzableArticleRepository:
             .limit(1)
         )
         return (await self._session.execute(stmt)).scalar_one_or_none() is not None
-
-    async def delete_by_id(self, analyzable_article_id: int) -> int:
-        """指定 ID の analyzable article record を物理削除する。
-
-        ``pipeline_events.article_id`` は ``ondelete=SET NULL`` のため監査行は残る。
-        commit は呼び出し側が担う。
-        """
-        result = await self._session.execute(
-            delete(AnalyzableArticleRecord).where(
-                AnalyzableArticleRecord.id == analyzable_article_id
-            )
-        )
-        return result.rowcount or 0

@@ -258,7 +258,7 @@ processorは各 `preparer.prepare_field_value(...)` の結果を格納した辞�
 
 ## 適用位置
 
-- API / worker / Lambda 共通の structlog 構成を本パッケージが持ち、processor を renderer の直前に置く。既存の `setup_logfire` (`logfire.StructlogProcessor` を含む) と `setup_lambda_logging` は、組み込み時にこの構成へ置き換える。
+- API / worker / Lambda 共通の structlog 構成を本パッケージが持ち、processor を renderer の直前に置く。既存の `setup_logfire` (`logfire.StructlogProcessor` を含む) は、組み込み時にこの構成へ置き換える。
 - 順序: deny除外 → 未登録除外 → 一項目の構造検査と局所置換 → 残った文字列値・ネストのキー名のsanitize → mask。共有予算超過はどの工程でもログ全体の固定出力へ切り替える。切り詰めは行わない。
 - 例外は `format_exc_info` の代わりに基底が構造化する。processor が `exc_info` を消費し、型 FQN、規則 3 を通した message、frame metadata (file / function / line。locals・ソース行は含めない) に置き換える。renderer には `exc_info` が届かないため、dev console も traceback 文字列を出さない。通常のcause/contextは基底で構造化し、SDK固有の原因構造は目的ポリシー実装時に対応する。
 - 例外文・型FQN・frameのファイル名と関数名には、選択したポリシーの同じ `mask` と内容検出を適用する。型名とframeに共通maskのみを暗黙適用しない。

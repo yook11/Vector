@@ -3,24 +3,61 @@
 期待値は WHATWG URL Standard の直列化 (pydantic-core が準拠) から直接書く。
 """
 
+from datetime import UTC, datetime, timedelta
+
 import pytest
 
 from alembic import command
-from local_tests.backfill.support import (
-    seed_article,
-    seed_curation,
-    seed_incomplete_article,
-)
 from local_tests.migrations.support import migrate
 
 REVISION = "z32_normalize_web_urls"
 PREDECESSOR = "z31_grant_investigation"
+NOW = datetime(2026, 9, 14, 12, tzinfo=UTC)
+CREATED_AT = NOW - timedelta(hours=1)
+EXTRACTED_AT = CREATED_AT + timedelta(minutes=1)
 
 
 @pytest.fixture
 async def predecessor_database(system_database):
     await migrate(system_database, command.downgrade, PREDECESSOR)
     return system_database
+
+
+async def seed_article(database, url, created_at=CREATED_AT):
+    async with database.connect("vector") as connection:
+        return await connection.fetchval(
+            "INSERT INTO analyzable_articles "
+            "(source_id, source_url, original_title, original_content, "
+            "published_at, created_at) "
+            "SELECT id, $1, 'title', 'content', $2, $2 FROM news_sources "
+            "ORDER BY id LIMIT 1 RETURNING id",
+            url,
+            created_at,
+        )
+
+
+async def seed_incomplete_article(database, url, created_at=CREATED_AT):
+    async with database.connect("vector") as connection:
+        return await connection.fetchval(
+            "INSERT INTO incomplete_articles "
+            "(url, source_id, source_name, status, observed_article, "
+            "ready_at, created_at) "
+            "SELECT $1, id, name, 'open', '{}'::jsonb, $2, $2 FROM news_sources "
+            "ORDER BY id LIMIT 1 RETURNING id",
+            url,
+            created_at,
+        )
+
+
+async def seed_curation(database, article_id):
+    async with database.connect("vector") as connection:
+        return await connection.fetchval(
+            "INSERT INTO article_curations "
+            "(analyzable_article_id, translated_title, summary, extracted_at) "
+            "VALUES ($1, 'title', 'summary', $2) RETURNING id",
+            article_id,
+            EXTRACTED_AT,
+        )
 
 
 async def _seed_closed_incomplete(database, url):
