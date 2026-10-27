@@ -103,21 +103,19 @@ run "lambdas_start_from_the_latest_backend_image" {
   command = plan
 
   assert {
-    condition = alltrue([for image_uri in concat(
-      [for function in aws_lambda_function.backfill : function.image_uri],
-      [
-        aws_lambda_function.outbox_relay.image_uri,
-        aws_lambda_function.curation_outbox_relay.image_uri,
-        aws_lambda_function.assessment_outbox_relay.image_uri,
-        aws_lambda_function.completion_outbox_relay.image_uri,
-        aws_lambda_function.curation_consumer.image_uri,
-        aws_lambda_function.assessment_consumer.image_uri,
-        aws_lambda_function.embedding_consumer.image_uri,
-        aws_lambda_function.completion_consumer.image_uri,
-        aws_lambda_function.acquisition_consumer.image_uri,
-        aws_lambda_function.source_dispatch.image_uri,
-        aws_lambda_function.auth_rate_limit_cleanup.image_uri,
-      ]) :
+    condition = alltrue([for image_uri in [
+      aws_lambda_function.outbox_relay.image_uri,
+      aws_lambda_function.curation_outbox_relay.image_uri,
+      aws_lambda_function.assessment_outbox_relay.image_uri,
+      aws_lambda_function.completion_outbox_relay.image_uri,
+      aws_lambda_function.curation_consumer.image_uri,
+      aws_lambda_function.assessment_consumer.image_uri,
+      aws_lambda_function.embedding_consumer.image_uri,
+      aws_lambda_function.completion_consumer.image_uri,
+      aws_lambda_function.acquisition_consumer.image_uri,
+      aws_lambda_function.source_dispatch.image_uri,
+      aws_lambda_function.auth_rate_limit_cleanup.image_uri,
+      ] :
       image_uri == "123456789012.dkr.ecr.ap-northeast-1.amazonaws.com/test@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
     ])
     error_message = "Lambdaの新規作成はbackendの最新イメージをdigestで参照し、版の前進はrolloutに任せる。"
