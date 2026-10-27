@@ -71,7 +71,7 @@ Consumerの結果を失敗と判断の二段に包まず、配送側は`RetryCom
 
 AWSの上限12時間は今回のReceiveMessage要求から数える。`ApproximateFirstReceiveTimestamp`を今回の受信時刻とみなさず、Lambda開始時刻を厳密な受信時刻ともみなさない。11時間に抑えても設定成功を無条件には保証せず、AWSが拒否した場合は上記の失敗処理を行う。
 
-receiptHandleは現在の配送から取得し、Queue URLは信頼できる設定から取得する。イベント本文から操作先を選ばない。個別可視性は次回受信へ引き継がれず、実際の再処理時刻や重複排除を保証しない。同じ記事の別メッセージや救済投入、同じサイトの別記事まで停止する仕組みではない。
+receiptHandleは現在の配送から取得し、Queue URLは信頼できる設定から取得する。イベント本文から操作先を選ばない。個別可視性は次回受信へ引き継がれず、実際の再処理時刻や重複排除を保証しない。同じ記事の別メッセージや、同じサイトの別記事まで停止する仕組みではない。
 
 根拠: [可視性変更API](https://docs.aws.amazon.com/AWSSimpleQueueService/latest/APIReference/API_ChangeMessageVisibility.html)、[12時間の起点](https://docs.aws.amazon.com/AWSSimpleQueueService/latest/SQSDeveloperGuide/best-practices-processing-messages-timely-manner.html)、[受信属性](https://docs.aws.amazon.com/AWSSimpleQueueService/latest/APIReference/API_ReceiveMessage.html)。
 
@@ -179,7 +179,7 @@ PR作成前の最終検証（2026-09-14）: handlerの配送判断とrecorderの
 
 DBは既存Collect権限を使い、SQSは対象キューに必要な受信・削除・属性参照・可視性変更権限へ絞る。AI用の資格情報や権限を流用しない。DB schema・権限の変更は予定しない。
 
-DLQへの移動とDBを同期しない。DLQの記事も非closedなら救済再投入を許容し、人の対応まで止める要件は追加しない。保持期間、DLQの受信回数、同時実行数・メモリ、接続先環境と切替手順はスライス5で具体化する。既存リソース値や本番への適用を、本書の作成だけで変更しない。
+DLQへの移動とDBを同期しない。保持期間、DLQの受信回数、同時実行数・メモリ、接続先環境と切替手順はスライス5で具体化する。既存リソース値や本番への適用を、本書の作成だけで変更しない。
 
 根拠: [LambdaとSQSの設定](https://docs.aws.amazon.com/lambda/latest/dg/services-sqs-configure.html)、[部分バッチ応答](https://docs.aws.amazon.com/lambda/latest/dg/services-sqs-errorhandling.html)。
 

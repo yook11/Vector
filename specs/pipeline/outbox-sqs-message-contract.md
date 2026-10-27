@@ -393,7 +393,7 @@ aws/sqsのrequires_configuration_fixは、configurationのmissing_credentials・
 credentials_retrieval_failed、暗号化関連、通信失敗、イベント不正、未分類・想定外はメトリクスを書かない。
 NonRetryableReasonだけでは設定修復が必要か判断しない。
 
-record_publish_failure(event, error, stop_reason=NonRetryableReason)は、handlerが停止確定を確認した後に呼び、outbox_delivery_stoppedを、non_retryable_failureならerror、retry_exhaustedならwarningで記録する。
+record_publish_failure(event, error, stop_reason=NonRetryableReason)は、handlerが停止確定を確認した後に呼び、outbox_delivery_stoppedを、停止理由によらずerrorで記録する。
 RetryScheduled・DeliveryUpdateSkippedではhandlerが記録関数を呼ばない。
 ログ項目はevent_id、attempt_count、stop_reason、requires_configuration_fixとし、失敗はexc_infoで渡してログ方針の例外変換に任せる。
 本文・資格情報・Queue URLは出力しない。
