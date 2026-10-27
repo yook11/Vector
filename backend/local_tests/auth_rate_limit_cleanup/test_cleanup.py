@@ -100,7 +100,7 @@ async def test_connect_failure_is_sanitized(cleanup, monkeypatch, capsys):
 
     def fail_signer(*args, **kwargs):
         async def password():
-            raise RuntimeError("secret-token-and-database-url")
+            raise RuntimeError("iam auth failed X-Amz-Signature=synthetic-signature")
 
         return password
 
@@ -108,8 +108,8 @@ async def test_connect_failure_is_sanitized(cleanup, monkeypatch, capsys):
     with pytest.raises(AuthRateLimitCleanupFailed) as failure:
         await cleanup.invoke()
     output = capsys.readouterr().out
-    assert '"phase": "connect"' in output
-    assert "secret-token-and-database-url" not in output + str(failure.value)
+    assert '"operation": "connect"' in output
+    assert "synthetic-signature" not in output + str(failure.value)
     assert failure.value.__suppress_context__
 
 

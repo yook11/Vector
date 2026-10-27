@@ -82,7 +82,7 @@ AWSランタイムのシステムログやOS・proxy・DBサービス自体の�
 - `ai_inference`: 記事のAI分析の相関情報・結果・失敗診断。Curation・Assessment・Embeddingは一つの完成済みルールを使い、stage属性で区別する。項目・出所・保護方法は[AI分析ポリシー](./ai-analysis-logging-policy.md)を正本とする。
 - Embeddingは2026-10-08に接続した（[AI分析ポリシー §3.3.4](./ai-analysis-logging-policy.md)）。Agent等への適用は、対象情報と責務を確認してから定義する。AI利用という理由だけで同じポリシーを無条件に適用しない。
 - `cache_revalidation`: キャッシュ更新通知の対象・処理箇所・相関情報。§2.4に定義する。
-- `infrastructure`: 秘密情報取得の資源終了ログを§2.4の限定したルールへ接続済み。インフラ全般の項目を許可した状態ではない。
+- `infrastructure`: 秘密情報取得の資源終了ログを§2.4の限定したルールへ、認証カウンター掃除の終端ログを専用のルール（[認証カウンターの定期掃除](../platform/auth-rate-limit-cleanup.md)）へ接続済み。インフラ全般の項目を許可した状態ではない。
 - `user_interaction` / `pipeline_control`: 基底に識別子を定義済み。目的別allowと適用経路は別途定義する。
 - DB例外は実行中の目的ポリシーで記録し、共通のSQL例外保護を適用する。例外型だけを理由に`db`という別ポリシーへ切り替えない。
 

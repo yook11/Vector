@@ -12,7 +12,7 @@
 
 専用DBユーザー`vector_auth_rate_limit_cleanup`でIAM認証・TLS接続する。既存のDBロール・権限migrationを利用し、ユーザー名や認証方式の変更を受け付けない。取得するのはDELETEの実行件数だけで、key・countを参照しない。
 
-接続待機5秒、SQL15秒、行ロック待機3秒、Lambda30秒。呼び出し単位のNullPool接続とIAM署名器は成功・失敗時とも解放する。成功ログはcommitと資源解放後にだけ出す。失敗はLambdaへ固定文言の例外として返し、ログには段階と例外種別を記録する。接続URL、IAMトークン、元例外文、行データは出力しない。
+接続待機5秒、SQL15秒、行ロック待機3秒、Lambda30秒。呼び出し単位のNullPool接続とIAM署名器は成功・失敗時とも解放する。成功ログはcommitと資源解放後にだけ出す。失敗はLambdaへ固定文言の例外として返し、元の例外を連鎖させない。ログは`infrastructure`方針の専用ルールで出し、失敗時は失敗した処理と例外を記録する。例外の文はログ方針の例外変換と漏洩防止を通し、接続URL・IAMトークン・行データを項目として渡さない。
 
 ## 実行と監視
 
@@ -20,8 +20,8 @@
 - EventBridge Schedulerは毎時20分・50分（UTC）、入力`{}`、初期無効。
 - Schedulerの配信retryは0回。Lambdaの関数エラーretryは最大2回、イベント有効期限600秒。
 - 最終失敗は既存SNS alertsへ送る。Lambdaのイベント破棄・失敗送信先への配送失敗、Schedulerの配信失敗をCloudWatchで監視する。
-- 成功ログ`auth_rate_limit_cleanup_completed`にrequest ID・deleted・cutoff_ms・duration_msを記録する。
-- 失敗ログ`auth_rate_limit_cleanup_failed`にrequest ID・phase・error_typeを記録する。
+- 成功ログ`auth_rate_limit_cleanup_completed`（INFO）に`service=auth`・request ID・environment・deleted・cutoff_ms・duration_msを記録する。
+- 失敗ログ`auth_rate_limit_cleanup_failed`（ERROR）に`service=auth`・request ID・設定取得後のenvironment・operation（settings・rds_client・engine・connect・delete・commit・cleanup）・`requires_investigation=true`・duration_ms・例外を記録する。
 
 ## 配置と切り替え
 
