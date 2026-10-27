@@ -4,7 +4,7 @@ locals {
   # IAM 認証で URL に秘密が含まれないため、SSM ではなく environment に置く。
   # sslmode=require は db_ssl.py が verify-full に格上げする。
   backend_db_url = {
-    for user in toset(["vector_app", "vector_collect", "vector_auth", "vector_outbox_relay", "vector_auth_rate_limit_cleanup", "vector_article_analysis", "vector_backfill", "vector_api", "vector_insights", "vector_agent"]) :
+    for user in toset(["vector_app", "vector_collect", "vector_auth", "vector_outbox_relay", "vector_auth_rate_limit_cleanup", "vector_article_analysis", "vector_api", "vector_insights", "vector_agent"]) :
     user => "postgresql+asyncpg://${user}@${local.db_endpoint}/${aws_db_instance.this.db_name}?sslmode=require"
   }
 }

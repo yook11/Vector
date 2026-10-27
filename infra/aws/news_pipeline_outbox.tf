@@ -121,12 +121,6 @@ resource "aws_vpc_endpoint" "outbox_sqs" {
         Action    = "sqs:ChangeMessageVisibility"
         Resource  = aws_sqs_queue.outbox["completion"].arn
       },
-      {
-        Effect    = "Allow"
-        Principal = { AWS = aws_iam_role.backfill.arn }
-        Action    = "sqs:SendMessage"
-        Resource  = [for stage in local.backfill_stages : aws_sqs_queue.outbox[stage].arn]
-      },
     ])
   })
   tags = { Name = "${var.name_prefix}-vpce-sqs" }
