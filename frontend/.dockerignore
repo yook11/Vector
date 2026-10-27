@@ -1,6 +1,10 @@
 # build artifacts / dependencies (image で再生成・再 install する)
 node_modules
 .next
+.e2e-next
+e2e/.auth
+test-results
+playwright-report
 
 # secret leak 防止 (compose の environment 経由で注入する)
 .env
