@@ -479,8 +479,8 @@ def test_stop_log_fields_and_metric_by_failure(
         assert set(record) == {"_aws", recording.CONFIGURATION_FAILURE_METRIC}
 
 
-def test_retry_exhaustion_is_warning_and_not_alarm_target(leased_event, capsys):
-    """送り直せる失敗で回数を使い切った停止はwarningで記録し、人の設定修復が必要という根拠にしない。"""
+def test_retry_exhaustion_is_error_and_not_alarm_target(leased_event, capsys):
+    """送り直せる失敗で回数を使い切った停止もerrorで記録し、人の設定修復が必要という根拠にはしない。"""
     recording.record_publish_failure(
         leased_event=leased_event,
         error=MessageSendTransportError(
@@ -495,7 +495,7 @@ def test_retry_exhaustion_is_warning_and_not_alarm_target(leased_event, capsys):
     assert _logs(out) == [
         {
             "event": "outbox_delivery_stopped",
-            "level": "warning",
+            "level": "error",
             "log_policy": "pipeline_control",
             "event_id": str(leased_event.envelope.event_id),
             "attempt_count": 1,

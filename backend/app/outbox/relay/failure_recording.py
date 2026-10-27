@@ -50,13 +50,7 @@ def record_publish_failure(
     requires_fix = isinstance(error, MessageSendError) and _requires_configuration_fix(
         error
     )
-    # 送り直せる失敗で回数を使い切った記事は、backfillがDBの状態から再投入する。
-    log = (
-        logger.warning
-        if stop_reason is NonRetryableReason.RETRY_EXHAUSTED
-        else logger.error
-    )
-    log(
+    logger.error(
         "outbox_delivery_stopped",
         event_id=str(leased_event.envelope.event_id),
         attempt_count=leased_event.attempt_count,

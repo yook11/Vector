@@ -112,7 +112,7 @@ Readyを作れないと確定した場合、同じイベントを再配信して
 - 3工程のServiceはAIの例外を工程の例外で包まずにそのまま伝える。どの工程の失敗かはConsumerとログのstageで表す。
 - 分類関数は後処理の外で呼び、必ずどちらかを返す。Consumerは失敗の後処理（計測・枯渇通知）のあとに判断をそのまま返し、後処理の通常の障害で判断を変えない。分類関数そのものが例外を出した場合は、その例外が伝播して再配信になる。
 - Lambda入口は、`Retry*`とConsumerから伝播した例外のmessageIdだけを`batchItemFailures`へ含め、どちらも元の例外をログへ渡す。3工程とも、例外によってConsumerから結果を受け取れなかった場合、`Retry*`を生成せず、`operation=consume`で呼び出し失敗を記録して再配信対象に追加する。`NoRetry*`の失敗はログに`code`と、AIの失敗なら`failure_reason`を残す。ConsumerからSQSの削除APIを呼ばない。
-- 受信完了にした記事は再投入しない。分析3工程のbackfillは定期起動しない（[工程別backfillのAWS構成](./backfill-aws.md)）。
+- 受信完了にした記事は再投入しない。
 
 ## Curationの処理完了と受信完了
 
