@@ -28,9 +28,6 @@ describe("application loading feedback contract", () => {
     expect(routeExists("./loading.tsx")).toBe(false);
     expect(routeExists("./(shell)/(admin)/settings/loading.tsx")).toBe(false);
     expect(
-      routeExists("./(shell)/(admin)/admin/pipeline-status/loading.tsx"),
-    ).toBe(false);
-    expect(
       routeExists("./(shell)/(admin)/admin/source-health/loading.tsx"),
     ).toBe(false);
   });
@@ -101,10 +98,6 @@ describe("application loading feedback contract", () => {
     expectLiveVisibleFallback(
       routeSource("./(shell)/(admin)/settings/page.tsx"),
       "設定を読み込み中…",
-    );
-    expectLiveVisibleFallback(
-      routeSource("./(shell)/(admin)/admin/pipeline-status/page.tsx"),
-      "パイプライン状況を読み込み中…",
     );
     expectLiveVisibleFallback(
       routeSource("./(shell)/(admin)/admin/source-health/page.tsx"),

@@ -98,7 +98,7 @@ resource "aws_cloudwatch_metric_alarm" "pipeline_failure_rate" {
   for_each = local.pipeline_failure_rate_alarms
 
   alarm_name          = "${var.name_prefix}-failure-rate-${each.key}"
-  alarm_description   = "「${each.key}」工程の失敗率が ${each.value.period / 3600} 時間窓で ${each.value.threshold * 100}% 以上 (最小標本 10)。worker ログと admin pipeline_health で error_class を確認する。"
+  alarm_description   = "「${each.key}」工程の失敗率が ${each.value.period / 3600} 時間窓で ${each.value.threshold * 100}% 以上 (最小標本 10)。worker ログで error_class を確認する。"
   comparison_operator = "GreaterThanOrEqualToThreshold"
   threshold           = each.value.threshold
   evaluation_periods  = 1

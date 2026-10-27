@@ -130,7 +130,7 @@ Status: Draft (レビュー中 — 途絶 3 層構成・AI 利用枠枯渇まで
 
 - 評価窓を当初案の 1h × 2 期から 3h × 1 期(embedding は 12h)に変更: 実測流量(assessment 6.8 件/h 等)では 1h 窓の大半が最小標本 10 未満で評価不能になり、alarm が実質沈黙する。急性の全停止は A1 / A2 / A5 の担当で、失敗率アラートの役割は慢性・構造故障の検知。
 - acquisition は対象外: 失敗の 95% が特定 source の恒久ブロックで、率は分母(収集量)の変動で 4〜25% に揺れるだけ。source 単位の慢性問題は admin source_health、収集の全停止は A1 の担当で、率アラートに固有の守備範囲がない。
-- アクション: 該当 stage の worker ログと admin pipeline_health で error_class を確認。
+- アクション: 該当 stage の worker ログで error_class を確認。
 
 ### A5: ECS タスク異常停止(crash / OOM / 起動不能)
 

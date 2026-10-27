@@ -65,9 +65,6 @@ function navigationLabel(href: string): string {
   if (pathname === "/trends") return "トレンドを読み込み中…";
   if (pathname === "/watchlist") return "ウォッチリストを読み込み中…";
   if (pathname === "/settings") return "Settingsを読み込み中…";
-  if (pathname === "/admin/pipeline-status") {
-    return "Pipeline Statusを読み込み中…";
-  }
   if (pathname === "/admin/source-health") {
     return "Source Healthを読み込み中…";
   }

@@ -53,7 +53,7 @@ briefing が `ai_model` を使う一方、embedding だけ `embedding_model` を
 - app 側 reader
   - `pipeline_events.payload` を `EmbeddingPayload` / `PipelineEventPayload` に
     Pydantic で読み戻す production reader は現状ない。
-  - `pipeline_health` / `source_health` は payload 詳細を読まない。
+  - `source_health` は payload 詳細を読まない。
 
 ## Decisions
 
