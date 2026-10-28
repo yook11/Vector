@@ -104,7 +104,7 @@ def _register_worker_lifecycle(
     @broker.on_event(TaskiqEvents.WORKER_STARTUP)
     async def on_startup(state: TaskiqState) -> None:
         # 可観測性 bootstrap は engine 生成や compose より先に走らせ、それらの
-        # ログも structlog → Logfire 経路に乗るようにする。各 worker プロセスでは
+        # 計装とメトリクスを初期化済みの Logfire に登録する。各 worker プロセスでは
         # 自分の broker の on_startup だけが発火するため、プロセスごとに正しい
         # service_name で 1 回ずつ呼ばれる。
         service_name = worker_service_name(label)

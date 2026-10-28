@@ -1,7 +1,5 @@
 """複数フィードの巡回・失敗隔離・候補選択を共通取得入口から検証する。"""
 
-import json
-from collections.abc import Callable
 from dataclasses import replace
 from datetime import UTC, datetime
 from unittest.mock import AsyncMock, call
@@ -57,20 +55,6 @@ class Source(TechCrunchSource):
 
 async def _collect(reader: RssReader, source: RssSource = Source) -> list[RawArticle]:
     return [item async for item in fetch_articles(source, ReaderTools(rss=reader))]
-
-
-@pytest.fixture
-def read_logs(capsys) -> Callable[[], list[dict[str, object]]]:
-    """出力されたログを、実行ごとに変わる時刻と発生位置を除いて返す。"""
-
-    def _read() -> list[dict[str, object]]:
-        logs = [json.loads(line) for line in capsys.readouterr().out.splitlines()]
-        for log in logs:
-            del log["timestamp"]
-            log.pop("frames", None)
-        return logs
-
-    return _read
 
 
 @pytest.mark.asyncio

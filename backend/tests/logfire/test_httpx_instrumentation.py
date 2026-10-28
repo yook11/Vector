@@ -9,7 +9,6 @@ import httpcore2
 import httpx2
 import logfire
 import pytest
-import structlog
 from logfire.testing import TestExporter as SpanExporter
 from opentelemetry.instrumentation.httpx import (
     HTTPX2ClientInstrumentor,
@@ -43,8 +42,6 @@ def exported_spans(monkeypatch: pytest.MonkeyPatch) -> Iterator[list[ReadableSpa
     """実bootstrapの送信先をメモリに限定し、グローバルな計測設定を回収する。"""
     exporter = SpanExporter()
     configure = logfire.configure
-    structlog_config = structlog.get_config()
-    structlog_configured = structlog.is_configured()
     monkeypatch.setattr(logfire_setup.settings, "logfire_token", None)
     monkeypatch.setattr(logfire_setup.settings, "env", "production")
 
@@ -66,9 +63,6 @@ def exported_spans(monkeypatch: pytest.MonkeyPatch) -> Iterator[list[ReadableSpa
         HTTPXClientInstrumentor().uninstrument()
         HTTPX2ClientInstrumentor().uninstrument()
         configure(send_to_logfire=False, console=False, metrics=False)
-        structlog.reset_defaults()
-        if structlog_configured:
-            structlog.configure(**structlog_config)
 
 
 def _http_span(spans: list[ReadableSpan]) -> ReadableSpan:
