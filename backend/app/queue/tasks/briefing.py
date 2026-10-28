@@ -17,12 +17,10 @@
 
 from __future__ import annotations
 
-import structlog
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from taskiq import Context, TaskiqDepends
 
-from app.audit.error_fields import exception_fqn
 from app.config import settings
 from app.insights.briefing.domain.briefing import (
     latest_completed_week_start,
@@ -34,6 +32,8 @@ from app.insights.briefing.domain.ready import (
 )
 from app.insights.briefing.repository import BriefingRepository
 from app.insights.briefing.service import BriefingConflict, WeeklyBriefingService
+from app.log_policy.policies.briefing import BRIEFING_LOG_RULES
+from app.log_policy.runtime import create_policy_json_logger
 from app.logfire.stage_span import pipeline_stage_span
 from app.models.category import Category
 from app.queue.brokers import broker_briefing
@@ -41,7 +41,7 @@ from app.queue.messages.briefing import BriefingTaskInput
 from app.queue.schedule import CRON_WEEKLY_BRIEFING
 from app.shared.revalidate import FrontendRevalidateNotifier
 
-logger = structlog.get_logger(__name__)
+logger = create_policy_json_logger(__name__, BRIEFING_LOG_RULES)
 
 
 @broker_briefing.task(
@@ -74,8 +74,7 @@ async def dispatch_weekly_briefings(ctx: Context = TaskiqDepends()) -> None:
                 "briefing_category_enqueue_failed",
                 week_start=week_start.isoformat(),
                 category_id=category.id,
-                error_class=exception_fqn(exc),
-                error_message=str(exc) or None,
+                exc_info=exc,
             )
             continue
 

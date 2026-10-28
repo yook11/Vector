@@ -14,6 +14,8 @@ class LogPolicy(StrEnum):
     AI_INFERENCE = "ai_inference"
     CACHE_REVALIDATION = "cache_revalidation"
     RESEARCH = "research"
+    BRIEFING = "briefing"
+    TREND_DISCOVERY = "trend_discovery"
     PIPELINE_CONTROL = "pipeline_control"
     INFRASTRUCTURE = "infrastructure"
 

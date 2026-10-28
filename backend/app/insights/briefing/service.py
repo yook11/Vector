@@ -14,11 +14,12 @@ from dataclasses import dataclass
 from datetime import date
 from typing import TYPE_CHECKING
 
-import structlog
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.insights.briefing.domain.ready import ReadyForBriefing
 from app.insights.briefing.repository import BriefingRepository
+from app.log_policy.policies.briefing import BRIEFING_LOG_RULES
+from app.log_policy.runtime import create_policy_json_logger
 
 if TYPE_CHECKING:
     # 具象 generator は composition root (broker_briefing hook) が構築し DI で渡す。
@@ -27,7 +28,7 @@ if TYPE_CHECKING:
     from app.insights.briefing.llm import GeminiBriefingGenerator
     from app.shared.revalidate import RevalidateNotifier
 
-logger = structlog.get_logger(__name__)
+logger = create_policy_json_logger(__name__, BRIEFING_LOG_RULES)
 
 
 @dataclass(frozen=True, slots=True)

@@ -5,7 +5,6 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
 
-import structlog
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.insights.trend_discovery.domain.ready import (
@@ -24,11 +23,13 @@ from app.insights.trend_discovery.repository import (
     TrendsRepository,
 )
 from app.insights.trend_discovery.schemas import trends_from_snapshot
+from app.log_policy.policies.trend_discovery import TREND_DISCOVERY_LOG_RULES
+from app.log_policy.runtime import create_policy_json_logger
 from app.models.category import Category
 from app.models.trends_snapshot import TrendsSnapshot
 from app.shared.revalidate import RevalidateNotifier
 
-logger = structlog.get_logger(__name__)
+logger = create_policy_json_logger(__name__, TREND_DISCOVERY_LOG_RULES)
 
 # フロントエンドのcacheTags.trendsと揃える。
 TRENDS_REVALIDATE_TAGS: tuple[str, ...] = ("trends",)

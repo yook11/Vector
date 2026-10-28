@@ -27,7 +27,6 @@ from contextlib import AbstractAsyncContextManager
 from datetime import date
 from typing import Any, ClassVar, Final
 
-import structlog
 from google.genai import errors as genai_errors
 from google.genai.client import AsyncClient
 from google.genai.types import (
@@ -51,8 +50,10 @@ from app.insights.briefing.errors import (
     BriefingLlmError,
     BriefingLlmResponseInvalidError,
 )
+from app.log_policy.policies.briefing import BRIEFING_LOG_RULES
+from app.log_policy.runtime import create_policy_json_logger
 
-logger = structlog.get_logger(__name__)
+logger = create_policy_json_logger(__name__, BRIEFING_LOG_RULES)
 
 
 def _contract_violations(exc: ValidationError) -> list[str]:
