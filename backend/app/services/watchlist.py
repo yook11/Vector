@@ -1,6 +1,6 @@
 from uuid import UUID
 
-from app.exceptions import NotFoundError
+from app.exceptions import NotFoundError, NotFoundResource
 from app.repositories.articles import ArticleRepository
 from app.repositories.watchlist import WatchlistRepository
 from app.schemas.articles import ARTICLE_LIST_LIMIT, AnalyzedArticlePreviewList
@@ -46,7 +46,7 @@ class WatchlistService:
     async def add_to_watchlist(self, article_id: int) -> bool:
         """新しく追加したときだけ True を返す。登録済みなら何もしない。"""
         if not await self.article_repo.exists_analyzed(article_id):
-            raise NotFoundError("News article not found")
+            raise NotFoundError(NotFoundResource.NEWS_ARTICLE)
         return await self.repo.watch(self.user_id, article_id)
 
     async def remove_from_watchlist(self, article_id: int) -> None:

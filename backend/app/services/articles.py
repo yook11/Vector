@@ -2,7 +2,7 @@
 
 from typing import Any
 
-from app.exceptions import NotFoundError
+from app.exceptions import NotFoundError, NotFoundResource
 from app.models.analyzed_article_record import AnalyzedArticleRecord
 from app.repositories.articles import ArticleRepository
 from app.schemas.articles import (
@@ -130,7 +130,7 @@ class ArticleService:
     async def get_article(self, article_id: int) -> AnalyzedArticle:
         analysis = await self.repo.fetch_one_analyzed(article_id)
         if analysis is None:
-            raise NotFoundError("News article not found")
+            raise NotFoundError(NotFoundResource.NEWS_ARTICLE)
         return build_analyzed_article(analysis)
 
     async def get_similar(
@@ -138,6 +138,6 @@ class ArticleService:
     ) -> list[AnalyzedArticlePreview]:
         """意味的に類似する記事を検索する。"""
         if not await self.repo.exists_analyzed(article_id):
-            raise NotFoundError("News article not found")
+            raise NotFoundError(NotFoundResource.NEWS_ARTICLE)
         analyses = await self.repo.fetch_similar_to(article_id, limit)
         return [build_analyzed_article_preview(a) for a in analyses]
