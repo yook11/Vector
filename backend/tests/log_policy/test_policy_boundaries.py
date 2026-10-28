@@ -14,7 +14,7 @@ from app.log_policy import (
     PolicyLogger,
     policies,
 )
-from app.log_policy.policies.external_content import EXTERNAL_CONTENT_POLICY
+from app.log_policy.policies.article_fetch import ARTICLE_FETCH_POLICY
 from app.log_policy.processor import LogPolicyProcessor
 
 pytestmark = pytest.mark.unit
@@ -83,10 +83,10 @@ class TestPurposeRuleConstants:
             "answer",
         ],
     )
-    def test_external_content_denies_article_fields(self, key) -> None:
-        """外部コンテンツのポリシーはdenyで本文項目を除外する。"""
+    def test_article_fetch_denies_article_fields(self, key) -> None:
+        """記事取得のポリシーはdenyで本文項目を除外する。"""
         output = LogPolicyProcessor()(
-            PolicyLogger(EXTERNAL_CONTENT_POLICY, structlog.ReturnLogger()),
+            PolicyLogger(ARTICLE_FETCH_POLICY, structlog.ReturnLogger()),
             "info",
             {"event": "failed", key: "synthetic body"},
         )
@@ -105,7 +105,7 @@ class TestDenyAndMaskSeparation:
     def test_inherited_deny_and_mask_apply_to_their_respective_targets(self) -> None:
         """継承済みのdenyで項目を除外し、継承済みのmaskで項目の値を置き換える。"""
         purpose = LogPolicyRules(
-            LogPolicy.INFRASTRUCTURE, frozenset(), mask=frozenset({"MaskedSample"})
+            LogPolicy.PROCESS_RUNTIME, frozenset(), mask=frozenset({"MaskedSample"})
         )
         purpose = purpose.extend(
             allow=frozenset(), deny=frozenset({"RestrictedSample"})
@@ -140,7 +140,7 @@ class TestDenyAndMaskSeparation:
     ) -> None:
         """deny・maskに登録したキー名が文字列の中に書かれていても、その値は変えない。"""
         rules = LogPolicyRules(
-            LogPolicy.INFRASTRUCTURE, frozenset({"payload"}), **protection_rules
+            LogPolicy.PROCESS_RUNTIME, frozenset({"payload"}), **protection_rules
         )
         output = LogPolicyProcessor()(
             PolicyLogger(rules, structlog.ReturnLogger()),
@@ -175,7 +175,7 @@ class TestTopLevelAllow:
     ) -> None:
         """保護規則へ登録してもallowにないトップレベル項目は未登録として落とす。"""
         rules = LogPolicyRules(
-            LogPolicy.INFRASTRUCTURE, frozenset(), **protection_rules
+            LogPolicy.PROCESS_RUNTIME, frozenset(), **protection_rules
         )
         output = LogPolicyProcessor()(
             PolicyLogger(rules, structlog.ReturnLogger()),

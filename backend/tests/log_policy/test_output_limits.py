@@ -44,7 +44,7 @@ class TestLocalReplacement:
     def test_field_limit_preserves_earlier_and_later_normal_fields(self) -> None:
         """単一項目の超過は前後の正常なトップレベル項目を巻き込まない。"""
         fields = {"event": "failed", "payload": ["x" * (TEXT_LIMIT + 1)], "attempt": 2}
-        rules = LogPolicyRules(LogPolicy.INFRASTRUCTURE, frozenset(fields))
+        rules = LogPolicyRules(LogPolicy.PROCESS_RUNTIME, frozenset(fields))
         output = LogPolicyProcessor()(
             PolicyLogger(rules, structlog.ReturnLogger()), "info", fields
         )
@@ -52,7 +52,7 @@ class TestLocalReplacement:
             "event": "failed",
             "payload": ["[limit]"],
             "attempt": 2,
-            "log_policy": "infrastructure",
+            "log_policy": "process_runtime",
         }
 
     def test_nested_key_at_limit_is_redacted_without_truncation(self) -> None:
@@ -149,7 +149,7 @@ class TestWholeLogReplacementByTextBudget:
     def test_processor_text_at_budget_is_not_exceeded(self) -> None:
         """イベント合計16000文字ちょうどで完了すれば通常出力を保持する。"""
         fields = {key: "x" * (TEXT_LIMIT - 1) for key in "abcd"}
-        rules = LogPolicyRules(LogPolicy.INFRASTRUCTURE, frozenset(fields))
+        rules = LogPolicyRules(LogPolicy.PROCESS_RUNTIME, frozenset(fields))
         output = LogPolicyProcessor()(
             PolicyLogger(rules, structlog.ReturnLogger()), "info", {**fields}
         )
@@ -159,7 +159,7 @@ class TestWholeLogReplacementByTextBudget:
         """合計文字数が一文字でも超過すると先行する正常値も固定ログへ置換する。"""
         fields = {key: "x" * (TEXT_LIMIT - 1) for key in "abc"}
         fields["d"] = "x" * TEXT_LIMIT
-        rules = LogPolicyRules(LogPolicy.INFRASTRUCTURE, frozenset(fields))
+        rules = LogPolicyRules(LogPolicy.PROCESS_RUNTIME, frozenset(fields))
         output = LogPolicyProcessor()(
             PolicyLogger(rules, structlog.ReturnLogger()), "info", {**fields}
         )
@@ -243,7 +243,7 @@ class TestWholeLogReplacementByTextBudget:
         payload = {key: "x" * (TEXT_LIMIT - 1) for key in "abcd"}
         payload["d"] = "x" * (TEXT_LIMIT - 1 - len("eventlong"))
         payload["long"] = "x" * (TEXT_LIMIT + 1)
-        rules = LogPolicyRules(LogPolicy.INFRASTRUCTURE, frozenset({"z"}))
+        rules = LogPolicyRules(LogPolicy.PROCESS_RUNTIME, frozenset({"z"}))
         output = LogPolicyProcessor()(
             PolicyLogger(rules, structlog.ReturnLogger()),
             "info",
@@ -257,7 +257,7 @@ class TestWholeLogReplacementByTextBudget:
 
     def test_denied_names_share_event_text_budget(self) -> None:
         """禁止キー名の診断出力もイベントの文字数予算を迂回しない。"""
-        rules = LogPolicyRules(LogPolicy.INFRASTRUCTURE, frozenset("abcd"))
+        rules = LogPolicyRules(LogPolicy.PROCESS_RUNTIME, frozenset("abcd"))
         output = LogPolicyProcessor()(
             PolicyLogger(rules, structlog.ReturnLogger()),
             "info",
@@ -326,11 +326,11 @@ class TestWholeLogReplacementByItemBudget:
             "event": {"items": [1, 2]},
             "payload": {"items": list(range(MAX_ITEMS_PER_LOG_EVENT - 6))},
         }
-        rules = LogPolicyRules(LogPolicy.INFRASTRUCTURE, frozenset({"payload"}))
+        rules = LogPolicyRules(LogPolicy.PROCESS_RUNTIME, frozenset({"payload"}))
         output = LogPolicyProcessor()(
             PolicyLogger(rules, structlog.ReturnLogger()), "info", fields
         )
-        assert output == {**fields, "log_policy": "infrastructure"}
+        assert output == {**fields, "log_policy": "process_runtime"}
 
     def test_mixed_containers_across_fields_above_item_budget_replace_log(self) -> None:
         """二つ目の項目で共有予算を一件超えると先行項目も含めて置換する。"""
@@ -338,7 +338,7 @@ class TestWholeLogReplacementByItemBudget:
             "event": {"items": [1, 2]},
             "payload": {"items": list(range(MAX_ITEMS_PER_LOG_EVENT - 5))},
         }
-        rules = LogPolicyRules(LogPolicy.INFRASTRUCTURE, frozenset({"payload"}))
+        rules = LogPolicyRules(LogPolicy.PROCESS_RUNTIME, frozenset({"payload"}))
         output = LogPolicyProcessor()(
             PolicyLogger(rules, structlog.ReturnLogger()), "info", fields
         )
@@ -351,7 +351,7 @@ class TestWholeLogReplacementByItemBudget:
     def test_top_level_count_at_limit_is_not_counted_twice(self) -> None:
         """選別で数えたトップレベル値を再加算せず上限件数ちょうどまで保持する。"""
         names = {f"field_{i}" for i in range(MAX_ITEMS_PER_LOG_EVENT)}
-        rules = LogPolicyRules(LogPolicy.INFRASTRUCTURE, frozenset(names))
+        rules = LogPolicyRules(LogPolicy.PROCESS_RUNTIME, frozenset(names))
         fields = {key: 1 for key in sorted(names)}
         output = LogPolicyProcessor()(
             PolicyLogger(rules, structlog.ReturnLogger()), "info", {**fields}
@@ -361,7 +361,7 @@ class TestWholeLogReplacementByItemBudget:
     def test_top_level_count_above_limit_replaces_whole_log(self) -> None:
         """許可済みトップレベル項目も上限件数を一件超えるとログ全体を置換する。"""
         fields = {f"field_{i}": 1 for i in range(MAX_ITEMS_PER_LOG_EVENT + 1)}
-        rules = LogPolicyRules(LogPolicy.INFRASTRUCTURE, frozenset(fields))
+        rules = LogPolicyRules(LogPolicy.PROCESS_RUNTIME, frozenset(fields))
         output = LogPolicyProcessor()(
             PolicyLogger(rules, structlog.ReturnLogger()), "info", fields
         )
@@ -417,7 +417,7 @@ class TestWholeLogReplacementByItemBudget:
         payload = list(range(6))
         # event・payload自身・payloadの要素と合わせて上限を1件だけ超える数にする。
         unknown_count = MAX_ITEMS_PER_LOG_EVENT + 1 - 2 - len(payload)
-        rules = LogPolicyRules(LogPolicy.INFRASTRUCTURE, frozenset({"payload"}))
+        rules = LogPolicyRules(LogPolicy.PROCESS_RUNTIME, frozenset({"payload"}))
         output = LogPolicyProcessor()(
             PolicyLogger(rules, structlog.ReturnLogger()),
             "info",
@@ -457,7 +457,7 @@ class TestBudgetOverflowReason:
         self,
     ) -> None:
         """トップレベルの選別で件数上限を超えたら、値の文字数超過より先に通知する。"""
-        rules = LogPolicyRules(LogPolicy.INFRASTRUCTURE, frozenset({"payload"}))
+        rules = LogPolicyRules(LogPolicy.PROCESS_RUNTIME, frozenset({"payload"}))
         prepared_event = LogPolicyProcessor()(
             PolicyLogger(rules, structlog.ReturnLogger()),
             "info",
@@ -545,7 +545,7 @@ class TestExceptionBudget:
         cause_frames = extraction.FRAME_TOTAL_LIMIT - outer_frames
         outer = _raised_through_frames(ValueError("fetch failed"), outer_frames)
         outer.__cause__ = _raised_through_frames(OSError("timeout"), cause_frames)
-        rules = LogPolicyRules(LogPolicy.INFRASTRUCTURE, frozenset({"resource"}))
+        rules = LogPolicyRules(LogPolicy.PROCESS_RUNTIME, frozenset({"resource"}))
 
         output = LogPolicyProcessor()(
             PolicyLogger(rules, structlog.ReturnLogger()),

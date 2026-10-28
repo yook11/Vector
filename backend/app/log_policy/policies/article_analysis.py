@@ -1,15 +1,15 @@
-"""AI推論の本文禁止と、処理の識別・結果・使用量を記録する規則。"""
+"""記事分析の本文禁止と、処理の識別・結果・使用量を記録する規則。"""
 
 from app.log_policy.base import LogPolicy, LogPolicyRules
 from app.log_policy.policies.article_text import ARTICLE_TEXT_KEYS
 
-AI_INFERENCE_POLICY = LogPolicyRules(
-    policy=LogPolicy.AI_INFERENCE,
+ARTICLE_ANALYSIS_POLICY = LogPolicyRules(
+    policy=LogPolicy.ARTICLE_ANALYSIS,
     allow=frozenset(),
     deny=ARTICLE_TEXT_KEYS,
 )
 
-AI_INFERENCE_LOG_RULES = AI_INFERENCE_POLICY.extend(
+ARTICLE_ANALYSIS_LOG_RULES = ARTICLE_ANALYSIS_POLICY.extend(
     allow=frozenset(
         {
             "service",

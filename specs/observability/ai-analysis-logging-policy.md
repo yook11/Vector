@@ -75,7 +75,7 @@ AI分析の失敗ログに例外型しか残らず、初期化・入力構築・
 
 ## 1. ポリシーの単位と責任
 
-識別子は既存の`LogPolicy.AI_INFERENCE`に揃え、出力を`log_policy=ai_inference`とする。`analysis`という別識別子や入力用の`policy`フィールドは新設しない。各loggerは完成済みの同じAI分析ルールを構築時に保持し、`stage=assessment` / `curation` / `embedding`で工程を区別する。初期化、実行、失敗後処理、cleanupまで同じポリシーを適用する。
+識別子は`LogPolicy.ARTICLE_ANALYSIS`とし、出力を`log_policy=article_analysis`とする。入力用の`policy`フィールドは新設しない。各loggerは完成済みの同じAI分析ルールを構築時に保持し、`stage=assessment` / `curation` / `embedding`で工程を区別する。初期化、実行、失敗後処理、cleanupまで同じポリシーを適用する。
 
 `stage`は業務工程、`operation`はその中で実行していた処理を表す。現在初期化ログの`stage`へ渡している`settings`等は、接続時に`operation`として扱い、同じ名前に別の意味を持たせない。
 
@@ -88,9 +88,9 @@ AI分析の失敗ログに例外型しか残らず、初期化・入力構築・
 | 共通の記録処理 | 基底の例外抽出・構造検査・sanitize・mask・上限を適用し、完成済みルールで選別してJSON化する。 |
 | 実行基盤 | stdoutをCloudWatch Logsへ配送する。 |
 
-Assessment中のDB例外も`ai_inference`の文脈で記録し、DB例外の抽出・秘匿規則は基底の共通処理を使う。DBエラーという理由で相関情報を捨てたり、別ポリシーの許可項目を丸ごと合成したりしない。
+Assessment中のDB例外も`article_analysis`の文脈で記録し、DB例外の抽出・秘匿規則は基底の共通処理を使う。DBエラーという理由で相関情報を捨てたり、別ポリシーの許可項目を丸ごと合成したりしない。
 
-認証情報のdenyは基底を継承し、本文・応答などの禁止はAI推論側で定義する。禁止する項目は値も項目名も調査に使わないため、denyで除外してmaskには入れない。`extend(allow=...)`は親の目的別allowを引き継がないため、モデル・使用量を含む本書の許可項目を一つの完成済みルールにまとめる。
+認証情報のdenyは基底を継承し、本文・応答などの禁止は記事分析側で定義する。禁止する項目は値も項目名も調査に使わないため、denyで除外してmaskには入れない。`extend(allow=...)`は親の目的別allowを引き継がないため、モデル・使用量を含む本書の許可項目を一つの完成済みルールにまとめる。
 
 ## 2. 調査対象となる失敗
 
@@ -156,14 +156,14 @@ Assessment中のDB例外も`ai_inference`の文脈で記録し、DB例外の抽�
 
 ### 3.3 命名と記録単位
 
-- 識別子は`log_policy=ai_inference`、モデルは`model`、時間は`*_ms` / `*_seconds`、使用量は`input_tokens` / `output_tokens`へ統一する。業務モデル・監査DBの属性名はログの命名に合わせて改名しない。
+- 識別子は`log_policy=article_analysis`、モデルは`model`、時間は`*_ms` / `*_seconds`、使用量は`input_tokens` / `output_tokens`へ統一する。業務モデル・監査DBの属性名はログの命名に合わせて改名しない。
 - `operation`の語彙は`settings` / `resources` / `ai_client` / `consumer` / `consume` / `parse_message` / `validate_event` / `load_ready_facts` / `build_ready` / `build_prompt` / `ai_call` / `parse_response` / `validate_response` / `build_result` / `save_result` / `commit` / `notification` / `processing_metric` / `failure_handling` / `cleanup`とする。`consumer`は既存のConsumer構築、`consume`はCuration・Assessment・Embeddingで結果を受け取れずに例外が伝播したConsumer呼び出しを表す。`resources`等の内部箇所はframeと原因で追う。細分化が必要なときは観測する処理境界とともに追加する。
 - 既存の`stage=settings/resources/ai_client/consumer`は`operation`へ移す。正常終端の`reason`は`outcome`へ移す。二次障害の`audit_error_class` / `secondary_error_class`は`exc_info`由来の`error_class`へ揃える。
 - メッセージ単位のeventは§3.3.1の形へ統一する。Assessment handlerは旧イベント名から切り替え済みで、Curation・Embeddingも2026-10-08に切り替えた（§3.3.4）。AI呼び出しの`assessor_api_call/success`・`curator_api_call/success`・`embedder_api_call/success`は業務メッセージとは別の単位として扱う。eventにID・例外文を埋め込まない。
 
 ### 3.3.1 Assessmentの開始・完了・失敗ログ
 
-この節の出力契約と目的別allowは、Assessment handlerの入口・終端へ接続済みである。イベントごとの専用クラスやポリシーは追加せず、一つの`AI_INFERENCE_LOG_RULES`を使う。
+この節の出力契約と目的別allowは、Assessment handlerの入口・終端へ接続済みである。イベントごとの専用クラスやポリシーは追加せず、一つの`ARTICLE_ANALYSIS_LOG_RULES`を使う。
 
 | イベント名 | 記録する条件・タイミング | level |
 | --- | --- | --- |
@@ -186,7 +186,7 @@ Assessment中のDB例外も`ai_inference`の文脈で記録し、DB例外の抽�
 
 | 対象 | 出力項目 |
 | --- | --- |
-| 共通 | `event` / `timestamp` / `level` / `log_policy` / `service` / `environment` / `stage`。`stage=assessment`、`log_policy=ai_inference`。 |
+| 共通 | `event` / `timestamp` / `level` / `log_policy` / `service` / `environment` / `stage`。`stage=assessment`、`log_policy=article_analysis`。 |
 | 開始 | `request_id` / `message_id`。`request_id`はLambda context、`message_id`は検証済みSQSレコード由来。 |
 | 完了 | `request_id` / `message_id`、検証・取得済みの`event_id` / `curation_id` / `analyzable_article_id` / `analyzed_article_id`、`outcome` / `duration_ms` / `message_disposition`。 |
 | 失敗 | 取得済みの相関ID・対象ID、確定できる`operation`、`duration_ms` / `message_disposition`。前提不成立なら`rejection_code`、再試行しない失敗なら`code`と、providerなら`failure_reason`、例外なら既存の`exc_info`変換による診断項目。 |
@@ -263,7 +263,7 @@ Assessment handlerの`setup_lambda_logging()`呼び出しは削除済みで、�
 | 検証input・任意dump | AI側で`input`, `ctx`, `config`, `settings`, `headers`, `locals`, `args`, `notes`, `__dict__`をdenyする。SDKオブジェクト、設定全体、例外args/notes/__dict__、取得行を丸ごと出さない。診断用`issues`は§3.2の固定形状に再構成する。 |
 | URL・内部宛先 | 公開記事URLの通常host/path/記事識別queryは保持する。userinfo・認証query・署名・内部IP/既知内部hostは上位仕様§4.4で保護する。例外文に混在する場合も対象とし、残る説明を一律に消さない。 |
 
-追加キーはAI推論の目的ルールが所有し、他目的と共有する本文10項目の定義を無条件に拡大しない。キー照合は基底の正規化後の完全一致であり、`token`のdenyが`input_tokens`を禁止することはない。
+追加キーは記事分析の目的ルールが所有し、他目的と共有する本文10項目の定義を無条件に拡大しない。キー照合は基底の正規化後の完全一致であり、`token`のdenyが`input_tokens`を禁止することはない。
 
 denyは構造化項目をキーごと除外する。sanitizeはAPI key形式・JWT・PEM・AWS認証情報・URL userinfo等の既知形式を基底どおりに置換する。これらを通すことを条件に通常の原因文を許可する。未知の自由文中の本文・秘密を完全検出できるという契約にはしない。
 
@@ -403,7 +403,7 @@ provider例外には回復分類・retryabilityを持たせない。SQSバッチ
 
 | ID | 独立した検証条件 | 必須の期待結果 |
 | --- | --- | --- |
-| A01 | 同じai_inferenceポリシーでAssessment/Curationを出力 | stageを区別し、共通の許可・除外規則が適用される。 |
+| A01 | 同じarticle_analysisポリシーでAssessment/Curationを出力 | stageを区別し、共通の許可・除外規則が適用される。 |
 | A02 | 設定・クライアント構築に失敗 | 対象記事IDが未取得でも、構築箇所・原因文・stackが残る。 |
 | A03 | 同一provider例外型のtimeout/connection | 既存の詳細reasonと原因を区別できる。 |
 | A04 | HTTP read timeout | 取得済みの段階・適用値・経過時間・試行回数が残る。 |

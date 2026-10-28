@@ -63,7 +63,7 @@ def test_id_mismatch_fails_message_without_exposing_body(runtime, read_logs):
     assert read_logs()[-1] == {
         "event": "acquisition_message_processing_failed",
         "level": "error",
-        "log_policy": "external_content_fetch",
+        "log_policy": "article_fetch",
         "service": "article_fetch",
         "stage": "acquisition",
         "request_id": "request-001",
@@ -173,7 +173,7 @@ def test_acquisition_failure_is_redelivered_only_when_decided_to_retry(
     assert read_logs()[-1] == {
         "event": "acquisition_message_processing_failed",
         "level": level,
-        "log_policy": "external_content_fetch",
+        "log_policy": "article_fetch",
         "service": "article_fetch",
         "stage": "acquisition",
         "request_id": "request-001",
@@ -214,7 +214,7 @@ def test_consumer_exception_is_logged_as_call_failure_and_redelivered(
     assert read_logs()[-1] == {
         "event": "acquisition_message_processing_failed",
         "level": "error",
-        "log_policy": "external_content_fetch",
+        "log_policy": "article_fetch",
         "service": "article_fetch",
         "stage": "acquisition",
         "request_id": "request-001",
@@ -263,7 +263,7 @@ def test_read_failure_is_logged_before_following_message_is_consumed(
         {
             "event": "acquisition_message_processing_failed",
             "level": "error",
-            "log_policy": "external_content_fetch",
+            "log_policy": "article_fetch",
             "service": "article_fetch",
             "stage": "acquisition",
             "request_id": "request-001",
@@ -279,7 +279,7 @@ def test_read_failure_is_logged_before_following_message_is_consumed(
         {
             "event": "acquisition_message_processing_completed",
             "level": "info",
-            "log_policy": "external_content_fetch",
+            "log_policy": "article_fetch",
             "service": "article_fetch",
             "stage": "acquisition",
             "request_id": "request-001",

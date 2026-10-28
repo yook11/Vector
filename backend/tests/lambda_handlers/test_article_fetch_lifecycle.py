@@ -13,7 +13,7 @@ from pydantic import ValidationError
 from app.lambda_handlers import article_fetch_lifecycle as lifecycle
 from app.lambda_handlers.completion import composition
 from app.lambda_handlers.completion.settings import CompletionConsumerSettings
-from app.log_policy.policies.external_content import EXTERNAL_CONTENT_LOG_RULES
+from app.log_policy.policies.article_fetch import ARTICLE_FETCH_LOG_RULES
 from app.log_policy.runtime import create_policy_json_logger
 
 pytestmark = pytest.mark.unit
@@ -32,7 +32,7 @@ def broken_recorder(monkeypatch) -> lifecycle.ArticleFetchLifecycleRecorder:
 
     monkeypatch.setattr(sys, "stdout", BrokenOutput())
     return lifecycle.ArticleFetchLifecycleRecorder(
-        create_policy_json_logger("article_fetch", EXTERNAL_CONTENT_LOG_RULES),
+        create_policy_json_logger("article_fetch", ARTICLE_FETCH_LOG_RULES),
         stage="completion",
     )
 
@@ -257,12 +257,12 @@ from app.lambda_handlers.article_fetch_lifecycle import ArticleFetchLifecycleRec
 from app.lambda_handlers.completion.composition import open_completion_resources
 from app.lambda_handlers.completion.handler import handler
 from app.lambda_handlers.completion.settings import CompletionConsumerSettings
-from app.log_policy.policies.external_content import EXTERNAL_CONTENT_LOG_RULES
+from app.log_policy.policies.article_fetch import ARTICLE_FETCH_LOG_RULES
 from app.log_policy.runtime import create_policy_json_logger
 
 async def run():
     recorder = ArticleFetchLifecycleRecorder(
-        create_policy_json_logger("article_fetch", EXTERNAL_CONTENT_LOG_RULES),
+        create_policy_json_logger("article_fetch", ARTICLE_FETCH_LOG_RULES),
         stage="completion",
     )
     async with open_completion_resources(

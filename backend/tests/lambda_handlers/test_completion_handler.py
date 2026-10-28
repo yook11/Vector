@@ -22,7 +22,7 @@ from app.collection.article_completion.errors import ArticleCompletionError
 from app.collection.retry_at import RetryAt
 from app.http.errors import HttpResponseError
 from app.lambda_handlers.article_fetch_lifecycle import ArticleFetchLifecycleRecorder
-from app.log_policy.policies.external_content import EXTERNAL_CONTENT_LOG_RULES
+from app.log_policy.policies.article_fetch import ARTICLE_FETCH_LOG_RULES
 from app.log_policy.runtime import create_policy_json_logger
 from tests.collection.test_incomplete_article_recorded_event import valid_event
 
@@ -329,7 +329,7 @@ def test_success_log_identifies_completed_article(runtime, read_logs):
     assert read_logs()[-1] == {
         "event": "completion_message_processing_completed",
         "level": "info",
-        "log_policy": "external_content_fetch",
+        "log_policy": "article_fetch",
         "service": "article_fetch",
         "stage": "completion",
         "request_id": "request-001",
@@ -354,7 +354,7 @@ def test_not_required_log_retains_reason(runtime, read_logs, reason):
     assert read_logs()[-1] == {
         "event": "completion_message_processing_completed",
         "level": "info",
-        "log_policy": "external_content_fetch",
+        "log_policy": "article_fetch",
         "service": "article_fetch",
         "stage": "completion",
         "request_id": "request-001",
@@ -384,7 +384,7 @@ def test_closed_log_keeps_decision_and_cause_facts(runtime, read_logs):
     assert read_logs()[-1] == {
         "event": "completion_message_processing_failed",
         "level": "warning",
-        "log_policy": "external_content_fetch",
+        "log_policy": "article_fetch",
         "service": "article_fetch",
         "stage": "completion",
         "request_id": "request-001",
@@ -442,7 +442,7 @@ def test_retry_log_preserves_original_time_and_decision(runtime, read_logs):
         {
             "event": "completion_message_processing_failed",
             "level": "warning",
-            "log_policy": "external_content_fetch",
+            "log_policy": "article_fetch",
             "service": "article_fetch",
             "stage": "completion",
             "request_id": "request-001",
@@ -484,7 +484,7 @@ def test_consumer_exception_is_logged_as_call_failure(runtime, read_logs):
     assert read_logs()[-1] == {
         "event": "completion_message_processing_failed",
         "level": "error",
-        "log_policy": "external_content_fetch",
+        "log_policy": "article_fetch",
         "service": "article_fetch",
         "stage": "completion",
         "request_id": "request-001",
@@ -519,7 +519,7 @@ def test_invalid_event_log_does_not_expose_body_or_receipt(runtime, read_logs):
     assert read_logs()[-1] == {
         "event": "completion_message_processing_failed",
         "level": "error",
-        "log_policy": "external_content_fetch",
+        "log_policy": "article_fetch",
         "service": "article_fetch",
         "stage": "completion",
         "request_id": "request-001",
@@ -732,7 +732,7 @@ async def test_cancelled_communication_finishes_before_resource_release(
             raise communication_error
 
     runtime.sqs.change_message_visibility.side_effect = send
-    logger = create_policy_json_logger("article_fetch", EXTERNAL_CONTENT_LOG_RULES)
+    logger = create_policy_json_logger("article_fetch", ARTICLE_FETCH_LOG_RULES)
     task = asyncio.create_task(
         module._run_completion(
             {"Records": [record(), record("second", 102)]},

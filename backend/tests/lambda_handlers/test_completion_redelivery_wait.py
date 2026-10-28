@@ -17,7 +17,7 @@ from app.lambda_handlers.completion.redelivery_wait import (
     VisibilityTimeout,
     apply_visibility_timeouts,
 )
-from app.log_policy.policies.external_content import EXTERNAL_CONTENT_LOG_RULES
+from app.log_policy.policies.article_fetch import ARTICLE_FETCH_LOG_RULES
 from app.log_policy.runtime import create_policy_json_logger
 
 
@@ -69,7 +69,7 @@ async def apply(state, waits):
         context=state.context,
         now=lambda: state.now,
         recorder=CompletionMessageRecorder(
-            create_policy_json_logger("article_fetch", EXTERNAL_CONTENT_LOG_RULES)
+            create_policy_json_logger("article_fetch", ARTICLE_FETCH_LOG_RULES)
         ),
     )
 
@@ -106,7 +106,7 @@ async def test_capped_visibility_keeps_original_retry_time(delivery, read_logs):
         {
             "event": "completion_redelivery_wait",
             "level": "info",
-            "log_policy": "external_content_fetch",
+            "log_policy": "article_fetch",
             "message_id": "first",
             "retry_at": "2026-09-15T00:00:00+00:00",
             "result": "applied",
@@ -125,7 +125,7 @@ async def test_expired_wait_is_not_sent(delivery, read_logs):
         {
             "event": "completion_redelivery_wait",
             "level": "warning",
-            "log_policy": "external_content_fetch",
+            "log_policy": "article_fetch",
             "message_id": "first",
             "retry_at": "2026-09-14T00:00:00+00:00",
             "result": "expired",
@@ -191,7 +191,7 @@ async def test_failed_wait_does_not_prevent_next_wait(delivery, read_logs):
         {
             "event": "completion_redelivery_wait",
             "level": "warning",
-            "log_policy": "external_content_fetch",
+            "log_policy": "article_fetch",
             "message_id": "first",
             "retry_at": "2026-09-14T00:02:00+00:00",
             "result": "failed",
@@ -203,7 +203,7 @@ async def test_failed_wait_does_not_prevent_next_wait(delivery, read_logs):
         {
             "event": "completion_redelivery_wait",
             "level": "info",
-            "log_policy": "external_content_fetch",
+            "log_policy": "article_fetch",
             "message_id": "second",
             "retry_at": "2026-09-14T00:02:00+00:00",
             "result": "applied",
@@ -245,7 +245,7 @@ async def test_insufficient_time_stops_remaining_waits(delivery, read_logs):
     assert read_logs()[-1] == {
         "event": "completion_redelivery_wait",
         "level": "warning",
-        "log_policy": "external_content_fetch",
+        "log_policy": "article_fetch",
         "message_id": "second",
         "retry_at": "2026-09-14T00:02:00+00:00",
         "result": "insufficient_time",

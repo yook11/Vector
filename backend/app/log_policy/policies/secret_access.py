@@ -3,7 +3,7 @@
 from app.log_policy.base import LogPolicy, LogPolicyRules
 
 SECRET_ACCESS_LOG_RULES = LogPolicyRules(
-    policy=LogPolicy.INFRASTRUCTURE,
+    policy=LogPolicy.SECRET_ACCESS,
     allow=frozenset(
         {
             "service",

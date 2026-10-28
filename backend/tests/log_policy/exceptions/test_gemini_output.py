@@ -120,7 +120,7 @@ async def test_sdk_rate_limit_error_is_logged_with_violations_and_retry_delay(
         "service": "article_analysis",
         "event": "failed",
         "level": "error",
-        "log_policy": "ai_inference",
+        "log_policy": "article_analysis",
         "error_class": "app.ai_providers.errors.AIProviderResponseError",
         "error_message": "AIプロバイダーが失敗の応答を返しました",
         "error_details": {
@@ -186,7 +186,7 @@ async def test_sdk_invalid_api_key_error_is_logged_with_error_info(
         "service": "article_analysis",
         "event": "failed",
         "level": "error",
-        "log_policy": "ai_inference",
+        "log_policy": "article_analysis",
         "error_class": "app.ai_providers.errors.AIProviderResponseError",
         "error_message": "AIプロバイダーが失敗の応答を返しました",
         "error_details": {
@@ -236,7 +236,7 @@ async def test_sdk_non_json_server_error_is_logged_without_body(exchange, log_fa
         "service": "article_analysis",
         "event": "failed",
         "level": "error",
-        "log_policy": "ai_inference",
+        "log_policy": "article_analysis",
         "error_class": "app.ai_providers.errors.AIProviderResponseError",
         "error_message": "AIプロバイダーが失敗の応答を返しました",
         "error_details": {
@@ -285,7 +285,7 @@ async def test_sdk_error_inside_stream_is_logged_with_http_200_and_status(
         "service": "article_analysis",
         "event": "failed",
         "level": "error",
-        "log_policy": "ai_inference",
+        "log_policy": "article_analysis",
         "error_class": "google.genai.errors.ClientError",
         "error_message": "Gemini API error: RESOURCE_EXHAUSTED",
         "error_details": {
@@ -317,7 +317,7 @@ async def test_sdk_unparseable_stream_is_logged_with_decode_cause(
         "service": "article_analysis",
         "event": "failed",
         "level": "error",
-        "log_policy": "ai_inference",
+        "log_policy": "article_analysis",
         "error_class": "google.genai.errors.UnknownApiResponseError",
         "error_message": "Gemini API response could not be parsed as JSON",
         "related_exceptions": [

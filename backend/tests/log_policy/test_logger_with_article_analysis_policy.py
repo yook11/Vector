@@ -1,4 +1,4 @@
-"""AI推論ポリシーのallow・denyが実際のJSON標準出力に適用される。"""
+"""記事分析ポリシーのallow・denyが実際のJSON標準出力に適用される。"""
 
 import json
 from functools import partial
@@ -8,7 +8,7 @@ import structlog
 
 from app.log_policy import build_processors, create_policy_logger, policy_logger
 from app.log_policy.base import BASE_ALLOW
-from app.log_policy.policies.ai_inference import AI_INFERENCE_LOG_RULES
+from app.log_policy.policies.article_analysis import ARTICLE_ANALYSIS_LOG_RULES
 
 pytestmark = pytest.mark.unit
 
@@ -28,8 +28,8 @@ ARTICLE_FIELDS_TO_PROTECT = (
 
 
 @pytest.fixture
-def logger_with_ai_inference_policy(configure_chain):
-    """製品のAI推論ルール・factory・processor・JSON整形を標準出力へ接続する。"""
+def logger_with_article_analysis_policy(configure_chain):
+    """製品の記事分析ルール・factory・processor・JSON整形を標準出力へ接続する。"""
     configure_chain()
     structlog.contextvars.clear_contextvars()
     structlog.configure(
@@ -39,20 +39,22 @@ def logger_with_ai_inference_policy(configure_chain):
         ),
         processors=build_processors(structlog.processors.JSONRenderer()),
     )
-    return policy_logger("test.logger_with_ai_inference_policy", AI_INFERENCE_LOG_RULES)
+    return policy_logger(
+        "test.logger_with_article_analysis_policy", ARTICLE_ANALYSIS_LOG_RULES
+    )
 
 
 @pytest.mark.parametrize(
     "allowed_field",
-    sorted(AI_INFERENCE_LOG_RULES.allow - BASE_ALLOW),
+    sorted(ARTICLE_ANALYSIS_LOG_RULES.allow - BASE_ALLOW),
 )
 def test_allowed_field_is_output(
-    logger_with_ai_inference_policy, capsys, allowed_field
+    logger_with_article_analysis_policy, capsys, allowed_field
 ) -> None:
     """ポリシーのallowで許可された項目は、渡した値でログに出力される。"""
     value = "synthetic_log_value"
 
-    logger_with_ai_inference_policy.info(
+    logger_with_article_analysis_policy.info(
         "policy_test",
         **{allowed_field: value},
     )
@@ -64,12 +66,12 @@ def test_allowed_field_is_output(
 
 @pytest.mark.parametrize("denied_field", ARTICLE_FIELDS_TO_PROTECT)
 def test_denied_field_is_excluded(
-    logger_with_ai_inference_policy, capsys, denied_field
+    logger_with_article_analysis_policy, capsys, denied_field
 ) -> None:
     """ポリシーのdenyで禁止された項目は除外し、許可された項目はログに出力する。"""
     private_value = "PRIVATE_ARTICLE_VALUE"
 
-    logger_with_ai_inference_policy.info(
+    logger_with_article_analysis_policy.info(
         "policy_test",
         message_id="message-001",
         **{denied_field: private_value},

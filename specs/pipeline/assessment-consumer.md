@@ -321,7 +321,7 @@ PR作成前に混在バッチのテストを整理した。messageIdをテスト
 
 ## キャッシュ更新通知・SSMの専用ロガー接続（2026-09-22）
 
-通知とSSMは各処理内で専用ロガーを生成し、記事分析ロガーを受け渡さない。通知は`cache_revalidation`、秘密情報取得のcleanupは`infrastructure`の限定したルールを使う。定義の正本は[アプリケーションログ仕様§2.4](../observability/application-logging-policy.md#24-キャッシュ更新通知秘密情報取得2026-09-22)。
+通知とSSMは各処理内で専用ロガーを生成し、記事分析ロガーを受け渡さない。通知は`cache_revalidation`、秘密情報取得のcleanupは`secret_access`のルールを使う。定義の正本は[アプリケーションログ仕様§2.4](../observability/application-logging-policy.md#24-キャッシュ更新通知秘密情報取得2026-09-22)。
 
 Assessment handlerは呼び出し情報をcontextvarsへ束縛し、通知中だけ検証済みmessage_id・event_idを共有する。通知とその認証キー取得のSSMログに相関情報が残り、後のcleanupには持ち越さない。外側のcontextは既存finallyで復元する。通知用の秘密取得失敗とHTTP通知失敗は`operation=get_secret` / `notify`で区別する。
 

@@ -2,7 +2,7 @@
 
 作成: 2026-09-17
 Status: Partially implemented
-Implementation: 基底規則・processor・例外構造化・チェーン構成を `backend/app/log_policy/` に実装済み。本文の目的別 deny・mask を定義済み。AI推論のモデル・トークン数allowとロガー属性での完成済みルール保持を実装済み。目的別allowは各目的の規則に定義した。既存structlogチェーンは置き換えず、各ロガーが全体設定から独立して組み立てる形にし、全体設定を撤去した（2026-10-28）。
+Implementation: 基底規則・processor・例外構造化・チェーン構成を `backend/app/log_policy/` に実装済み。本文の目的別 deny・mask を定義済み。記事分析のモデル・トークン数allowとロガー属性での完成済みルール保持を実装済み。目的別allowは各目的の規則に定義した。既存structlogチェーンは置き換えず、各ロガーが全体設定から独立して組み立てる形にし、全体設定を撤去した（2026-10-28）。
 
 関連: [アプリケーションログの概念別ポリシーとCloudWatch集約](./application-logging-policy.md)、[デプロイ診断ログの共通秘匿ポリシー](../platform/deployment-log-policy.md)
 
@@ -34,7 +34,8 @@ structlog の処理チェーンに共通の禁止規則がなく、秘匿は呼�
 ```text
 共通基底 (本書)          基本項目のallowと認証情報のdeny・mask
   └─ 目的ポリシー (別途)  基底allow・deny・maskを含め、目的別allowを明示する
-       外部コンテンツ取得 / AI 推論 / リサーチ / 週次ブリーフィング / トレンド発見 / パイプライン制御 / プロセスの稼働 / 基盤接続
+       記事取得 / 記事分析 / AIプロバイダー呼び出し / キャッシュ更新通知 / リサーチ / 週次ブリーフィング
+       トレンド発見 / パイプライン制御 / プロセスの稼働 / 秘密情報取得 / 認証カウンター掃除
 ```
 
 `deny`・`allow` は構造化項目の選別、`mask` は文字列内のキー付き値の置換を指定する。認証情報のdeny・maskと基本項目のallowは基底、本文などの業務データのdeny・maskと追加allowは目的別ポリシーが所有する。
@@ -81,7 +82,7 @@ structlog の処理チェーンに共通の禁止規則がなく、秘匿は呼�
 - deny キーの正本は `base.py` の `CREDENTIAL_KEYS`。`password` / `passwd` / `pgpassword`、`secret` / `private_key` / `client_secret`、`token` / `access_token` / `refresh_token` / `id_token`、`api_key` / `x_api_key` / `x_goog_api_key`、`authorization` / `proxy_authorization`、`cookie` / `set_cookie`、`access_key_id` / `secret_access_key` / `session_token` と各 `aws_` 接頭辞版、`x_amz_signature` / `x_amz_credential` / `x_amz_security_token` を含む。正規化後の完全一致で、値の長さや見た目によらず落とす。
 - アプリ固有の設定名も明示 deny に含める: `gemini_api_key` / `logfire_token` / `bff_jwt_signing_secret` / `revalidate_bearer_secret` / `postgres_auth_password` / `postgres_app_password` / `postgres_collect_password`。`app/config.py` と `app/db/settings.py` の認証情報定義を確認済み。
 - 値の準備: sanitizeは内容からprovider key / JWT / PEM秘密鍵 / AWS認証形式 / DSN userinfoを検出して置換し、maskは指定キーの値を内容によらず置換する。キー付き値は長さを問わず、引用符内の空白・改行・エスケープを値全体として扱う。閉じていない引用符は末尾まで伏せる。引用符なしの一般値は空白等までの単一トークン、認証ヘッダー・cookie は行末までを対象とする。任意の文字列や別名で渡された認証情報の完全検出は保証しない。パターン集は deployment-log-policy の S1/S2 表に対応し、`log_policy` がログ出力用の正本として所有する。監査 DB `error_message` 用の既存 `redact_secrets` (`app/shared/security/`) はこの step では変更せず、監査経路を本ポリシーへ寄せるかは組み込み step で判断する。
-- **含めないもの**: ARN、account ID、endpoint、host、SSM parameter path。これらは識別情報であり、基盤接続ポリシーが allow を判断する。DSN は「userinfo を伏せ host を残す」変換になるが、基底が保証するのは userinfo 部分だけである。
+- **含めないもの**: ARN、account ID、endpoint、host、SSM parameter path。これらは識別情報であり、各目的のポリシーが allow を判断する。DSN は「userinfo を伏せ host を残す」変換になるが、基底が保証するのは userinfo 部分だけである。
 
 #### AWS・JWTの対象別サニタイズ規則
 
@@ -107,17 +108,17 @@ URLは `://` を起点に左側のschemeを確認し、隣接する数字・記�
 
 ### 2. 目的別 deny・mask との境界（記事本文）
 
-`BASE_DENY = CREDENTIAL_KEYS` とし、本文・派生テキストは含めない。`policies/article_text.py` の禁止項目を `policies/external_content.py` と `policies/ai_inference.py` がそれぞれdenyへ明示的に採用し、共通denyを継承した規則として定義する。目的別モジュール内の `extend(allow=..., deny=...)` で利用する規則を完成させ、loggerへ渡す。識別子から規則を検索しない。
+`BASE_DENY = CREDENTIAL_KEYS` とし、本文・派生テキストは含めない。`policies/article_text.py` の禁止項目を、本文を扱う目的のモジュール（`policies/article_fetch.py`・`policies/article_analysis.py` など）がそれぞれdenyへ明示的に採用し、共通denyを継承した規則として定義する。目的別モジュール内の `extend(allow=..., deny=...)` で利用する規則を完成させ、loggerへ渡す。識別子から規則を検索しない。
 
 ```python
-logger = create_policy_json_logger(__name__, AI_INFERENCE_LOG_RULES)
+logger = create_policy_json_logger(__name__, ARTICLE_FETCH_LOG_RULES)
 ```
 
 `create_policy_json_logger` は書き込み時の標準出力へ出すため、モジュールの冒頭で一度作って使い回す。全体設定は使わず、どのプロセスでも同じ規則とJSON出力になる。独自の遅延生成やルール登録表は設けない。
 
-`AI_INFERENCE_LOG_RULES` は基底に加えて `model` / `input_tokens` / `output_tokens` を許可する。その他の業務項目と外部コンテンツ取得の追加allowは別途定義する。
+`ARTICLE_ANALYSIS_LOG_RULES` は基底に加えて `model` / `input_tokens` / `output_tokens` と処理の識別・結果の項目を許可する。記事取得の追加allowは `ARTICLE_FETCH_LOG_RULES` に定義する。
 
-基盤接続などでは `description` を明示 allow すれば診断情報として残せる。共通 deny から外した項目も、allow に未登録なら引き続き出力しない。本文を扱う目的を増やす場合は、その目的の deny を明示する。
+本文を扱わない目的では `description` を明示 allow すれば診断情報として残せる。共通 deny から外した項目も、allow に未登録なら引き続き出力しない。本文を扱う目的を増やす場合は、その目的の deny を明示する。
 
 - deny キー: `body` `content` `text` `html` `description` `summary` `translation` `key_points` `snippet` `answer`
 - 上記2目的での対象は取得 HTML、抽出本文、整形本文、翻訳、要点、引用抜粋、AI 生成文。先頭 N 文字や debug レベルを例外にしない。
@@ -255,7 +256,7 @@ processorは各 `preparer.prepare_field_value(...)` の結果を格納した辞�
 
 ## Non-goals
 
-- AI推論のモデル・トークン数以外の目的別allow一覧とmoduleとの対応 (別文書)。
+- 記事分析のモデル・トークン数以外の目的別allow一覧とmoduleとの対応 (別文書)。
 - 利用者テキスト (question / previous turn) の禁止。リサーチのポリシー側で定める。
 - 任意の自由文の意味解析、未知の例外形式からの入力値の完全抽出。traceback の locals は常に除外する。
 - public / restricted の profile 引数、Logfire の trace / span 側の変更、frontend、監査 DB `error_message` の契約変更。
@@ -298,7 +299,7 @@ processorは各 `preparer.prepare_field_value(...)` の結果を格納した辞�
 - [backend/app/log_policy/exceptions/extraction.py](../../backend/app/log_policy/exceptions/extraction.py): `exc_info` の解決と `ExceptionLogFields` の組み立て。型は型名・原因文・frameと任意の `error_details` / `causes` / `exceptions` を持つ最終出力の契約とする。原因ノードにも同じ型を使う。伏せ字と上限は値準備が担当する
 - [backend/app/log_policy/exceptions/conversion.py](../../backend/app/log_policy/exceptions/conversion.py): 例外1件の種類別変換を担当し、原因文・診断属性・内部原因の集約状態を返す。SQL内部の診断抽出は `sql.py` に委譲し、通常の原因連鎖とグループの探索は `extraction.py` が担当する
 - [backend/app/log_policy/exceptions/application.py](../../backend/app/log_policy/exceptions/application.py): `ApplicationError`のメッセージと明示された`details`を共通形式へ写す。例外の任意属性を自動展開せず、共通入口から呼び出す
-- [backend/app/log_policy/policies/ai_inference.py](../../backend/app/log_policy/policies/ai_inference.py)、[external_content.py](../../backend/app/log_policy/policies/external_content.py): 目的別定義（AI推論はモデル・トークン数の完成済みルールも定義）
+- [backend/app/log_policy/policies/article_analysis.py](../../backend/app/log_policy/policies/article_analysis.py)、[article_fetch.py](../../backend/app/log_policy/policies/article_fetch.py): 目的別定義（記事分析はモデル・トークン数の完成済みルールも定義）
 - [backend/app/log_policy/diagnostics.py](../../backend/app/log_policy/diagnostics.py): ログ一件の診断の記録・集計・出力形式への変換
 - [backend/app/log_policy/field_selection.py](../../backend/app/log_policy/field_selection.py): トップレベルの項目の計上と項目名によるdeny・allow判定、受け付けた項目の返却
 - [backend/app/log_policy/value_preparation.py](../../backend/app/log_policy/value_preparation.py): 選別済みの値をログに使える状態へ準備する処理、構造検査とサニタイズ、共有予算
