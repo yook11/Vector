@@ -4,7 +4,7 @@ from app.admin.sources.schemas import (
     NewsSourceDetail,
     NewsSourceDetailList,
 )
-from app.exceptions import NotFoundError
+from app.exceptions import NotFoundError, NotFoundResource
 from app.models.news_source import NewsSource
 
 
@@ -21,7 +21,7 @@ class NewsSourceService:
     async def _get_or_raise(self, source_id: int) -> NewsSource:
         source = await self.repo.get_by_id(source_id)
         if source is None:
-            raise NotFoundError("News source not found")
+            raise NotFoundError(NotFoundResource.NEWS_SOURCE)
         return source
 
     async def create_source(self, body: NewsSourceCreate) -> NewsSourceDetail:

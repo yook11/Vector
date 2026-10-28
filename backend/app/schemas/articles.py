@@ -17,7 +17,7 @@ from app.schemas.news_source import NewsSource
 from app.shared.web_url import WebUrl
 
 # 記事一覧・ウォッチリストが1回に返す件数。
-ARTICLE_LIST_LIMIT = 24
+ARTICLE_PAGE_SIZE = 24
 
 # ---------------------------------------------------------------------------
 # パスパラメータ

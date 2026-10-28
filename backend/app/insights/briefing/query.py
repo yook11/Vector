@@ -11,7 +11,7 @@ from pydantic import Field, TypeAdapter
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.exceptions import NotFoundError
+from app.exceptions import NotFoundError, NotFoundResource
 from app.insights.briefing.domain.briefing import (
     MAX_KEY_ARTICLES_PER_BRIEFING,
     latest_completed_week_start,
@@ -71,7 +71,7 @@ class BriefingQueryService:
     async def get_latest(self, category_slug: str) -> BriefingResponse:
         category = await self._fetch_category(category_slug)
         if category is None:
-            raise NotFoundError("Category not found")
+            raise NotFoundError(NotFoundResource.CATEGORY)
         briefing = await self._fetch_latest_briefing(category.id)
         if briefing is None:
             return EmptyBriefing(category=_to_category(category))
