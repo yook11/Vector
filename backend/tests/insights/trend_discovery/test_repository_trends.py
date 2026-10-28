@@ -25,7 +25,6 @@ import pytest
 from sqlalchemy import bindparam, select
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.ext.asyncio import AsyncSession
-from structlog.testing import capture_logs
 
 from app.insights.trend_discovery.domain.mention_name import MentionName
 from app.insights.trend_discovery.domain.trend import MIN_CANDIDATE_COUNT, TrendWeeks
@@ -964,13 +963,9 @@ class TestInvalidMentionDataDoesNotCrashWindow:
         db_session: AsyncSession,
         sample_categories: list[Category],
         seed_analysis: SeedAnalysis,
+        read_logs,
     ) -> None:
-        """ranking の skip は failure-visibility の warning を出す (生値は焼かない)。
-
-        skip を silent に握り潰さないことが #8 の眼目なので、warning の発火・低
-        cardinality field (category_id / type_known / error_fields) を所有テストとして
-        固定する。生 surface / type (PII・高 cardinality) は焼かないことも合わせて縛る。
-        """
+        """ranking の skip は warning に検証の分類だけを残し、名前と種別は出さない。"""
         cat = sample_categories[0]
         for hour in range(MIN_CANDIDATE_COUNT):
             await seed_analysis(
@@ -979,20 +974,19 @@ class TestInvalidMentionDataDoesNotCrashWindow:
                 mentions=[("BadCo", "startup")],  # enum 外 type (drift 行)
             )
         repo = TrendsRepository(db_session)
-        with capture_logs() as logs:
-            await repo.get_mention_candidates(category_id=cat.id, weeks=WEEKS)
-        skips = [
-            e for e in logs if e["event"] == "trend_mention_candidate_skipped_invalid"
+
+        await repo.get_mention_candidates(category_id=cat.id, weeks=WEEKS)
+
+        assert read_logs() == [
+            {
+                "event": "trend_mention_candidate_skipped_invalid",
+                "level": "warning",
+                "log_policy": "trend_discovery",
+                "category_id": cat.id,
+                "error_class": "pydantic_core._pydantic_core.ValidationError",
+                "error_message": "Validation failed (1 errors): enum",
+            }
         ]
-        assert len(skips) == 1
-        event = skips[0]
-        assert event["log_level"] == "warning"
-        assert event["category_id"] == cat.id
-        assert event["type_known"] is False  # "startup" は MentionType 外
-        assert "type" in event["error_fields"]
-        # 生値 (PII / 高 cardinality) を log に焼かない
-        assert "BadCo" not in event.values()
-        assert "startup" not in event.values()
 
     @pytest.mark.asyncio
     async def test_co_mention_skip_emits_low_cardinality_warning(
@@ -1000,8 +994,9 @@ class TestInvalidMentionDataDoesNotCrashWindow:
         db_session: AsyncSession,
         sample_categories: list[Category],
         seed_analysis: SeedAnalysis,
+        read_logs,
     ) -> None:
-        """一緒に語られた名前の skip も同じ failure-visibility の warning を出す。"""
+        """一緒に語られた名前の skip も同じ warning を出し、名前と種別は出さない。"""
         cat = sample_categories[0]
         for hour in range(2):
             await seed_analysis(
@@ -1014,17 +1009,20 @@ class TestInvalidMentionDataDoesNotCrashWindow:
                 ],
             )
         repo = TrendsRepository(db_session)
-        with capture_logs() as logs:
-            await repo.get_co_mentions(
-                category_id=cat.id,
-                week=WEEKS.week,
-                mention_keys=[_NVIDIA_KEY],
-            )
-        skips = [e for e in logs if e["event"] == "trend_co_mention_skipped_invalid"]
-        assert len(skips) == 1
-        event = skips[0]
-        assert event["log_level"] == "warning"
-        assert event["category_id"] == cat.id
-        assert event["type_known"] is False
-        assert "BadCo" not in event.values()
-        assert "startup" not in event.values()
+
+        await repo.get_co_mentions(
+            category_id=cat.id,
+            week=WEEKS.week,
+            mention_keys=[_NVIDIA_KEY],
+        )
+
+        assert read_logs() == [
+            {
+                "event": "trend_co_mention_skipped_invalid",
+                "level": "warning",
+                "log_policy": "trend_discovery",
+                "category_id": cat.id,
+                "error_class": "pydantic_core._pydantic_core.ValidationError",
+                "error_message": "Validation failed (1 errors): enum",
+            }
+        ]

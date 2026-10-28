@@ -8,7 +8,6 @@ from zoneinfo import ZoneInfo
 
 import pytest
 from logfire.testing import CaptureLogfire
-from structlog.testing import capture_logs
 
 from app.insights.briefing.domain.ready import (
     BriefingArticle,
@@ -149,6 +148,7 @@ class TestDispatcher:
     @pytest.mark.asyncio
     async def test_zero_categories_logs_completed_summary_with_zero_counts(
         self,
+        read_logs,
     ) -> None:
         """カテゴリマスタ 0 件は専用の結果ではなく、件数 0 の完了 log で表す。"""
         from app.queue.tasks import briefing
@@ -168,21 +168,21 @@ class TestDispatcher:
                 "kiq",
                 new=AsyncMock(),
             ) as kiq,
-            capture_logs() as logs,
         ):
             await briefing.dispatch_weekly_briefings(ctx=ctx)
 
         kiq.assert_not_awaited()
-        completed = [e for e in logs if e["event"] == "briefing_dispatch_completed"]
-        assert [
-            (
-                e["week_start"],
-                e["selected_category_count"],
-                e["enqueued_category_count"],
-                e["failed_category_count"],
-            )
-            for e in completed
-        ] == [("2026-04-20", 0, 0, 0)]
+        assert read_logs() == [
+            {
+                "event": "briefing_dispatch_completed",
+                "level": "info",
+                "log_policy": "briefing",
+                "week_start": "2026-04-20",
+                "selected_category_count": 0,
+                "enqueued_category_count": 0,
+                "failed_category_count": 0,
+            }
+        ]
 
     @pytest.mark.asyncio
     async def test_reraises_when_category_master_read_raises(self) -> None:
@@ -207,7 +207,10 @@ class TestDispatcher:
 
 class TestSubtask:
     @pytest.mark.asyncio
-    async def test_skips_already_generated_week_and_logs_existing(self) -> None:
+    async def test_skips_already_generated_week_and_logs_existing(
+        self, read_logs
+    ) -> None:
+        """生成済みの週は生成を呼ばず、週とカテゴリを付けた skip の log で終える。"""
         from app.queue.tasks import briefing
 
         ctx = _ctx_with_session_factory()
@@ -220,7 +223,6 @@ class TestSubtask:
                 "app.queue.tasks.briefing.WeeklyBriefingService",
                 return_value=service,
             ),
-            capture_logs() as logs,
         ):
             await briefing.generate_briefing_for_category(
                 BriefingTaskInput(week_start=date(2026, 4, 20), category_id=1),
@@ -228,8 +230,14 @@ class TestSubtask:
             )
 
         service.execute.assert_not_awaited()
-        assert [
-            e for e in logs if e.get("event") == "briefing_subtask_skipped_existing"
+        assert read_logs() == [
+            {
+                "event": "briefing_subtask_skipped_existing",
+                "level": "info",
+                "log_policy": "briefing",
+                "week_start": "2026-04-20",
+                "category_id": 1,
+            }
         ]
 
     @pytest.mark.asyncio

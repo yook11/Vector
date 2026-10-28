@@ -9,7 +9,6 @@ from enum import StrEnum
 from typing import Any
 
 import sqlalchemy as sa
-import structlog
 from pydantic import ValidationError
 from sqlalchemy import and_, func, select
 from sqlalchemy.dialects.postgresql import JSONB
@@ -18,7 +17,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.sql.elements import ColumnElement
 from sqlalchemy.sql.selectable import Join, TableValuedAlias
 
-from app.analysis.assessment.domain.result import MentionType
 from app.insights.trend_discovery.domain.mention_context import select_co_mentions
 from app.insights.trend_discovery.domain.ready import TrendDiscoveryReadyBuildFacts
 from app.insights.trend_discovery.domain.trend import (
@@ -31,29 +29,15 @@ from app.insights.trend_discovery.domain.trend import (
     TrendWeeks,
     Week,
 )
+from app.log_policy.policies.trend_discovery import TREND_DISCOVERY_LOG_RULES
+from app.log_policy.runtime import create_policy_json_logger
 from app.models.analyzable_article_record import AnalyzableArticleRecord
 from app.models.analyzed_article_record import AnalyzedArticleRecord
 from app.models.article_curation import ArticleCuration
 from app.models.category import Category
 from app.models.trends_snapshot import TrendsSnapshot
 
-logger = structlog.get_logger(__name__)
-
-_VALID_MENTION_TYPES = frozenset(t.value for t in MentionType)
-
-
-def _invalid_mention_log_fields(
-    error: ValidationError, *, surface: object, type_: object
-) -> dict[str, object]:
-    """不正なメンションの値をログに出さず、失敗項目・長さ・種別の妥当性だけを返す。"""
-    surface_str = surface if isinstance(surface, str) else ""
-    type_str = type_ if isinstance(type_, str) else ""
-    return {
-        "error_fields": sorted({str(e["loc"][0]) for e in error.errors() if e["loc"]}),
-        "type_known": type_str in _VALID_MENTION_TYPES,
-        "type_len": len(type_str),
-        "surface_len": len(surface_str),
-    }
+logger = create_policy_json_logger(__name__, TREND_DISCOVERY_LOG_RULES)
 
 
 def _match_key_expr(mention: ColumnElement[Any]) -> ColumnElement[str]:
@@ -161,9 +145,7 @@ class TrendsRepository:
                 logger.warning(
                     "trend_mention_candidate_skipped_invalid",
                     category_id=category_id,
-                    **_invalid_mention_log_fields(
-                        exc, surface=row.display_name, type_=row.type
-                    ),
+                    exc_info=exc,
                 )
         return tuple(candidates)
 
@@ -296,9 +278,7 @@ class TrendsRepository:
                 logger.warning(
                     "trend_co_mention_skipped_invalid",
                     category_id=category_id,
-                    **_invalid_mention_log_fields(
-                        exc, surface=row.co_mention_name, type_=row.co_mention_type
-                    ),
+                    exc_info=exc,
                 )
                 continue
             pairs.append(((row.anchor_key, row.anchor_type), co_mention))
