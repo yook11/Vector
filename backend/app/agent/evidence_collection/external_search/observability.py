@@ -6,16 +6,17 @@ from contextlib import suppress
 from typing import Literal
 
 import logfire
-import structlog
 
 from app.agent.evidence_collection.external_search.contract import (
     TimeFilterFailureReason,
 )
+from app.log_policy.policies.research import RESEARCH_LOG_RULES
+from app.log_policy.runtime import create_policy_json_logger
 
 TimeFilterResolutionResult = Literal["not_requested", "resolved", "failed"]
 TimeFilterResolutionReason = Literal["none"] | TimeFilterFailureReason
 
-logger = structlog.get_logger(__name__)
+logger = create_policy_json_logger(__name__, RESEARCH_LOG_RULES)
 
 _time_filter_resolution_counter = logfire.metric_counter(
     "external_search_time_filter_resolution_total",
@@ -53,11 +54,10 @@ def observe_time_filter_resolution(
     with suppress(Exception):
         record_time_filter_resolution(result=result, reason=reason)
     if result == "failed":
-        with suppress(Exception):
-            logger.warning(
-                "external_search_time_filter_failed",
-                reason=reason,
-            )
+        logger.warning(
+            "external_search_time_filter_failed",
+            reason=reason,
+        )
 
 
 def _validate_observation(

@@ -1,15 +1,16 @@
 """受付済みrunの期限確認を、回答実行を待たせず予約する。"""
 
 import asyncio
-from contextlib import suppress
 from datetime import UTC, datetime, timedelta
 from uuid import UUID
 
-import structlog
 from fastapi import Request
 from taskiq import ScheduleSource
 
-logger = structlog.get_logger(__name__)
+from app.log_policy.policies.research import RESEARCH_LOG_RULES
+from app.log_policy.runtime import create_policy_json_logger
+
+logger = create_policy_json_logger(__name__, RESEARCH_LOG_RULES)
 DEADLINE_RESERVATION_TIMEOUT_SECONDS = 2
 
 
@@ -59,12 +60,11 @@ class AgentDeadlineScheduler:
 
     @staticmethod
     def _log_failure(run_id: UUID, error: BaseException) -> None:
-        with suppress(Exception):
-            logger.warning(
-                "agent_run_deadline_reservation_failed",
-                run_id=str(run_id),
-                error_type=type(error).__name__,
-            )
+        logger.warning(
+            "agent_run_deadline_reservation_failed",
+            run_id=str(run_id),
+            exc_info=error,
+        )
 
     async def reserve(self, run_id: UUID, deadline_at: datetime) -> None:
         from app.queue.messages.agent_run import AgentRunTrigger

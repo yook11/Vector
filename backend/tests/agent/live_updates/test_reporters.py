@@ -8,7 +8,6 @@ from unittest.mock import AsyncMock
 from uuid import UUID
 
 import pytest
-from structlog.testing import capture_logs
 
 from app.agent.contract import (
     AnswerProgressEvent,
@@ -215,7 +214,9 @@ async def test_activity_reporter_preserves_nested_domain_shape() -> None:
 
 
 @pytest.mark.asyncio
-async def test_activity_reporter_does_not_log_payload_or_exception_text() -> None:
+async def test_activity_reporter_does_not_log_payload_or_exception_text(
+    read_logs,
+) -> None:
     activity = ExternalSearchQueriesGeneratedEvent(
         task_index=0,
         queries=[SECRET_PAYLOAD],
@@ -224,8 +225,8 @@ async def test_activity_reporter_does_not_log_payload_or_exception_text() -> Non
     stream_publisher.publish.side_effect = RuntimeError(SECRET_EXCEPTION)
     reporter = reporters.AgentRunLiveActivityReporter(stream_publisher)
 
-    with capture_logs() as logs:
-        await reporter.event_occurred(activity)
+    await reporter.event_occurred(activity)
+    logs = read_logs()
 
     encoded_logs = json.dumps(logs, ensure_ascii=False, default=str)
     assert SECRET_PAYLOAD not in encoded_logs

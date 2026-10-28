@@ -5,7 +5,6 @@ from __future__ import annotations
 from contextlib import suppress
 from uuid import UUID
 
-import structlog
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -17,10 +16,12 @@ from app.agent.running.deadline.deadline_exceeded import (
     sweep_deadline_exceeded_runs_for_thread,
 )
 from app.agent.threads.repository import AgentThreadRepository
+from app.log_policy.policies.research import RESEARCH_LOG_RULES
+from app.log_policy.runtime import create_policy_json_logger
 from app.models.agent_thread import AgentThread
 from app.schemas.research import ResearchThreadDetail
 
-logger = structlog.get_logger(__name__)
+logger = create_policy_json_logger(__name__, RESEARCH_LOG_RULES)
 
 
 async def read_owned_thread_detail(

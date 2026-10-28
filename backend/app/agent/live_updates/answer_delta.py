@@ -7,19 +7,19 @@ from collections.abc import Awaitable, Callable
 from typing import Protocol
 from uuid import UUID
 
-import structlog
-
 from app.agent.live_updates.metrics import record_answer_delta_breaker_open
 from app.agent.live_updates.stream import (
     AgentRunLiveStreamAnswerDeltaEvent,
     AgentRunLiveStreamAnswerResetEvent,
 )
+from app.log_policy.policies.research import RESEARCH_LOG_RULES
+from app.log_policy.runtime import create_policy_json_logger
 
 ANSWER_DELTA_FLUSH_INTERVAL_SECONDS = 0.25
 ANSWER_DELTA_MAX_CHARACTERS = 512
 ANSWER_DELTA_BREAKER_FAILURE_THRESHOLD = 3
 
-logger = structlog.get_logger(__name__)
+logger = create_policy_json_logger(__name__, RESEARCH_LOG_RULES)
 
 
 class _AnswerDeltaPublisher(Protocol):

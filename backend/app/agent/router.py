@@ -10,7 +10,6 @@ from datetime import datetime, timedelta
 from typing import Annotated
 from uuid import UUID
 
-import structlog
 from fastapi import (
     APIRouter,
     BackgroundTasks,
@@ -73,6 +72,8 @@ from app.dependencies import (
     AuthenticatedUser,
     require_authenticated_user,
 )
+from app.log_policy.policies.research import RESEARCH_LOG_RULES
+from app.log_policy.runtime import create_policy_json_logger
 from app.schemas.research import (
     PaginatedResearchThreadResponse,
     ResearchDailyRequestLimitExceededResponse,
@@ -89,7 +90,7 @@ router = APIRouter(
     dependencies=[Depends(require_authenticated_user)],
 )
 
-logger = structlog.get_logger(__name__)
+logger = create_policy_json_logger(__name__, RESEARCH_LOG_RULES)
 
 _ACTIVE_RUN_DETAIL = "A run is already in progress for this thread"
 _RUN_ALREADY_COMPLETED_DETAIL = "Run already completed"
@@ -209,11 +210,10 @@ async def create_research_response(
 
     try:
         await enqueuer.enqueue(created.run_id)
-    except Exception as exc:
+    except Exception:
         logger.exception(
             "agent_run_enqueue_failed",
             run_id=str(created.run_id),
-            error_type=exc.__class__.__name__,
         )
         try:
             async with session.begin():
@@ -229,7 +229,6 @@ async def create_research_response(
             logger.exception(
                 "agent_run_enqueue_failed_mark_failed_failed",
                 run_id=str(created.run_id),
-                error_type=update_exc.__class__.__name__,
             )
             raise HTTPException(
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE,

@@ -7,7 +7,6 @@ from dataclasses import dataclass
 from datetime import datetime
 from enum import StrEnum
 
-import structlog
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -15,10 +14,12 @@ from app.agent.running.daily_quota import observability as daily_quota_observabi
 from app.agent.running.daily_quota.release import release_daily_quota
 from app.agent.running.deadline.deadline_exceeded import database_now, expire_run
 from app.agent.runs.types import AgentRunStatus
+from app.log_policy.policies.research import RESEARCH_LOG_RULES
+from app.log_policy.runtime import create_policy_json_logger
 from app.models.agent_run import AgentRun
 from app.models.agent_thread import AgentThread
 
-logger = structlog.get_logger(__name__)
+logger = create_policy_json_logger(__name__, RESEARCH_LOG_RULES)
 
 _ACTIVE_STATUSES = (AgentRunStatus.QUEUED.value, AgentRunStatus.RUNNING.value)
 _TERMINAL_STATUSES = (

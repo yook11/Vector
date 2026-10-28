@@ -13,9 +13,9 @@ from uuid import UUID
 import pytest
 from sqlalchemy import event as sa_event
 from sqlalchemy import select, update
+from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from sqlalchemy.orm import Session
-from structlog.testing import capture_logs
 from taskiq import InMemoryBroker
 from taskiq.message import TaskiqMessage
 from taskiq.receiver import Receiver
@@ -98,21 +98,25 @@ SENSITIVE_TASK_BOUNDARY_MARKERS = (
     "parameters:",
 )
 SENSITIVE_TASK_BOUNDARY_ERROR = (
-    "asyncpg failure SECRET_SQL_MARKER: UPDATE agent_runs "
-    f"parameters: ('{TEST_USER_ID}', 'SECRET_QUESTION_MARKER', "
-    "'SECRET_ANSWER_MARKER', 'SECRET_PROVIDER_RAW_MARKER')"
+    "asyncpg failure\n"
+    "DETAIL:  Key (question)=(SECRET_QUESTION_MARKER) SECRET_SQL_MARKER"
 )
 
 
-class SensitivePersistenceFailure(RuntimeError):
+class SensitivePersistenceFailure(DBAPIError):
+    """秘匿値をSQLのパラメータとDETAILに持つ、コミット時のDB例外。"""
+
     def __init__(self) -> None:
-        super().__init__(SENSITIVE_TASK_BOUNDARY_ERROR)
-        self.params = {
-            "user_id": TEST_USER_ID,
-            "question": "SECRET_QUESTION_MARKER",
-            "answer": "SECRET_ANSWER_MARKER",
-            "provider_raw": "SECRET_PROVIDER_RAW_MARKER",
-        }
+        super().__init__(
+            "UPDATE agent_runs SET status = $1 WHERE user_id = $2",
+            {
+                "user_id": TEST_USER_ID,
+                "question": "SECRET_QUESTION_MARKER",
+                "answer": "SECRET_ANSWER_MARKER",
+                "provider_raw": "SECRET_PROVIDER_RAW_MARKER",
+            },
+            RuntimeError(SENSITIVE_TASK_BOUNDARY_ERROR),
+        )
 
 
 def _assert_safe_task_boundary_error(
@@ -1440,6 +1444,7 @@ async def test_run_agent_answer_publishes_failed_terminal_after_commit(
 
 @pytest.mark.asyncio
 async def test_generation_stopped_is_routine_return_without_run_transition(
+    read_logs,
     session_factory: async_sessionmaker[AsyncSession],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1478,11 +1483,11 @@ async def test_generation_stopped_is_routine_return_without_run_transition(
     monkeypatch.setattr(AgentRunCompletionRepository, "complete_run", observe_complete)
     monkeypatch.setattr(AgentRunFailureRepository, "mark_failed", observe_mark_failed)
 
-    with capture_logs() as logs:
-        await agent_run_tasks.run_agent_answer(
-            trigger=AgentRunTrigger(run_id=run.id),
-            ctx=_ctx(session_factory),
-        )
+    await agent_run_tasks.run_agent_answer(
+        trigger=AgentRunTrigger(run_id=run.id),
+        ctx=_ctx(session_factory),
+    )
+    logs = read_logs()
 
     assert complete_calls == []
     assert mark_failed_calls == []
@@ -1490,7 +1495,7 @@ async def test_generation_stopped_is_routine_return_without_run_transition(
         entry for entry in logs if entry.get("event") == "agent_run_generation_stopped"
     ]
     assert len(stop_logs) == 1
-    assert stop_logs[0]["log_level"] == "info"
+    assert stop_logs[0]["level"] == "info"
     assert stop_logs[0]["run_id"] == str(run.id)
     assert not any(
         entry.get("event")
@@ -1522,6 +1527,7 @@ async def test_generation_stopped_is_routine_return_without_run_transition(
 
 @pytest.mark.asyncio
 async def test_epoch_advance_before_answer_start_stops_old_worker_through_actual_probe(
+    read_logs,
     session_factory: async_sessionmaker[AsyncSession],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1616,11 +1622,11 @@ async def test_epoch_advance_before_answer_start_stops_old_worker_through_actual
     monkeypatch.setattr(AgentRunCompletionRepository, "complete_run", observe_complete)
     monkeypatch.setattr(AgentRunFailureRepository, "mark_failed", observe_mark_failed)
 
-    with capture_logs() as logs:
-        await agent_run_tasks.run_agent_answer(
-            trigger=AgentRunTrigger(run_id=run.id),
-            ctx=_ctx(session_factory),
-        )
+    await agent_run_tasks.run_agent_answer(
+        trigger=AgentRunTrigger(run_id=run.id),
+        ctx=_ctx(session_factory),
+    )
+    logs = read_logs()
 
     assert probe_bindings == [(session_factory, run.id, 1)]
     assert complete_calls == []
@@ -1629,7 +1635,7 @@ async def test_epoch_advance_before_answer_start_stops_old_worker_through_actual
         entry for entry in logs if entry.get("event") == "agent_run_generation_stopped"
     ]
     assert len(stop_logs) == 1
-    assert stop_logs[0]["log_level"] == "info"
+    assert stop_logs[0]["level"] == "info"
     assert stop_logs[0]["run_id"] == str(run.id)
     assert not any(
         entry.get("event")
@@ -2337,31 +2343,111 @@ async def test_answering_runner_setup_error_marks_generation_unavailable(
         assert failed.error_code == "generation_unavailable"
 
 
-def _direct_answer_error_with_private_cause() -> DirectAnswerError:
+def _direct_answer_error_with_provider_cause() -> DirectAnswerError:
     error = DirectAnswerError(code="direct_answer_blank_response")
     error.__cause__ = AIProviderResultError(
-        "SHOULD_NOT_LEAK", reason=AIProviderResultReason.RESPONSE_UNPARSEABLE
+        reason=AIProviderResultReason.RESPONSE_UNPARSEABLE
     )
     return error
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "generation_error",
+    ("generation_error", "expected_exception"),
     [
-        AIProviderResponseError(
-            reason=AIProviderResponseReason.AUTH,
-            http_error=HttpResponseError(status_code=401, received_at=_RECEIVED_AT),
+        (
+            AIProviderResponseError(
+                reason=AIProviderResponseReason.AUTH,
+                http_error=HttpResponseError(status_code=401, received_at=_RECEIVED_AT),
+            ),
+            {
+                "error_class": "app.ai_providers.errors.AIProviderResponseError",
+                "error_message": "AIプロバイダーが失敗の応答を返しました",
+                "error_details": {
+                    "code": "ai_provider_response_error",
+                    "reason": "auth",
+                },
+            },
         ),
-        AIProviderResultError(
-            "SHOULD_NOT_LEAK", reason=AIProviderResultReason.RESPONSE_UNPARSEABLE
+        (
+            AIProviderResultError(reason=AIProviderResultReason.RESPONSE_UNPARSEABLE),
+            {
+                "error_class": "app.ai_providers.errors.AIProviderResultError",
+                "error_message": "AIプロバイダーの生成結果を利用できませんでした",
+                "error_details": {
+                    "code": "ai_provider_result_error",
+                    "reason": "response_unparseable",
+                },
+            },
         ),
-        _direct_answer_error_with_private_cause(),
-        EvidenceAnswerError(code="ai_provider_transport_error"),
-        EvidenceAnswerError(code="evidence_answer_timeout"),
-        DirectAnswerError(code="direct_answer_timeout"),
-        AgentResponseInvalidError(AgentResponseDefect.OUTPUT_SCHEMA_MISMATCH),
-        PlanningError(code="ai_provider_transport_error"),
+        (
+            _direct_answer_error_with_provider_cause(),
+            {
+                "error_class": (
+                    "app.agent.answering.direct_answer.failure.DirectAnswerError"
+                ),
+                "error_message": "direct_answer_blank_response",
+                "related_exceptions": [
+                    {
+                        "parent": None,
+                        "relation": "cause",
+                        "exception": {
+                            "error_class": (
+                                "app.ai_providers.errors.AIProviderResultError"
+                            ),
+                            "error_message": (
+                                "AIプロバイダーの生成結果を利用できませんでした"
+                            ),
+                            "error_details": {
+                                "code": "ai_provider_result_error",
+                                "reason": "response_unparseable",
+                            },
+                        },
+                    }
+                ],
+            },
+        ),
+        (
+            EvidenceAnswerError(code="ai_provider_transport_error"),
+            {
+                "error_class": (
+                    "app.agent.answering.evidence_answer.failure.EvidenceAnswerError"
+                ),
+                "error_message": "ai_provider_transport_error",
+            },
+        ),
+        (
+            EvidenceAnswerError(code="evidence_answer_timeout"),
+            {
+                "error_class": (
+                    "app.agent.answering.evidence_answer.failure.EvidenceAnswerError"
+                ),
+                "error_message": "evidence_answer_timeout",
+            },
+        ),
+        (
+            DirectAnswerError(code="direct_answer_timeout"),
+            {
+                "error_class": (
+                    "app.agent.answering.direct_answer.failure.DirectAnswerError"
+                ),
+                "error_message": "direct_answer_timeout",
+            },
+        ),
+        (
+            AgentResponseInvalidError(AgentResponseDefect.OUTPUT_SCHEMA_MISMATCH),
+            {
+                "error_class": "app.agent.runtime.contract.AgentResponseInvalidError",
+                "error_message": "output_schema_mismatch",
+            },
+        ),
+        (
+            PlanningError(code="ai_provider_transport_error"),
+            {
+                "error_class": "app.agent.planning.failure.PlanningError",
+                "error_message": "ai_provider_transport_error",
+            },
+        ),
     ],
     ids=(
         "configuration",
@@ -2374,21 +2460,24 @@ def _direct_answer_error_with_private_cause() -> DirectAnswerError:
         "planning",
     ),
 )
-async def test_run_agent_answer_generation_error_marks_failed_without_leaking_message(
+async def test_run_agent_answer_generation_error_marks_failed_and_logs_cause(
+    read_logs,
     session_factory: async_sessionmaker[AsyncSession],
     monkeypatch: pytest.MonkeyPatch,
     generation_error: Exception,
+    expected_exception: dict[str, object],
 ) -> None:
+    """既知の生成失敗はrunを生成不能で終え、例外の型・説明・原因をinfoで記録する。"""
     async with session_factory() as session:
         _thread, _message, run = await _create_thread_message_run(session)
     fake_agent = FakeAgent(exc=generation_error)
     _patch_worker_execution(monkeypatch, lambda **_kwargs: fake_agent)
 
-    with capture_logs() as logs:
-        await agent_run_tasks.run_agent_answer(
-            trigger=AgentRunTrigger(run_id=run.id),
-            ctx=_ctx(session_factory),
-        )
+    await agent_run_tasks.run_agent_answer(
+        trigger=AgentRunTrigger(run_id=run.id),
+        ctx=_ctx(session_factory),
+    )
+    logs = read_logs()
 
     async with session_factory() as session:
         failed = await session.get(AgentRun, run.id)
@@ -2407,7 +2496,19 @@ async def test_run_agent_answer_generation_error_marks_failed_without_leaking_me
             .all()
         )
         assert [m.role for m in messages] == ["user"]
-    assert "SHOULD_NOT_LEAK" not in repr(logs)
+    assert [
+        entry
+        for entry in logs
+        if entry.get("event") == "agent_run_generation_unavailable"
+    ] == [
+        {
+            "event": "agent_run_generation_unavailable",
+            "level": "info",
+            "run_id": str(run.id),
+            "log_policy": "research",
+            **expected_exception,
+        }
+    ]
 
 
 @pytest.mark.asyncio
@@ -2444,12 +2545,13 @@ async def test_run_agent_answer_generation_error_preserves_death_progress_stage(
 
 @pytest.mark.asyncio
 async def test_run_agent_answer_unexpected_error_marks_internal_error(
+    read_logs,
     session_factory: async_sessionmaker[AsyncSession],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     async with session_factory() as session:
         _thread, _message, run = await _create_thread_message_run(session)
-    fake_agent = FakeAgent(exc=RuntimeError("SHOULD_NOT_LEAK"))
+    fake_agent = FakeAgent(exc=RuntimeError("unexpected failure"))
     FakeLiveStreamPublisher.instances = []
     _patch_worker_execution(monkeypatch, lambda **_kwargs: fake_agent)
     monkeypatch.setattr(
@@ -2458,21 +2560,24 @@ async def test_run_agent_answer_unexpected_error_marks_internal_error(
         FakeLiveStreamPublisher,
     )
 
-    with capture_logs() as logs:
-        await agent_run_tasks.run_agent_answer(
-            trigger=AgentRunTrigger(run_id=run.id),
-            ctx=_ctx(session_factory),
-        )
+    await agent_run_tasks.run_agent_answer(
+        trigger=AgentRunTrigger(run_id=run.id),
+        ctx=_ctx(session_factory),
+    )
+    logs = read_logs()
 
-    unexpected_logs = [
+    assert [
         entry for entry in logs if entry.get("event") == "agent_run_unexpected_error"
+    ] == [
+        {
+            "event": "agent_run_unexpected_error",
+            "level": "error",
+            "run_id": str(run.id),
+            "log_policy": "research",
+            "error_class": "builtins.RuntimeError",
+            "error_message": "unexpected failure",
+        }
     ]
-    assert len(unexpected_logs) == 1
-    assert unexpected_logs[0]["log_level"] == "error"
-    assert unexpected_logs[0]["error_type"] == "RuntimeError"
-    assert "exception" not in unexpected_logs[0]
-    assert "exc_info" not in unexpected_logs[0]
-    assert "SHOULD_NOT_LEAK" not in repr(unexpected_logs[0])
 
     async with session_factory() as session:
         failed = await session.get(AgentRun, run.id)
@@ -2566,6 +2671,7 @@ async def test_taskiq_receiver_result_and_log_expose_only_safe_start_error(
 @pytest.mark.integration
 @pytest.mark.asyncio
 async def test_start_commit_failure_raises_sanitized_task_boundary_error(
+    read_logs,
     session_factory: async_sessionmaker[AsyncSession],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -2608,7 +2714,7 @@ async def test_start_commit_failure_raises_sanitized_task_boundary_error(
     )
 
     try:
-        with capture_logs() as logs, pytest.raises(Exception) as exc_info:
+        with pytest.raises(Exception) as exc_info:
             await agent_run_tasks.run_agent_answer(
                 trigger=AgentRunTrigger(run_id=run.id),
                 ctx=_ctx(
@@ -2620,6 +2726,7 @@ async def test_start_commit_failure_raises_sanitized_task_boundary_error(
             )
     finally:
         await failing_session.close()
+    logs = read_logs()
 
     _assert_safe_task_boundary_error(
         exc_info.value,
@@ -2684,6 +2791,7 @@ async def test_provider_timeout_error_follows_existing_unexpected_error_path(
 @pytest.mark.parametrize("failure_stage", ["transition", "commit"])
 @pytest.mark.asyncio
 async def test_completion_rolls_back_written_artifacts(
+    read_logs,
     failure_stage: str,
     session_factory: async_sessionmaker[AsyncSession],
     monkeypatch: pytest.MonkeyPatch,
@@ -2734,10 +2842,10 @@ async def test_completion_rolls_back_written_artifacts(
     sa_event.listen(Session, "after_flush", invalidate_attempt_after_sources)
     sa_event.listen(Session, "before_commit", fail_completed_commit)
     try:
-        with capture_logs() as logs:
-            await agent_run_tasks.run_agent_answer(
-                trigger=AgentRunTrigger(run_id=run_id), ctx=_ctx(session_factory)
-            )
+        await agent_run_tasks.run_agent_answer(
+            trigger=AgentRunTrigger(run_id=run_id), ctx=_ctx(session_factory)
+        )
+        logs = read_logs()
     finally:
         sa_event.remove(Session, "after_flush", invalidate_attempt_after_sources)
         sa_event.remove(Session, "before_commit", fail_completed_commit)

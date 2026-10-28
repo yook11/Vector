@@ -6,7 +6,6 @@ from contextlib import suppress
 from datetime import UTC, datetime
 from uuid import UUID
 
-import structlog
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from taskiq import Context, TaskiqDepends
 
@@ -65,11 +64,13 @@ from app.agent.threads.contracts import ThreadMessageSnapshot
 from app.agent.threads.history import HISTORY_MESSAGE_LIMIT, normalize_run_history
 from app.agent.threads.repository import AgentThreadRepository
 from app.ai_providers.errors import AIProviderError
+from app.log_policy.policies.research import RESEARCH_LOG_RULES
+from app.log_policy.runtime import create_policy_json_logger
 from app.queue.brokers import broker_agent
 from app.queue.messages.agent_run import AgentRunTrigger
 from app.queue.schedule import CRON_AGENT_RUN_SWEEP
 
-logger = structlog.get_logger(__name__)
+logger = create_policy_json_logger(__name__, RESEARCH_LOG_RULES)
 
 RESEARCH_TASKIQ_TIMEOUT_SECONDS = 180
 
@@ -100,7 +101,7 @@ async def run_agent_answer(
     except Exception as exc:
         logger.error(
             "agent_run_start_failed",
-            error_type=exc.__class__.__name__,
+            exc_info=exc,
         )
         start_error = AgentRunTaskBoundaryError("agent run start failed")
     if start_error is not None:
@@ -122,7 +123,7 @@ async def run_agent_answer(
         logger.error(
             "agent_run_user_question_read_failed",
             run_id=str(run_id),
-            error_type=exc.__class__.__name__,
+            exc_info=exc,
         )
     if question_row is None:
         await _mark_failed(
@@ -227,7 +228,7 @@ async def run_agent_answer(
         logger.info(
             "agent_run_generation_unavailable",
             run_id=str(run_id),
-            error_type=exc.__class__.__name__,
+            exc_info=exc,
         )
         await _mark_failed(
             session_factory,
@@ -241,7 +242,7 @@ async def run_agent_answer(
         logger.error(
             "agent_run_unexpected_error",
             run_id=str(run_id),
-            error_type=exc.__class__.__name__,
+            exc_info=exc,
         )
         await _mark_failed(
             session_factory,
@@ -293,11 +294,10 @@ async def run_agent_answer(
                 run_id,
                 AgentRunLiveStreamTerminalEvent(status="deadline_exceeded"),
             )
-    except Exception as exc:
+    except Exception:
         logger.exception(
             "agent_run_completion_failed",
             run_id=str(run_id),
-            error_type=exc.__class__.__name__,
         )
         await _mark_failed(
             session_factory,
@@ -325,7 +325,7 @@ async def sweep_deadline_exceeded_agent_runs(ctx: Context = TaskiqDepends()) -> 
     except Exception as exc:
         logger.error(
             "agent_run_deadline_sweep_failed",
-            error_type=exc.__class__.__name__,
+            exc_info=exc,
         )
         sweep_error = AgentRunTaskBoundaryError("agent run deadline sweep failed")
     if sweep_error is not None:
@@ -352,7 +352,7 @@ async def check_agent_run_deadline(
         logger.error(
             "agent_run_deadline_check_failed",
             run_id=str(trigger.run_id),
-            error_type=type(exc).__name__,
+            exc_info=exc,
         )
         failure = AgentRunTaskBoundaryError("agent run deadline check failed")
     if failure is not None:
@@ -364,17 +364,15 @@ async def check_agent_run_deadline(
 async def _report_deadline_recovery(
     ctx: Context, result: DeadlineRunSweepResult
 ) -> None:
-    with suppress(Exception):
-        logger.info("agent_runs_deadline_swept", count=result.total_count)
+    logger.info("agent_runs_deadline_swept", count=result.total_count)
     if result.queued_terminal_count > 0:
-        with suppress(Exception):
-            logger.info(
-                "agent_runs_queued_deadline_swept",
-                run_count=result.queued_terminal_count,
-                quota_released_count=result.queued_quota_released_count,
-                quota_not_eligible_count=result.queued_quota_not_eligible_count,
-                quota_inconsistent_count=result.queued_quota_inconsistent_count,
-            )
+        logger.info(
+            "agent_runs_queued_deadline_swept",
+            run_count=result.queued_terminal_count,
+            quota_released_count=result.queued_quota_released_count,
+            quota_not_eligible_count=result.queued_quota_not_eligible_count,
+            quota_inconsistent_count=result.queued_quota_inconsistent_count,
+        )
     for quota_result, count in (
         ("released", result.queued_quota_released_count),
         ("not_eligible", result.queued_quota_not_eligible_count),
@@ -392,11 +390,10 @@ async def _report_deadline_recovery(
             running_count=result.running_quota_reservation_count,
         )
     if result.running_terminal_runs:
-        with suppress(Exception):
-            logger.info(
-                "running_deadline_exceeded_swept",
-                count=len(result.running_terminal_runs),
-            )
+        logger.info(
+            "running_deadline_exceeded_swept",
+            count=len(result.running_terminal_runs),
+        )
     for running_run in result.running_terminal_runs:
         try:
             redis = ctx.state.agent_live_redis
@@ -494,7 +491,7 @@ async def _read_research_handoff(
         logger.warning(
             "agent_run_research_handoff_read_failed",
             run_id=str(run_id),
-            error_type=exc.__class__.__name__,
+            exc_info=exc,
             failure_code="research_handoff_read_failed",
         )
         return None

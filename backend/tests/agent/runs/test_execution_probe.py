@@ -12,7 +12,6 @@ from uuid import UUID
 import pytest
 from logfire.testing import CaptureLogfire
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
-from structlog.testing import capture_logs
 
 from app.agent.running.attempt_start import AgentRunAttemptStartRepository
 from app.agent.running.cancellation import (
@@ -225,6 +224,7 @@ async def test_session_open_failure_also_fails_open_and_is_cached() -> None:
 
 @pytest.mark.asyncio
 async def test_unavailable_observation_is_once_per_real_failure_and_pii_free(
+    read_logs,
     capfire: CaptureLogfire,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -239,12 +239,12 @@ async def test_unavailable_observation_is_once_per_real_failure_and_pii_free(
     question = "QUESTION_SECRET"
     user_id = "USER_ID_SECRET"
 
-    with capture_logs() as logs:
-        assert await probe.should_continue() == Continue()
-        clock.advance(1.0)
-        assert await probe.should_continue() == Continue()
-        clock.advance(1.0)
-        assert await probe.should_continue() == Continue()
+    assert await probe.should_continue() == Continue()
+    clock.advance(1.0)
+    assert await probe.should_continue() == Continue()
+    clock.advance(1.0)
+    assert await probe.should_continue() == Continue()
+    logs = read_logs()
 
     unavailable_logs = [
         entry

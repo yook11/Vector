@@ -13,7 +13,7 @@ class LogPolicy(StrEnum):
     EXTERNAL_CONTENT_FETCH = "external_content_fetch"
     AI_INFERENCE = "ai_inference"
     CACHE_REVALIDATION = "cache_revalidation"
-    USER_INTERACTION = "user_interaction"
+    RESEARCH = "research"
     PIPELINE_CONTROL = "pipeline_control"
     INFRASTRUCTURE = "infrastructure"
 

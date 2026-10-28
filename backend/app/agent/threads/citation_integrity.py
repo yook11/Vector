@@ -6,11 +6,11 @@ from collections.abc import Iterable
 from dataclasses import dataclass
 from uuid import UUID
 
-import structlog
-
 from app.agent.citation_markers import parse_citation_refs
+from app.log_policy.policies.research import RESEARCH_LOG_RULES
+from app.log_policy.runtime import create_policy_json_logger
 
-logger = structlog.get_logger(__name__)
+logger = create_policy_json_logger(__name__, RESEARCH_LOG_RULES)
 
 
 @dataclass(frozen=True, slots=True)

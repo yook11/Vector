@@ -5,7 +5,6 @@ from datetime import UTC, datetime
 from uuid import uuid4
 
 import pytest
-from structlog.testing import capture_logs
 from taskiq import ScheduledTask, ScheduleSource
 
 from app.agent.running.deadline import scheduling
@@ -62,19 +61,53 @@ async def test_saved_deadline_is_scheduled_even_when_in_past():
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("stall", [False, True])
-async def test_failed_reservation_does_not_retry_or_propagate(monkeypatch, stall):
+@pytest.mark.parametrize(
+    ("stall", "expected_exception"),
+    [
+        (
+            False,
+            {"error_class": "builtins.RuntimeError", "error_message": "source down"},
+        ),
+        (
+            True,
+            {
+                "error_class": "builtins.TimeoutError",
+                "error_message": "",
+                "related_exceptions": [
+                    {
+                        "parent": None,
+                        "relation": "cause",
+                        "exception": {
+                            "error_class": "asyncio.exceptions.CancelledError",
+                            "error_message": "",
+                        },
+                    }
+                ],
+            },
+        ),
+    ],
+    ids=["error", "stall"],
+)
+async def test_failed_reservation_does_not_retry_or_propagate(
+    read_logs, monkeypatch, stall, expected_exception
+):
+    """予約の失敗と時間切れは再試行も送出もせず、例外をwarningで1件記録する。"""
     monkeypatch.setattr(scheduling, "DEADLINE_RESERVATION_TIMEOUT_SECONDS", 0.01)
     source = RecordingSource(
-        stall=stall, error=None if stall else RuntimeError("private payload")
+        stall=stall, error=None if stall else RuntimeError("source down")
     )
-    with capture_logs() as logs:
-        await AgentDeadlineScheduler(source).reserve(uuid4(), datetime.now(UTC))
+    run_id = uuid4()
+    await AgentDeadlineScheduler(source).reserve(run_id, datetime.now(UTC))
     assert len(source.schedules) == 1
-    assert (
-        len(logs) == 1 and logs[0]["event"] == "agent_run_deadline_reservation_failed"
-    )
-    assert "private payload" not in str(logs)
+    assert read_logs() == [
+        {
+            "event": "agent_run_deadline_reservation_failed",
+            "level": "warning",
+            "run_id": str(run_id),
+            "log_policy": "research",
+            **expected_exception,
+        }
+    ]
 
 
 @pytest.mark.asyncio

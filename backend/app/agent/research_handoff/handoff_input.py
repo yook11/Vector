@@ -11,8 +11,6 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime
 
-import logfire
-
 from app.agent.evidence_collection.contract import (
     CollectedNews,
     CollectedTask,
@@ -28,8 +26,12 @@ from app.agent.research_handoff.handoff import (
     ResearchRunRecord,
     ResearchTaskRecord,
 )
+from app.log_policy.policies.research import RESEARCH_LOG_RULES
+from app.log_policy.runtime import create_policy_json_logger
 
 __all__ = ["ResearchHandoffInput", "SearchedTask"]
+
+logger = create_policy_json_logger(__name__, RESEARCH_LOG_RULES)
 
 
 @dataclass(frozen=True, slots=True)
@@ -75,9 +77,10 @@ class ResearchHandoffInput:
                 as_of=as_of,
             )
         except Exception:
-            logfire.warning(
+            logger.warning(
                 "research_handoff_build_failed",
                 failure_code="build_failed",
+                exc_info=True,
             )
             return None
         if record is None:
