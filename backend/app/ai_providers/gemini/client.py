@@ -4,7 +4,6 @@ from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import AsyncExitStack, asynccontextmanager
 
 import httpx2
-import structlog
 from google import genai
 from google.genai.client import AsyncClient
 from google.genai.types import HttpOptions, HttpRetryOptions
@@ -12,34 +11,24 @@ from pydantic import SecretStr
 
 from app.ai_providers.gemini.settings import GeminiConnectionSettings
 from app.http.external import make_external_async_client
+from app.log_policy.policies.ai_provider import AI_PROVIDER_LOG_RULES
+from app.log_policy.runtime import create_policy_json_logger
 
-logger = structlog.get_logger(__name__)
-
-
-def _record_cleanup_failure(resource: str, exc: Exception) -> None:
-    try:
-        logger.warning(
-            "gemini_client_cleanup_failed",
-            resource=resource,
-            error_class=f"{type(exc).__module__}.{type(exc).__qualname__}",
-        )
-    except Exception:  # noqa: S110
-        # 終了診断の障害で利用結果を変更しない。
-        pass
+logger = create_policy_json_logger(__name__, AI_PROVIDER_LOG_RULES)
 
 
 async def _close_async(resource: str, close: Callable[[], Awaitable[None]]) -> None:
     try:
         await close()
     except Exception as exc:
-        _record_cleanup_failure(resource, exc)
+        logger.warning("gemini_client_cleanup_failed", resource=resource, exc_info=exc)
 
 
 def _close_sync(resource: str, close: Callable[[], None]) -> None:
     try:
         close()
     except Exception as exc:
-        _record_cleanup_failure(resource, exc)
+        logger.warning("gemini_client_cleanup_failed", resource=resource, exc_info=exc)
 
 
 @asynccontextmanager

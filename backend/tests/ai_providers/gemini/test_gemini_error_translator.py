@@ -7,12 +7,10 @@ ValidationError / response shape / finish_reason など工程固有の判定は�
 from __future__ import annotations
 
 from datetime import UTC, datetime
-from unittest.mock import patch
 
 import httpx2
 import pytest
 from google.genai import errors as genai_errors
-from structlog.testing import capture_logs
 
 from app.ai_providers.errors import (
     AIProviderNotSentError,
@@ -487,11 +485,18 @@ def _resource_exhausted_logs(logs: list[dict]) -> list[dict]:
             ],
             {
                 "event": "gemini_resource_exhausted",
-                "log_level": "warning",
+                "level": "warning",
                 "reason": "rate_limited",
-                "retry_delay": "19s",
-                "quota_ids": [_PER_MINUTE_QUOTA_ID],
                 "retry_after_header": False,
+                "log_policy": "ai_inference",
+                "error_class": "google.genai.errors.ClientError",
+                "error_message": "Gemini API error: RESOURCE_EXHAUSTED",
+                "error_details": {
+                    "kind": "gemini",
+                    "provider_code": "RESOURCE_EXHAUSTED",
+                    "quota_violations": [{"quota_id": _PER_MINUTE_QUOTA_ID}],
+                    "retry_delay_seconds": 19,
+                },
             },
         ),
         (
@@ -501,27 +506,33 @@ def _resource_exhausted_logs(logs: list[dict]) -> list[dict]:
             ],
             {
                 "event": "gemini_resource_exhausted",
-                "log_level": "warning",
+                "level": "warning",
                 "reason": "quota_exhausted",
-                "retry_delay": "34s",
-                "quota_ids": [_PER_DAY_QUOTA_ID],
                 "retry_after_header": False,
+                "log_policy": "ai_inference",
+                "error_class": "google.genai.errors.ClientError",
+                "error_message": "Gemini API error: RESOURCE_EXHAUSTED",
+                "error_details": {
+                    "kind": "gemini",
+                    "provider_code": "RESOURCE_EXHAUSTED",
+                    "quota_violations": [{"quota_id": _PER_DAY_QUOTA_ID}],
+                    "retry_delay_seconds": 34,
+                },
             },
         ),
     ],
     ids=["per_minute", "per_day"],
 )
 def test_resource_exhausted_logs_retry_delay_and_quota_ids(
-    details: list[dict], expected: dict
+    details: list[dict], expected: dict, read_logs
 ) -> None:
     """429 では分類した理由と、本文の待ち時間・quotaId を1行だけ記録する。"""
-    with capture_logs() as logs:
-        translate_gemini_error(_resource_exhausted_error(details=details))
+    translate_gemini_error(_resource_exhausted_error(details=details))
 
-    assert _resource_exhausted_logs(logs) == [expected]
+    assert _resource_exhausted_logs(read_logs()) == [expected]
 
 
-def test_resource_exhausted_log_records_retry_after_header() -> None:
+def test_resource_exhausted_log_records_retry_after_header(read_logs) -> None:
     """Retry-After ヘッダーが付いていたかを、本文の有無と別に記録する。"""
     response = httpx2.Response(
         429,
@@ -534,73 +545,84 @@ def test_resource_exhausted_log_records_retry_after_header() -> None:
         response,
     )
 
-    with capture_logs() as logs:
-        translate_gemini_error(exc)
+    translate_gemini_error(exc)
 
-    assert _resource_exhausted_logs(logs) == [
+    assert _resource_exhausted_logs(read_logs()) == [
         {
             "event": "gemini_resource_exhausted",
-            "log_level": "warning",
+            "level": "warning",
             "reason": "rate_limited",
-            "retry_delay": None,
-            "quota_ids": [],
             "retry_after_header": True,
+            "log_policy": "ai_inference",
+            "error_class": "google.genai.errors.ClientError",
+            "error_message": "Gemini API error: RESOURCE_EXHAUSTED",
+            "error_details": {
+                "kind": "gemini",
+                "http_status": 429,
+                "provider_code": "RESOURCE_EXHAUSTED",
+            },
         }
     ]
 
 
-def test_resource_exhausted_log_omits_values_of_unexpected_shape() -> None:
+def test_resource_exhausted_log_omits_values_of_unexpected_shape(read_logs) -> None:
     """既知の形でない待ち時間と quotaId はログに出さず、分類には使い続ける。"""
     details = [
         _quota_failure_detail("contact admin@example.com PerDay", _PER_MINUTE_QUOTA_ID),
         _retry_info_detail("in about a minute"),
     ]
 
-    with capture_logs() as logs:
-        translated = translate_gemini_error(_resource_exhausted_error(details=details))
+    translated = translate_gemini_error(_resource_exhausted_error(details=details))
 
     assert isinstance(translated, AIProviderResponseError)
     assert translated.reason is AIProviderResponseReason.QUOTA_EXHAUSTED
-    assert _resource_exhausted_logs(logs) == [
+    assert _resource_exhausted_logs(read_logs()) == [
         {
             "event": "gemini_resource_exhausted",
-            "log_level": "warning",
+            "level": "warning",
             "reason": "quota_exhausted",
-            "retry_delay": None,
-            "quota_ids": [_PER_MINUTE_QUOTA_ID],
             "retry_after_header": False,
+            "log_policy": "ai_inference",
+            "error_class": "google.genai.errors.ClientError",
+            "error_message": "Gemini API error: RESOURCE_EXHAUSTED",
+            "error_details": {
+                "kind": "gemini",
+                "provider_code": "RESOURCE_EXHAUSTED",
+                "quota_violations": [{"quota_id": _PER_MINUTE_QUOTA_ID}],
+            },
         }
     ]
 
 
-def test_resource_exhausted_log_keeps_quota_id_in_identifier_shape() -> None:
+def test_resource_exhausted_log_keeps_quota_id_in_identifier_shape(read_logs) -> None:
     """英数字と _ . : - だけの quotaId は、識別子の形として記録する。"""
     details = [_quota_failure_detail("quota.v1:per-minute_project")]
 
-    with capture_logs() as logs:
-        translate_gemini_error(_resource_exhausted_error(details=details))
+    translate_gemini_error(_resource_exhausted_error(details=details))
 
-    assert _resource_exhausted_logs(logs) == [
+    assert _resource_exhausted_logs(read_logs()) == [
         {
             "event": "gemini_resource_exhausted",
-            "log_level": "warning",
+            "level": "warning",
             "reason": "rate_limited",
-            "retry_delay": None,
-            "quota_ids": ["quota.v1:per-minute_project"],
             "retry_after_header": False,
+            "log_policy": "ai_inference",
+            "error_class": "google.genai.errors.ClientError",
+            "error_message": "Gemini API error: RESOURCE_EXHAUSTED",
+            "error_details": {
+                "kind": "gemini",
+                "provider_code": "RESOURCE_EXHAUSTED",
+                "quota_violations": [{"quota_id": "quota.v1:per-minute_project"}],
+            },
         }
     ]
 
 
-def test_resource_exhausted_log_failure_keeps_classification() -> None:
+def test_resource_exhausted_log_failure_keeps_classification(broken_output) -> None:
     """観測ログの出力に失敗しても、分類の結果を変えない。"""
     exc = _resource_exhausted_error(quota_ids=(_PER_DAY_QUOTA_ID,))
 
-    with patch(
-        "app.ai_providers.gemini.error_translator.logger.warning",
-        side_effect=RuntimeError("log failed"),
-    ):
-        translated = translate_gemini_error(exc)
+    translated = translate_gemini_error(exc)
 
     assert isinstance(translated, AIProviderResponseError)
     assert translated.reason is AIProviderResponseReason.QUOTA_EXHAUSTED
@@ -615,13 +637,12 @@ def test_resource_exhausted_log_failure_keeps_classification() -> None:
     ids=["server_error", "invalid_argument"],
 )
 def test_other_error_responses_do_not_log_resource_exhausted(
-    exc: genai_errors.APIError,
+    exc: genai_errors.APIError, read_logs
 ) -> None:
     """429 以外の失敗の応答では、観測ログを出さない。"""
-    with capture_logs() as logs:
-        translate_gemini_error(exc)
+    translate_gemini_error(exc)
 
-    assert _resource_exhausted_logs(logs) == []
+    assert _resource_exhausted_logs(read_logs()) == []
 
 
 # 入力長の超過: status guard と文言の一致

@@ -6,11 +6,9 @@ finish_reason や応答の形の検証は、各工程の adapter が持つ。
 
 from __future__ import annotations
 
-import re
 from datetime import UTC, datetime
 
 import httpx2
-import structlog
 from google.genai import errors as genai_errors
 
 from app.ai_providers.errors import (
@@ -28,8 +26,10 @@ from app.http.error_mapping import (
     http_transport_error_from_exception,
 )
 from app.http.errors import HttpTransportError
+from app.log_policy.policies.ai_provider import AI_PROVIDER_LOG_RULES
+from app.log_policy.runtime import create_policy_json_logger
 
-logger = structlog.get_logger(__name__)
+logger = create_policy_json_logger(__name__, AI_PROVIDER_LOG_RULES)
 
 _CONFIG_REASON_MESSAGES: dict[AIProviderResponseReason, str] = {
     AIProviderResponseReason.AUTH: "AIプロバイダーの認証に失敗しました",
@@ -97,12 +97,6 @@ def _is_context_length_error(status: str, message: str) -> bool:
     return any(pat in message for pat in _CONTEXT_LENGTH_PATTERNS)
 
 
-# ログには、応答の任意の文字列を持ち込まないよう既知の形の値だけを出す。
-# quotaId の形は、AI分析ログ仕様の識別子（provider_code）の規則に揃える。
-_LOGGABLE_QUOTA_ID = re.compile(r"[A-Za-z0-9_.:-]{1,128}")
-_LOGGABLE_RETRY_DELAY = re.compile(r"[0-9]{1,6}(\.[0-9]{1,9})?s")
-
-
 def _has_per_day_quota_violation(quota_ids: list[str]) -> bool:
     """日あたりの利用枠の超過があるか。
 
@@ -110,36 +104,6 @@ def _has_per_day_quota_violation(quota_ids: list[str]) -> bool:
     判定する。判定できなければ False (流量制限) に倒す。
     """
     return any("perday" in quota_id.lower() for quota_id in quota_ids)
-
-
-def _record_resource_exhausted(
-    reason: AIProviderResponseReason,
-    *,
-    retry_delay: str | None,
-    quota_ids: list[str],
-    retry_after_header: bool,
-) -> None:
-    """再試行の時刻を決める材料として、429 の待ち時間と枠の種類を記録する。"""
-    try:
-        logger.warning(
-            "gemini_resource_exhausted",
-            reason=reason.value,
-            retry_delay=(
-                retry_delay
-                if retry_delay is not None
-                and _LOGGABLE_RETRY_DELAY.fullmatch(retry_delay)
-                else None
-            ),
-            quota_ids=[
-                quota_id
-                for quota_id in quota_ids
-                if _LOGGABLE_QUOTA_ID.fullmatch(quota_id)
-            ],
-            retry_after_header=retry_after_header,
-        )
-    except Exception:  # noqa: S110
-        # 観測ログの障害で分類の結果を変えない。
-        pass
 
 
 def translate_gemini_error(exc: Exception) -> Exception:
@@ -251,11 +215,12 @@ def translate_gemini_error(exc: Exception) -> Exception:
                 reason=AIProviderResponseReason.RATE_LIMITED,
                 http_error=http_error,
             )
-        _record_resource_exhausted(
-            translated.reason,
-            retry_delay=response_details.retry_delay,
-            quota_ids=quota_ids,
+        # 再試行の時刻を決める材料として、待ち時間と枠はSDK例外の診断で残す。
+        logger.warning(
+            "gemini_resource_exhausted",
+            reason=translated.reason.value,
             retry_after_header=http_error.retry_after is not None,
+            exc_info=exc,
         )
         return translated
 
