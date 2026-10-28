@@ -30,12 +30,12 @@ class WatchlistService:
         page = watched[:ARTICLE_PAGE_SIZE]
         next_cursor = None
         if len(watched) > ARTICLE_PAGE_SIZE:
-            last, watched_at = page[-1]
+            last_article, last_watched_at = page[-1]
             next_cursor = WatchlistPosition(
-                watched_at=watched_at, article_id=last.id
+                watched_at=last_watched_at, article_id=last_article.id
             ).to_cursor()
         return AnalyzedArticlePreviewList(
-            items=[build_analyzed_article_preview(a) for a, _ in page],
+            items=[build_analyzed_article_preview(article) for article, _ in page],
             next_cursor=next_cursor,
         )
 
