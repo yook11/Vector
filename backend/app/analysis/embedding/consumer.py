@@ -26,7 +26,6 @@ from app.analysis.embedding.service import (
     EmbeddingCompletion,
     EmbeddingService,
 )
-from app.audit.error_fields import exception_fqn
 
 
 class EmbeddingConsumer:
@@ -79,7 +78,7 @@ class EmbeddingConsumer:
                 logger.warning(
                     "embedding_consumer_failure_processing_failed",
                     operation="failure_handling",
-                    business_error_class=exception_fqn(exc),
+                    business_error_class=f"{type(exc).__module__}.{type(exc).__qualname__}",
                     exc_info=secondary,
                 )
             return failure

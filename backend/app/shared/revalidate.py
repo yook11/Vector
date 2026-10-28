@@ -26,7 +26,6 @@ from typing import TYPE_CHECKING, Protocol
 
 from pydantic import SecretStr
 
-from app.audit.error_fields import exception_fqn
 from app.http.internal import make_internal_async_client
 from app.log_policy.policies.cache_revalidation import CACHE_REVALIDATION_LOG_RULES
 from app.log_policy.runtime import create_policy_json_logger
@@ -85,7 +84,7 @@ class FrontendRevalidateNotifier:
                 "frontend_revalidate_failed",
                 tags=list(tags),
                 operation=operation,
-                error_class=exception_fqn(exc),
+                error_class=f"{type(exc).__module__}.{type(exc).__qualname__}",
             )
 
 

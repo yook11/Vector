@@ -22,8 +22,6 @@ from contextlib import contextmanager
 import logfire
 from logfire import LogfireSpan
 
-from app.audit.error_fields import exception_fqn
-
 # 低 cardinality 固定の span_name。stage / op / 識別子は attribute へ分離する。
 _SPAN_NAME = "pipeline_stage"
 
@@ -39,7 +37,9 @@ class PipelineStageSpan:
         """例外型を一度だけ焼く (no-override)。元の業務例外を最優先で残す。"""
         if self._failure_set:
             return
-        self._span.set_attribute("error_class", exception_fqn(exc))
+        self._span.set_attribute(
+            "error_class", f"{type(exc).__module__}.{type(exc).__qualname__}"
+        )
         self._failure_set = True
 
 

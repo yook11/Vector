@@ -8,7 +8,6 @@ from structlog.typing import FilteringBoundLogger
 
 from app.analysis.ai_provider_exhaustion import record_ai_provider_exhausted
 from app.analysis.embedding.metrics import record_embedding_processing_outcome
-from app.audit.error_fields import exception_fqn
 
 
 class EmbeddingConsumerFailureHandler:
@@ -51,6 +50,6 @@ class EmbeddingConsumerFailureHandler:
         logger.warning(
             "embedding_consumer_failure_handling_failed",
             operation=operation,
-            business_error_class=exception_fqn(original),
+            business_error_class=f"{type(original).__module__}.{type(original).__qualname__}",
             exc_info=secondary,
         )
