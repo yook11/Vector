@@ -162,16 +162,60 @@ async def test_sdk_creation_failure_closes_http(resources):
 
 
 @pytest.mark.asyncio
+async def test_cleanup_failures_are_logged_per_resource(resources, read_logs):
+    """資源の終了に失敗すると、資源ごとに例外の型と説明を1行ずつ記録する。"""
+    http, aio, sdk, _, _ = resources
+    for closer in (http.aclose, aio.aclose, sdk.close):
+        closer.side_effect = RuntimeError("close failed")
+
+    async def run():
+        async with module.open_gemini_client(
+            api_key=SecretStr("private-key"), settings=GeminiConnectionSettings()
+        ):
+            pass
+        return "completed"
+
+    assert await run() == "completed"
+    assert read_logs() == [
+        {
+            "event": "gemini_client_cleanup_failed",
+            "level": "warning",
+            "resource": "sdk_async",
+            "log_policy": "ai_inference",
+            "error_class": "builtins.RuntimeError",
+            "error_message": "close failed",
+        },
+        {
+            "event": "gemini_client_cleanup_failed",
+            "level": "warning",
+            "resource": "sdk_sync",
+            "log_policy": "ai_inference",
+            "error_class": "builtins.RuntimeError",
+            "error_message": "close failed",
+        },
+        {
+            "event": "gemini_client_cleanup_failed",
+            "level": "warning",
+            "resource": "http",
+            "log_policy": "ai_inference",
+            "error_class": "builtins.RuntimeError",
+            "error_message": "close failed",
+        },
+    ]
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("log_fails", [False, True])
 @pytest.mark.parametrize("body_fails", [False, True])
 async def test_cleanup_failures_do_not_change_result(
-    resources, monkeypatch, log_fails, body_fails
+    resources, request, log_fails, body_fails
 ):
+    """資源の終了やログの出力に失敗しても、利用結果と本体の例外は変わらない。"""
     http, aio, sdk, _, _ = resources
     for closer in (http.aclose, aio.aclose, sdk.close):
-        closer.side_effect = RuntimeError("private-key")
-    log = Mock(side_effect=RuntimeError("log-private") if log_fails else None)
-    monkeypatch.setattr(module.logger, "warning", log)
+        closer.side_effect = RuntimeError("close failed")
+    if log_fails:
+        request.getfixturevalue("broken_output")
     failure = ValueError("original")
 
     async def run():
@@ -188,13 +232,9 @@ async def test_cleanup_failures_do_not_change_result(
         assert caught.value is failure
     else:
         assert await run() == "completed"
-    assert log.call_count == 3
-    assert "private" not in repr(log.call_args_list)
-    assert {call.kwargs["resource"] for call in log.call_args_list} == {
-        "http",
-        "sdk_sync",
-        "sdk_async",
-    }
+    http.aclose.assert_awaited_once()
+    aio.aclose.assert_awaited_once()
+    sdk.close.assert_called_once()
 
 
 @pytest.mark.asyncio

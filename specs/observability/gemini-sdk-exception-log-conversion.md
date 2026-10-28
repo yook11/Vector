@@ -84,7 +84,7 @@ Implementation: 実装済み。
 | ログの変換（`app/log_policy/exceptions/`） | SDK例外のノードを固定の文と診断項目にする。識別子の形の検査はここで行う。 |
 | AIの例外 | `code`・`reason`だけを持つ。Gemini固有の項目は持たない。 |
 
-#534の観測ログ（`gemini_resource_exhausted`）のquotaIdの形も、識別子の形に揃える。
+#534の観測ログ（`gemini_resource_exhausted`）はSDK例外を`exc_info`で渡し、待ち時間とquotaIdはこの変換の診断項目で出す。
 
 ## 変換後の例
 
