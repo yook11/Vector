@@ -14,7 +14,6 @@ from sqlalchemy import event as sa_event
 from sqlalchemy import false, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.sql.dml import Update
-from structlog.testing import capture_logs
 
 import app.agent.live_updates.transport as live_transport_module
 from app.agent.contract import AnswerPlanSummary, AnswerQuestionResult
@@ -1031,6 +1030,7 @@ class TestQuotaRouterTelemetry:
 
     async def test_accepted_request_records_safe_quota_admission_after_commit(
         self,
+        read_logs,
         quota_research_client: tuple[AsyncClient, FakeEnqueue],
         db_session: AsyncSession,
         monkeypatch: pytest.MonkeyPatch,
@@ -1065,11 +1065,11 @@ class TestQuotaRouterTelemetry:
             observe_admission,
         )
 
-        with capture_logs() as logs:
-            response = await client.post(
-                _RESPONSES_URL,
-                json={"question": sensitive_question},
-            )
+        response = await client.post(
+            _RESPONSES_URL,
+            json={"question": sensitive_question},
+        )
+        logs = read_logs()
 
         run_id = UUID(response.json()["runId"])
         run = await _fetch_run(db_session, run_id)
@@ -1093,7 +1093,8 @@ class TestQuotaRouterTelemetry:
                 "used_count": 1,
                 "limit": 10,
                 "event": "agent_user_daily_quota_reserved",
-                "log_level": "info",
+                "level": "info",
+                "log_policy": "research",
             }
         ]
         serialized_logs = repr(logs)
@@ -1102,6 +1103,7 @@ class TestQuotaRouterTelemetry:
 
     async def test_rejected_request_records_safe_quota_admission_after_rollback(
         self,
+        read_logs,
         quota_research_client: tuple[AsyncClient, FakeEnqueue],
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
@@ -1137,11 +1139,11 @@ class TestQuotaRouterTelemetry:
             observe_admission,
         )
 
-        with capture_logs() as logs:
-            response = await client.post(
-                _RESPONSES_URL,
-                json={"question": sensitive_question},
-            )
+        response = await client.post(
+            _RESPONSES_URL,
+            json={"question": sensitive_question},
+        )
+        logs = read_logs()
 
         rejected = [
             entry
@@ -1155,7 +1157,8 @@ class TestQuotaRouterTelemetry:
                 "usage_date": _QUOTA_USAGE_DATE.isoformat(),
                 "limit": 10,
                 "event": "agent_user_daily_quota_rejected",
-                "log_level": "info",
+                "level": "info",
+                "log_policy": "research",
             }
         ]
         serialized_logs = repr(logs)
@@ -1164,6 +1167,7 @@ class TestQuotaRouterTelemetry:
 
     async def test_create_transaction_failure_does_not_record_quota_admission(
         self,
+        read_logs,
         quota_research_client: tuple[AsyncClient, FakeEnqueue],
         db_session: AsyncSession,
         monkeypatch: pytest.MonkeyPatch,
@@ -1190,11 +1194,11 @@ class TestQuotaRouterTelemetry:
             db_session.sync_session, "before_commit", fail_commit, once=True
         )
 
-        with capture_logs() as logs:
-            response = await client.post(
-                _RESPONSES_URL,
-                json={"question": "transaction failure"},
-            )
+        response = await client.post(
+            _RESPONSES_URL,
+            json={"question": "transaction failure"},
+        )
+        logs = read_logs()
 
         assert deadline_scheduler.calls == []
         assert _fake_enqueue.calls == []
@@ -1236,6 +1240,7 @@ class TestQuotaRouterTelemetry:
     )
     async def test_cancel_records_quota_release_result_after_commit(
         self,
+        read_logs,
         research_client: tuple[AsyncClient, FakeEnqueue],
         monkeypatch: pytest.MonkeyPatch,
         release_outcome: DailyQuotaReleaseOutcome,
@@ -1275,8 +1280,8 @@ class TestQuotaRouterTelemetry:
             observe_release,
         )
 
-        with capture_logs() as logs:
-            response = await client.post(f"/api/v1/research/runs/{run_id}/cancel")
+        response = await client.post(f"/api/v1/research/runs/{run_id}/cancel")
+        logs = read_logs()
 
         quota_events = [
             entry
@@ -1291,7 +1296,8 @@ class TestQuotaRouterTelemetry:
                     "run_id": str(run_id),
                     "limit": 10,
                     "event": "agent_user_daily_quota_released",
-                    "log_level": "info",
+                    "level": "info",
+                    "log_policy": "research",
                 }
             ]
         elif release_outcome is DailyQuotaReleaseOutcome.INCONSISTENT:
@@ -1300,7 +1306,8 @@ class TestQuotaRouterTelemetry:
                     "run_id": str(run_id),
                     "limit": 10,
                     "event": "agent_user_daily_quota_release_inconsistent",
-                    "log_level": "error",
+                    "level": "error",
+                    "log_policy": "research",
                 }
             ]
         else:
@@ -1310,6 +1317,7 @@ class TestQuotaRouterTelemetry:
 
     async def test_cancel_release_commit_failure_records_no_quota_telemetry(
         self,
+        read_logs,
         quota_research_client: tuple[AsyncClient, FakeEnqueue],
         db_session: AsyncSession,
         monkeypatch: pytest.MonkeyPatch,
@@ -1359,8 +1367,8 @@ class TestQuotaRouterTelemetry:
             db_session.sync_session, "before_commit", fail_commit, once=True
         )
 
-        with capture_logs() as logs:
-            response = await client.post(f"/api/v1/research/runs/{run_id}/cancel")
+        response = await client.post(f"/api/v1/research/runs/{run_id}/cancel")
+        logs = read_logs()
 
         assert response.status_code == 500
         assert commit_attempted is True
@@ -1402,6 +1410,7 @@ class TestQuotaRouterTelemetry:
     )
     async def test_cancel_terminal_result_does_not_record_quota_release(
         self,
+        read_logs,
         research_client: tuple[AsyncClient, FakeEnqueue],
         monkeypatch: pytest.MonkeyPatch,
         outcome: RunCancellationFailureReason,
@@ -1430,10 +1439,10 @@ class TestQuotaRouterTelemetry:
             observe_release,
         )
 
-        with capture_logs() as logs:
-            response = await client.post(
-                "/api/v1/research/runs/00000000-0000-4000-a000-000000000072/cancel"
-            )
+        response = await client.post(
+            "/api/v1/research/runs/00000000-0000-4000-a000-000000000072/cancel"
+        )
+        logs = read_logs()
 
         assert response.status_code == expected_status
         assert calls == []

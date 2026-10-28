@@ -14,8 +14,8 @@ import pytest
 from logfire.testing import CaptureLogfire
 from sqlalchemy import event as sa_event
 from sqlalchemy import select, text
+from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
-from structlog.testing import capture_logs
 
 import app.queue.tasks.agent_run as agent_run_tasks
 from app.agent.running.attempt_start import (
@@ -49,21 +49,25 @@ _SENSITIVE_START_MARKERS = (
     "parameters:",
 )
 _SENSITIVE_START_ERROR = (
-    "asyncpg failure SECRET_SQL_MARKER: UPDATE agent_user_daily_quotas "
-    f"parameters: ('{_USER_ID}', 'SECRET_QUESTION_MARKER', "
-    "'SECRET_ANSWER_MARKER', 'SECRET_PROVIDER_RAW_MARKER')"
+    "asyncpg failure\n"
+    "DETAIL:  Key (question)=(SECRET_QUESTION_MARKER) SECRET_SQL_MARKER"
 )
 
 
-class _SensitiveQuotaQueryFailure(RuntimeError):
+class _SensitiveQuotaQueryFailure(DBAPIError):
+    """秘匿値をSQLのパラメータとDETAILに持つ、日次上限の更新時のDB例外。"""
+
     def __init__(self) -> None:
-        super().__init__(_SENSITIVE_START_ERROR)
-        self.params = {
-            "user_id": str(_USER_ID),
-            "question": "SECRET_QUESTION_MARKER",
-            "answer": "SECRET_ANSWER_MARKER",
-            "provider_raw": "SECRET_PROVIDER_RAW_MARKER",
-        }
+        super().__init__(
+            "UPDATE agent_user_daily_quotas SET used_count = $1 WHERE user_id = $2",
+            {
+                "user_id": str(_USER_ID),
+                "question": "SECRET_QUESTION_MARKER",
+                "answer": "SECRET_ANSWER_MARKER",
+                "provider_raw": "SECRET_PROVIDER_RAW_MARKER",
+            },
+            RuntimeError(_SENSITIVE_START_ERROR),
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -480,6 +484,7 @@ async def test_timely_start_and_running_redelivery_never_release_quota(
 @pytest.mark.integration
 @pytest.mark.asyncio
 async def test_expired_queued_task_skips_live_provider_and_emits_post_commit_telemetry(
+    read_logs,
     session_factory: async_sessionmaker[AsyncSession],
     capfire: CaptureLogfire,
     monkeypatch: pytest.MonkeyPatch,
@@ -518,11 +523,11 @@ async def test_expired_queued_task_skips_live_provider_and_emits_post_commit_tel
         forbidden("answering runner"),
     )
 
-    with capture_logs() as logs:
-        await agent_run_tasks.run_agent_answer(
-            trigger=AgentRunTrigger(run_id=seeded.run_id),
-            ctx=_ctx(session_factory),
-        )
+    await agent_run_tasks.run_agent_answer(
+        trigger=AgentRunTrigger(run_id=seeded.run_id),
+        ctx=_ctx(session_factory),
+    )
+    logs = read_logs()
 
     assert forbidden_calls == []
     run = await _read_run(session_factory, seeded.run_id)
@@ -539,7 +544,8 @@ async def test_expired_queued_task_skips_live_provider_and_emits_post_commit_tel
     ] == [
         {
             "event": "agent_run_start_deadline_exceeded",
-            "log_level": "info",
+            "level": "info",
+            "log_policy": "research",
         }
     ]
     assert {
@@ -551,6 +557,7 @@ async def test_expired_queued_task_skips_live_provider_and_emits_post_commit_tel
 @pytest.mark.integration
 @pytest.mark.asyncio
 async def test_queued_expiry_rollback_emits_neither_log_nor_quota_metric(
+    read_logs,
     session_factory: async_sessionmaker[AsyncSession],
     capfire: CaptureLogfire,
     monkeypatch: pytest.MonkeyPatch,
@@ -582,10 +589,7 @@ async def test_queued_expiry_rollback_emits_neither_log_nor_quota_metric(
         return failing_session
 
     try:
-        with (
-            capture_logs() as logs,
-            pytest.raises(agent_run_tasks.AgentRunTaskBoundaryError) as exc_info,
-        ):
+        with pytest.raises(agent_run_tasks.AgentRunTaskBoundaryError) as exc_info:
             await agent_run_tasks.run_agent_answer(
                 trigger=AgentRunTrigger(run_id=seeded.run_id),
                 ctx=_ctx(
@@ -602,6 +606,7 @@ async def test_queued_expiry_rollback_emits_neither_log_nor_quota_metric(
             fail_quota_update,
         )
         await failing_session.close()
+    logs = read_logs()
 
     _assert_safe_start_error(exc_info.value, logs)
     assert not [

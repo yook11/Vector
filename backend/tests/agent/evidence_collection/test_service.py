@@ -7,7 +7,6 @@ from typing import Any
 
 import pytest
 from logfire.testing import CaptureLogfire
-from structlog.testing import capture_logs
 
 from app.agent.evidence_collection import EvidenceCollectionService
 from app.agent.evidence_collection.external_search import ExternalSearchService
@@ -315,6 +314,7 @@ async def test_external_provider_failure_keeps_internal_hits() -> None:
 @pytest.mark.asyncio
 async def test_time_filter_failure_still_searches_without_date_filter(
     capfire: CaptureLogfire,
+    read_logs,
 ) -> None:
     """期間解決に失敗しても外部検索は行い、検索先へはdate_filterを渡さない。"""
     hits = [_hit(assessment_id=1001, title="only-internal")]
@@ -327,13 +327,13 @@ async def test_time_filter_failure_still_searches_without_date_filter(
         external=_external_search(query_runtime, gateway=gateway),
     )
 
-    with capture_logs() as logs:
-        [collected] = await _collect_tasks(
-            service,
-            _task("goal", "internal query"),
-            target_time_window=_FUTURE_WINDOW,
-        )
+    [collected] = await _collect_tasks(
+        service,
+        _task("goal", "internal query"),
+        target_time_window=_FUTURE_WINDOW,
+    )
     metrics = collected_metrics(capfire)
+    logs = read_logs()
 
     assert (
         [hit.content.title for hit in collected.internal_hits],

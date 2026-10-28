@@ -6,8 +6,6 @@ import asyncio
 from dataclasses import dataclass
 from typing import Protocol
 
-import structlog
-
 from app.agent.evidence_collection.internal_search.contract import (
     INTERNAL_SEARCH_HIT_POOL_LIMIT,
     INTERNAL_SEARCH_HITS_PER_QUERY,
@@ -31,10 +29,12 @@ from app.agent.recording.internal_search import (
 )
 from app.ai_providers.errors import AIProviderError
 from app.analysis.embedding.domain.value_objects import EmbeddingVector
+from app.log_policy.policies.research import RESEARCH_LOG_RULES
+from app.log_policy.runtime import create_policy_json_logger
 
 __all__ = ["InternalSearchService"]
 
-logger = structlog.get_logger(__name__)
+logger = create_policy_json_logger(__name__, RESEARCH_LOG_RULES)
 
 
 class ArticleVectorSearchRepository(Protocol):

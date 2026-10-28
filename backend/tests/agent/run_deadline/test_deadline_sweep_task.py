@@ -13,8 +13,8 @@ import pytest
 from logfire.testing import CaptureLogfire
 from sqlalchemy import event as sa_event
 from sqlalchemy import select
+from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
-from structlog.testing import capture_logs
 
 import app.queue.tasks.agent_run as agent_run_tasks
 from app.agent.live_updates.stream import AgentRunLiveStreamTerminalEvent
@@ -38,21 +38,25 @@ SENSITIVE_TASK_BOUNDARY_MARKERS = (
     "parameters:",
 )
 SENSITIVE_TASK_BOUNDARY_ERROR = (
-    "asyncpg failure SECRET_SQL_MARKER: UPDATE agent_runs "
-    f"parameters: ('{TEST_USER_ID}', 'SECRET_QUESTION_MARKER', "
-    "'SECRET_ANSWER_MARKER', 'SECRET_PROVIDER_RAW_MARKER')"
+    "asyncpg failure\n"
+    "DETAIL:  Key (question)=(SECRET_QUESTION_MARKER) SECRET_SQL_MARKER"
 )
 
 
-class SensitivePersistenceFailure(RuntimeError):
+class SensitivePersistenceFailure(DBAPIError):
+    """秘匿値をSQLのパラメータとDETAILに持つ、コミット時のDB例外。"""
+
     def __init__(self) -> None:
-        super().__init__(SENSITIVE_TASK_BOUNDARY_ERROR)
-        self.params = {
-            "user_id": TEST_USER_ID,
-            "question": "SECRET_QUESTION_MARKER",
-            "answer": "SECRET_ANSWER_MARKER",
-            "provider_raw": "SECRET_PROVIDER_RAW_MARKER",
-        }
+        super().__init__(
+            "UPDATE agent_runs SET status = $1 WHERE user_id = $2",
+            {
+                "user_id": TEST_USER_ID,
+                "question": "SECRET_QUESTION_MARKER",
+                "answer": "SECRET_ANSWER_MARKER",
+                "provider_raw": "SECRET_PROVIDER_RAW_MARKER",
+            },
+            RuntimeError(SENSITIVE_TASK_BOUNDARY_ERROR),
+        )
 
 
 def _assert_safe_task_boundary_error(
@@ -149,6 +153,7 @@ def _quota_stale_metric_points(capfire: CaptureLogfire) -> list[dict[str, Any]]:
 @pytest.mark.integration
 @pytest.mark.asyncio
 async def test_sweep_task_observes_queued_release_and_running_reservation_after_commit(
+    read_logs,
     session_factory: async_sessionmaker[AsyncSession],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -212,10 +217,8 @@ async def test_sweep_task_observes_queued_release_and_running_reservation_after_
         FakeLiveStreamPublisher,
     )
 
-    with capture_logs() as logs:
-        await agent_run_tasks.sweep_deadline_exceeded_agent_runs(
-            ctx=_ctx(session_factory)
-        )
+    await agent_run_tasks.sweep_deadline_exceeded_agent_runs(ctx=_ctx(session_factory))
+    logs = read_logs()
 
     assert [
         entry
@@ -224,7 +227,8 @@ async def test_sweep_task_observes_queued_release_and_running_reservation_after_
     ] == [
         {
             "event": "agent_runs_queued_deadline_swept",
-            "log_level": "info",
+            "level": "info",
+            "log_policy": "research",
             "run_count": 2,
             "quota_released_count": 1,
             "quota_not_eligible_count": 1,
@@ -259,6 +263,7 @@ async def test_sweep_task_observes_queued_release_and_running_reservation_after_
 
 @pytest.mark.asyncio
 async def test_sweep_task_legacy_deadline_batch_emits_no_quota_alert_or_metric(
+    read_logs,
     session_factory: async_sessionmaker[AsyncSession],
     capfire: CaptureLogfire,
 ) -> None:
@@ -271,14 +276,19 @@ async def test_sweep_task_legacy_deadline_batch_emits_no_quota_alert_or_metric(
             deadline_at=deadline_at,
         )
 
-    with capture_logs() as logs:
-        await agent_run_tasks.sweep_deadline_exceeded_agent_runs(
-            ctx=_ctx(session_factory)
-        )
+    await agent_run_tasks.sweep_deadline_exceeded_agent_runs(ctx=_ctx(session_factory))
+    logs = read_logs()
 
     assert [
         entry for entry in logs if entry.get("event") == "agent_runs_deadline_swept"
-    ] == [{"count": 1, "event": "agent_runs_deadline_swept", "log_level": "info"}]
+    ] == [
+        {
+            "count": 1,
+            "event": "agent_runs_deadline_swept",
+            "level": "info",
+            "log_policy": "research",
+        }
+    ]
     assert not [
         entry
         for entry in logs
@@ -293,17 +303,23 @@ async def test_sweep_task_legacy_deadline_batch_emits_no_quota_alert_or_metric(
 
 @pytest.mark.asyncio
 async def test_empty_sweep_emits_total_only_without_quota_alert_or_metric(
+    read_logs,
     session_factory: async_sessionmaker[AsyncSession],
     capfire: CaptureLogfire,
 ) -> None:
-    with capture_logs() as logs:
-        await agent_run_tasks.sweep_deadline_exceeded_agent_runs(
-            ctx=_ctx(session_factory)
-        )
+    await agent_run_tasks.sweep_deadline_exceeded_agent_runs(ctx=_ctx(session_factory))
+    logs = read_logs()
 
     assert [
         entry for entry in logs if entry.get("event") == "agent_runs_deadline_swept"
-    ] == [{"count": 0, "event": "agent_runs_deadline_swept", "log_level": "info"}]
+    ] == [
+        {
+            "count": 0,
+            "event": "agent_runs_deadline_swept",
+            "level": "info",
+            "log_policy": "research",
+        }
+    ]
     assert not [
         entry
         for entry in logs
@@ -314,6 +330,7 @@ async def test_empty_sweep_emits_total_only_without_quota_alert_or_metric(
 
 @pytest.mark.asyncio
 async def test_sweep_task_does_not_observe_quota_results_when_transaction_rolls_back(
+    read_logs,
     session_factory: async_sessionmaker[AsyncSession],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -358,10 +375,7 @@ async def test_sweep_task_does_not_observe_quota_results_when_transaction_rolls_
     def failing_session_factory() -> AsyncSession:
         return failing_session
 
-    with (
-        capture_logs() as logs,
-        pytest.raises(Exception) as exc_info,
-    ):
+    with pytest.raises(Exception) as exc_info:
         await agent_run_tasks.sweep_deadline_exceeded_agent_runs(
             ctx=_ctx(
                 cast(
@@ -370,6 +384,7 @@ async def test_sweep_task_does_not_observe_quota_results_when_transaction_rolls_
                 )
             )
         )
+    logs = read_logs()
 
     _assert_safe_task_boundary_error(
         exc_info.value,
@@ -396,15 +411,15 @@ async def test_sweep_task_does_not_observe_quota_results_when_transaction_rolls_
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "failing_sink",
-    ["total_log", "quota_log", "queued_metric", "running_metric"],
-)
+@pytest.mark.parametrize("failing_sink", ["log", "queued_metric", "running_metric"])
 async def test_sweep_task_telemetry_sink_failure_keeps_committed_sweep_and_other_sinks(
+    request: pytest.FixtureRequest,
+    read_logs,
     session_factory: async_sessionmaker[AsyncSession],
     monkeypatch: pytest.MonkeyPatch,
     failing_sink: str,
 ) -> None:
+    """ログやメトリクスの一つが失敗しても、確定したsweepと残りの送り先は変わらない。"""
     deadline_at = datetime.now(UTC) - timedelta(seconds=1)
     usage_date = date(2026, 7, 20)
     async with session_factory() as setup_session:
@@ -425,40 +440,28 @@ async def test_sweep_task_telemetry_sink_failure_keeps_committed_sweep_and_other
         )
     attempts: list[str] = []
 
-    def record_total_log(event: str, **_kwargs: object) -> None:
-        if event == "agent_runs_deadline_swept":
-            attempts.append("total_log")
-            if failing_sink == "total_log":
-                raise RuntimeError("total deadline log sink unavailable")
-
-    def record_quota_log(event: str, **_kwargs: object) -> None:
-        if event == "agent_user_daily_quota_stale_reservations_retained":
-            attempts.append("quota_log")
-            if failing_sink == "quota_log":
-                raise RuntimeError("quota stale log sink unavailable")
-
     def record_stale_reservation(*, previous_status: str, count: int = 1) -> None:
         assert count == 1
         attempts.append(f"{previous_status}_metric")
         if failing_sink == f"{previous_status}_metric":
             raise RuntimeError("quota stale metric sink unavailable")
 
-    monkeypatch.setattr(agent_run_tasks.logger, "info", record_total_log)
-    monkeypatch.setattr(daily_quota_observability.logger, "warning", record_quota_log)
     monkeypatch.setattr(
         daily_quota_observability,
         "record_daily_quota_stale_reservation",
         record_stale_reservation,
     )
+    if failing_sink == "log":
+        request.getfixturevalue("broken_output")
 
     await agent_run_tasks.sweep_deadline_exceeded_agent_runs(ctx=_ctx(session_factory))
 
-    assert set(attempts) == {
-        "total_log",
-        "quota_log",
-        "queued_metric",
-        "running_metric",
-    }
+    assert set(attempts) == {"queued_metric", "running_metric"}
+    if failing_sink != "log":
+        assert {entry["event"] for entry in read_logs()} >= {
+            "agent_runs_deadline_swept",
+            "agent_user_daily_quota_stale_reservations_retained",
+        }
     async with session_factory() as verification:
         persisted = [
             await verification.get(AgentRun, run_id)
@@ -473,6 +476,7 @@ async def test_sweep_task_telemetry_sink_failure_keeps_committed_sweep_and_other
 @pytest.mark.integration
 @pytest.mark.asyncio
 async def test_sweep_task_batches_queued_quota_observability_after_commit(
+    read_logs,
     session_factory: async_sessionmaker[AsyncSession],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -534,10 +538,8 @@ async def test_sweep_task_batches_queued_quota_observability_after_commit(
         FakeLiveStreamPublisher,
     )
 
-    with capture_logs() as logs:
-        await agent_run_tasks.sweep_deadline_exceeded_agent_runs(
-            ctx=_ctx(session_factory)
-        )
+    await agent_run_tasks.sweep_deadline_exceeded_agent_runs(ctx=_ctx(session_factory))
+    logs = read_logs()
 
     batch_logs = [
         entry
@@ -547,7 +549,8 @@ async def test_sweep_task_batches_queued_quota_observability_after_commit(
     assert batch_logs == [
         {
             "event": "agent_runs_queued_deadline_swept",
-            "log_level": "info",
+            "level": "info",
+            "log_policy": "research",
             "run_count": 4,
             "quota_released_count": 2,
             "quota_not_eligible_count": 1,
@@ -586,6 +589,7 @@ async def test_sweep_task_batches_queued_quota_observability_after_commit(
 @pytest.mark.integration
 @pytest.mark.asyncio
 async def test_sweep_task_publishes_each_committed_running_attempt_despite_failure(
+    read_logs,
     session_factory: async_sessionmaker[AsyncSession],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -643,10 +647,8 @@ async def test_sweep_task_publishes_each_committed_running_attempt_despite_failu
         CommitCheckingPublisher,
     )
 
-    with capture_logs() as logs:
-        await agent_run_tasks.sweep_deadline_exceeded_agent_runs(
-            ctx=_ctx(session_factory)
-        )
+    await agent_run_tasks.sweep_deadline_exceeded_agent_runs(ctx=_ctx(session_factory))
+    logs = read_logs()
 
     assert {
         (publisher.run_id, publisher.attempt_epoch)
@@ -664,7 +666,14 @@ async def test_sweep_task_publishes_each_committed_running_attempt_despite_failu
         entry
         for entry in logs
         if entry.get("event") == "running_deadline_exceeded_swept"
-    ] == [{"count": 2, "event": "running_deadline_exceeded_swept", "log_level": "info"}]
+    ] == [
+        {
+            "count": 2,
+            "event": "running_deadline_exceeded_swept",
+            "level": "info",
+            "log_policy": "research",
+        }
+    ]
     assert (
         len(
             [
@@ -699,6 +708,7 @@ async def _persisted_run_for_sweep_test(
 @pytest.mark.integration
 @pytest.mark.asyncio
 async def test_sweep_task_emits_no_queued_result_or_event_when_commit_rolls_back(
+    read_logs,
     session_factory: async_sessionmaker[AsyncSession],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -746,10 +756,7 @@ async def test_sweep_task_emits_no_queued_result_or_event_when_commit_rolls_back
         return failing_session
 
     try:
-        with (
-            capture_logs() as logs,
-            pytest.raises(Exception) as exc_info,
-        ):
+        with pytest.raises(Exception) as exc_info:
             await agent_run_tasks.sweep_deadline_exceeded_agent_runs(
                 ctx=_ctx(
                     cast(
@@ -760,6 +767,7 @@ async def test_sweep_task_emits_no_queued_result_or_event_when_commit_rolls_back
             )
     finally:
         await failing_session.close()
+    logs = read_logs()
 
     _assert_safe_task_boundary_error(
         exc_info.value,

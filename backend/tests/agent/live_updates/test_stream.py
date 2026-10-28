@@ -12,7 +12,6 @@ import pytest
 import redis.asyncio as aioredis
 from pydantic import ValidationError
 from redis.exceptions import ConnectionError as RedisConnectionError
-from structlog.testing import capture_logs
 
 from app.agent.contract import InternalSearchStartedEvent
 from app.agent.live_updates.stream import (
@@ -634,21 +633,21 @@ async def test_logical_read_timeout_is_not_per_redis_command() -> None:
 
 
 @pytest.mark.asyncio
-async def test_failures_do_not_leak_payload_or_redis_error_to_logs() -> None:
+async def test_failures_do_not_leak_payload_or_redis_error_to_logs(read_logs) -> None:
     publisher = AgentRunLiveStreamPublisher(RaisingRedis(), RUN_ID, EPOCH_1)
     reader = AgentRunLiveStreamReader(RaisingRedis())
 
-    with capture_logs() as logs:
-        assert (
-            await publisher.publish(
-                AgentRunLiveStreamAnswerDeltaEvent(
-                    generation=1,
-                    text="SECRET_ANSWER",
-                )
+    assert (
+        await publisher.publish(
+            AgentRunLiveStreamAnswerDeltaEvent(
+                generation=1,
+                text="SECRET_ANSWER",
             )
-            is None
         )
-        result = await reader.read_after(RUN_ID, EPOCH_1, None)
+        is None
+    )
+    result = await reader.read_after(RUN_ID, EPOCH_1, None)
+    logs = read_logs()
 
     assert result.status is AgentRunLiveStreamReadStatus.UNAVAILABLE
     assert [entry["event"] for entry in logs] == [

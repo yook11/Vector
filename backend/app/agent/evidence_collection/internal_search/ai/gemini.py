@@ -6,7 +6,6 @@ from collections.abc import Callable
 from contextlib import AbstractAsyncContextManager
 from typing import Final
 
-import structlog
 from google.genai.client import AsyncClient
 from google.genai.types import EmbedContentConfig
 from pydantic import ValidationError
@@ -27,8 +26,10 @@ from app.ai_providers.errors import (
 from app.ai_providers.gemini.error_translator import translate_gemini_error
 from app.analysis.ai_provider_exhaustion import record_ai_provider_exhausted
 from app.analysis.embedding.domain.value_objects import EmbeddingVector
+from app.log_policy.policies.research import RESEARCH_LOG_RULES
+from app.log_policy.runtime import create_policy_json_logger
 
-logger = structlog.get_logger(__name__)
+logger = create_policy_json_logger(__name__, RESEARCH_LOG_RULES)
 
 
 class GeminiQueryEmbedder:

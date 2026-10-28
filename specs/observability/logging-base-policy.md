@@ -34,7 +34,7 @@ structlog の処理チェーンに共通の禁止規則がなく、秘匿は呼�
 ```text
 共通基底 (本書)          基本項目のallowと認証情報のdeny・mask
   └─ 目的ポリシー (別途)  基底allow・deny・maskを含め、目的別allowを明示する
-       外部コンテンツ取得 / AI 推論 / 利用者対話 / パイプライン制御 / 基盤接続
+       外部コンテンツ取得 / AI 推論 / リサーチ / パイプライン制御 / 基盤接続
 ```
 
 `deny`・`allow` は構造化項目の選別、`mask` は文字列内のキー付き値の置換を指定する。認証情報のdeny・maskと基本項目のallowは基底、本文などの業務データのdeny・maskと追加allowは目的別ポリシーが所有する。
@@ -267,7 +267,7 @@ processorは各 `preparer.prepare_field_value(...)` の結果を格納した辞�
 ## Non-goals
 
 - AI推論のモデル・トークン数以外の目的別allow一覧とmoduleとの対応 (別文書)。
-- 利用者テキスト (question / previous turn) の禁止。利用者対話ポリシー側で定める。
+- 利用者テキスト (question / previous turn) の禁止。リサーチのポリシー側で定める。
 - 任意の自由文の意味解析、未知の例外形式からの入力値の完全抽出。traceback の locals は常に除外する。
 - public / restricted の profile 引数、Logfire の trace / span 側の変更、frontend、監査 DB `error_message` の契約変更。
 - 既存ログの再加工、`title` の扱い、構造化項目の値全体をmaskで置換する機能。

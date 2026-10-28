@@ -9,7 +9,6 @@ from uuid import UUID
 import pytest
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
-from structlog.testing import capture_logs
 
 import app.queue.tasks.agent_run as agent_run_tasks
 from app.agent.contract import (
@@ -169,6 +168,7 @@ async def test_read_live_context_for_user_preserves_terminal_error_code(
 
 @pytest.mark.asyncio
 async def test_complete_run_warns_on_citation_source_mismatch_without_failing_run(
+    read_logs,
     session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
     async with session_factory() as session:
@@ -193,14 +193,14 @@ async def test_complete_run_warns_on_citation_source_mismatch_without_failing_ru
         plan_summary=_plan_summary("search"),
     )
 
-    with capture_logs() as logs:
-        async with session_factory() as session:
-            async with session.begin():
-                completed = await AgentRunCompletionRepository(session).complete_run(
-                    run_id=run.id,
-                    result=result,
-                    expected_attempt_epoch=run.attempt_epoch,
-                )
+    async with session_factory() as session:
+        async with session.begin():
+            completed = await AgentRunCompletionRepository(session).complete_run(
+                run_id=run.id,
+                result=result,
+                expected_attempt_epoch=run.attempt_epoch,
+            )
+    logs = read_logs()
 
     assert completed == RunCompletionSuccess()
     mismatch_logs = [
@@ -210,7 +210,7 @@ async def test_complete_run_warns_on_citation_source_mismatch_without_failing_ru
     ]
     assert len(mismatch_logs) == 1
     warning = mismatch_logs[0]
-    assert warning["log_level"] == "warning"
+    assert warning["level"] == "warning"
     assert warning["run_id"] == str(run.id)
     assert warning["marker_without_source_refs"] == ["2"]
     assert warning["source_without_marker_refs"] == ["1"]

@@ -11,7 +11,6 @@ from typing import Any
 
 import pytest
 from logfire.testing import CaptureLogfire
-from structlog.testing import capture_logs
 
 from app.agent.evidence_collection import EvidenceCollectionService
 from app.agent.evidence_collection.external_search import (
@@ -599,6 +598,7 @@ async def test_external_runner_resolves_target_time_window_once_per_branch(
 
 @pytest.mark.asyncio
 async def test_naive_as_of_propagates_before_external_activity_or_observability(
+    read_logs,
     capfire: CaptureLogfire,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -636,9 +636,10 @@ async def test_naive_as_of_propagates_before_external_activity_or_observability(
         events=events,
     )
 
-    with capture_logs() as logs, pytest.raises(ValueError):
+    with pytest.raises(ValueError):
         await _run(runner, as_of=naive_as_of)
     metrics = collected_metrics(capfire)
+    logs = read_logs()
 
     assert (
         resolver_calls,
@@ -682,6 +683,7 @@ async def test_naive_as_of_propagates_before_external_activity_or_observability(
     ],
 )
 async def test_external_branch_records_one_nonfailed_time_filter_resolution_metric(
+    read_logs,
     capfire: CaptureLogfire,
     target_time_window: TargetTimeWindow | None,
     expected_result: str,
@@ -697,8 +699,8 @@ async def test_external_branch_records_one_nonfailed_time_filter_resolution_metr
         target_time_window=target_time_window,
     )
 
-    with capture_logs() as logs:
-        await _run(runner)
+    await _run(runner)
+    logs = read_logs()
     metrics = collected_metrics(capfire)
 
     assert (
@@ -751,6 +753,7 @@ async def test_external_branch_records_one_nonfailed_time_filter_resolution_metr
     ],
 )
 async def test_time_filter_resolution_failure_still_searches_without_date_filter(
+    read_logs,
     capfire: CaptureLogfire,
     monkeypatch: pytest.MonkeyPatch,
     target_time_window: TargetTimeWindow,
@@ -783,8 +786,8 @@ async def test_time_filter_resolution_failure_still_searches_without_date_filter
         target_time_window=target_time_window,
     )
 
-    with capture_logs() as logs:
-        await _run(runner)
+    await _run(runner)
+    logs = read_logs()
     metrics = collected_metrics(capfire)
     reports = _task_reports(captured[0])
 
@@ -820,7 +823,8 @@ async def test_time_filter_resolution_failure_still_searches_without_date_filter
             {
                 "reason": expected_reason,
                 "event": "external_search_time_filter_failed",
-                "log_level": "warning",
+                "level": "warning",
+                "log_policy": "research",
             }
         ],
     )

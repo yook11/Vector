@@ -10,7 +10,6 @@ from uuid import UUID
 
 import pytest
 from logfire.testing import CaptureLogfire
-from structlog.testing import capture_logs
 
 from app.agent.live_updates.answer_delta import AgentRunLiveAnswerDeltaReporter
 from app.agent.live_updates.stream import (
@@ -334,6 +333,7 @@ async def test_reset_without_visible_delta_preserves_explicit_generation() -> No
 @pytest.mark.asyncio
 async def test_reset_and_delta_failures_share_one_breaker(
     capfire: CaptureLogfire,
+    read_logs,
 ) -> None:
     publisher = ScriptedPublisher(
         [None, RuntimeError("SHARED_BREAKER_SECRET"), None, "must-not-be-used"]
@@ -341,12 +341,12 @@ async def test_reset_and_delta_failures_share_one_breaker(
     reporter = _new_reporter(publisher, ManualSleeper())
     secret_text = "RESET_DELTA_PAYLOAD_SECRET".ljust(512, "X")
 
-    with capture_logs() as logs:
-        await reporter.reset(generation=4)
-        await reporter.append(generation=4, text=secret_text)
-        await reporter.reset(generation=4)
-        await reporter.append(generation=4, text="blocked".ljust(512, "X"))
-        await reporter.reset(generation=5)
+    await reporter.reset(generation=4)
+    await reporter.append(generation=4, text=secret_text)
+    await reporter.reset(generation=4)
+    await reporter.append(generation=4, text="blocked".ljust(512, "X"))
+    await reporter.reset(generation=5)
+    logs = read_logs()
 
     assert publisher.events == [
         AgentRunLiveStreamAnswerResetEvent(generation=4),
@@ -475,6 +475,7 @@ async def test_success_resets_consecutive_failure_count() -> None:
 @pytest.mark.asyncio
 async def test_breaker_open_is_observed_once_without_payload_or_dynamic_metric_labels(
     capfire: CaptureLogfire,
+    read_logs,
 ) -> None:
     publisher = ScriptedPublisher(
         [None, RuntimeError("PUBLISHER_EXCEPTION_SECRET"), None]
@@ -483,10 +484,10 @@ async def test_breaker_open_is_observed_once_without_payload_or_dynamic_metric_l
     secret_text = "ANSWER_TEXT_SECRET".ljust(512, "X")
     user_id = "USER_ID_SECRET"
 
-    with capture_logs() as logs:
-        for _ in range(4):
-            await reporter.append(generation=5, text=secret_text)
-        await reporter.finish(generation=5)
+    for _ in range(4):
+        await reporter.append(generation=5, text=secret_text)
+    await reporter.finish(generation=5)
+    logs = read_logs()
 
     breaker_logs = [
         entry

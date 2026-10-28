@@ -8,16 +8,17 @@ from typing import Literal
 from uuid import UUID
 
 import logfire
-import structlog
 
 from app.agent.running.daily_quota.policy import DAILY_REQUEST_LIMIT
 from app.agent.running.daily_quota.release import DailyQuotaReleaseOutcome
+from app.log_policy.policies.research import RESEARCH_LOG_RULES
+from app.log_policy.runtime import create_policy_json_logger
 
 DailyQuotaAdmissionResult = Literal["accepted", "rejected"]
 DailyQuotaReleaseResult = Literal["released", "not_eligible", "inconsistent"]
 DailyQuotaStalePreviousStatus = Literal["queued", "running"]
 
-logger = structlog.get_logger(__name__)
+logger = create_policy_json_logger(__name__, RESEARCH_LOG_RULES)
 
 _daily_quota_admissions_counter = logfire.metric_counter(
     "agent_user_daily_quota_admissions_total",
@@ -68,25 +69,23 @@ def observe_admission_accepted(
     usage_date: date,
     used_count: int,
 ) -> None:
-    with suppress(Exception):
-        logger.info(
-            "agent_user_daily_quota_reserved",
-            run_id=str(run_id),
-            usage_date=usage_date.isoformat(),
-            used_count=used_count,
-            limit=DAILY_REQUEST_LIMIT,
-        )
+    logger.info(
+        "agent_user_daily_quota_reserved",
+        run_id=str(run_id),
+        usage_date=usage_date.isoformat(),
+        used_count=used_count,
+        limit=DAILY_REQUEST_LIMIT,
+    )
     with suppress(Exception):
         record_daily_quota_admission(result="accepted")
 
 
 def observe_admission_rejected(*, usage_date: date) -> None:
-    with suppress(Exception):
-        logger.info(
-            "agent_user_daily_quota_rejected",
-            usage_date=usage_date.isoformat(),
-            limit=DAILY_REQUEST_LIMIT,
-        )
+    logger.info(
+        "agent_user_daily_quota_rejected",
+        usage_date=usage_date.isoformat(),
+        limit=DAILY_REQUEST_LIMIT,
+    )
     with suppress(Exception):
         record_daily_quota_admission(result="rejected")
 
@@ -96,30 +95,27 @@ def observe_release(*, run_id: UUID, outcome: DailyQuotaReleaseOutcome) -> None:
         record_daily_quota_release(result=outcome.value)
 
     if outcome is DailyQuotaReleaseOutcome.RELEASED:
-        with suppress(Exception):
-            logger.info(
-                "agent_user_daily_quota_released",
-                run_id=str(run_id),
-                limit=DAILY_REQUEST_LIMIT,
-            )
+        logger.info(
+            "agent_user_daily_quota_released",
+            run_id=str(run_id),
+            limit=DAILY_REQUEST_LIMIT,
+        )
     elif outcome is DailyQuotaReleaseOutcome.INCONSISTENT:
-        with suppress(Exception):
-            logger.error(
-                "agent_user_daily_quota_release_inconsistent",
-                run_id=str(run_id),
-                limit=DAILY_REQUEST_LIMIT,
-            )
+        logger.error(
+            "agent_user_daily_quota_release_inconsistent",
+            run_id=str(run_id),
+            limit=DAILY_REQUEST_LIMIT,
+        )
 
 
 def observe_stale_reservations(*, queued_count: int, running_count: int) -> None:
     if queued_count + running_count <= 0:
         return
-    with suppress(Exception):
-        logger.warning(
-            "agent_user_daily_quota_stale_reservations_retained",
-            queued_count=queued_count,
-            running_count=running_count,
-        )
+    logger.warning(
+        "agent_user_daily_quota_stale_reservations_retained",
+        queued_count=queued_count,
+        running_count=running_count,
+    )
     with suppress(Exception):
         record_daily_quota_stale_reservation(
             previous_status="queued",

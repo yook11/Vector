@@ -11,7 +11,6 @@ from typing import Annotated, Any, Literal, Self
 from uuid import UUID
 
 import redis.asyncio as aioredis
-import structlog
 from pydantic import (
     BaseModel,
     ConfigDict,
@@ -24,13 +23,15 @@ from pydantic import (
 
 from app.agent.contract import AnswerProgressEvent, AnswerProgressStage
 from app.agent.runs.types import AgentRunErrorCode
+from app.log_policy.policies.research import RESEARCH_LOG_RULES
+from app.log_policy.runtime import create_policy_json_logger
 
 AGENT_RUN_LIVE_STREAM_MAXLEN = 4096
 AGENT_RUN_LIVE_STREAM_PAGE_SIZE = 128
 AGENT_RUN_LIVE_STREAM_TTL_SECONDS = 15 * 60
 AGENT_RUN_LIVE_STREAM_TIMEOUT_SECONDS = 0.5
 
-logger = structlog.get_logger(__name__)
+logger = create_policy_json_logger(__name__, RESEARCH_LOG_RULES)
 
 
 class _StreamEventBase(BaseModel):
@@ -191,7 +192,12 @@ class AgentRunLiveStreamPublisher:
                 timeout=self._timeout_seconds,
             )
         except Exception:
-            self._log_publish_failure("begin_attempt", marker.type)
+            logger.warning(
+                "agent_run_live_stream_publish_failed",
+                run_id=str(self._run_id),
+                operation="begin_attempt",
+                event_type=marker.type,
+            )
             return None
         self._attempt_started_confirmed = True
         return stream_ids[-1]
@@ -209,7 +215,12 @@ class AgentRunLiveStreamPublisher:
                 timeout=self._timeout_seconds,
             )
         except Exception:
-            self._log_publish_failure("publish", event.type)
+            logger.warning(
+                "agent_run_live_stream_publish_failed",
+                run_id=str(self._run_id),
+                operation="publish",
+                event_type=event.type,
+            )
             return None
         if marker_added:
             self._attempt_started_confirmed = True
@@ -230,14 +241,6 @@ class AgentRunLiveStreamPublisher:
         pipeline.expire(self._key, AGENT_RUN_LIVE_STREAM_TTL_SECONDS)
         replies = await pipeline.execute()
         return [_as_stream_id(reply) for reply in replies[: len(events)]]
-
-    def _log_publish_failure(self, operation: str, event_type: str) -> None:
-        logger.warning(
-            "agent_run_live_stream_publish_failed",
-            run_id=str(self._run_id),
-            operation=operation,
-            event_type=event_type,
-        )
 
 
 class AgentRunLiveStreamReader:

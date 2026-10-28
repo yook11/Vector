@@ -6,7 +6,6 @@ from typing import Any
 
 import pytest
 from logfire.testing import CaptureLogfire
-from structlog.testing import capture_logs
 
 import app.agent.evidence_collection.external_search.observability as observability
 from tests.logfire._metric_helpers import collected_metrics
@@ -36,7 +35,8 @@ def _metric_points(metrics: list[dict[str, Any]]) -> list[tuple[int, dict[str, A
                 {
                     "reason": "future_date_range",
                     "event": "external_search_time_filter_failed",
-                    "log_level": "warning",
+                    "level": "warning",
+                    "log_policy": "research",
                 }
             ],
             id="failed",
@@ -45,19 +45,19 @@ def _metric_points(metrics: list[dict[str, Any]]) -> list[tuple[int, dict[str, A
 )
 def test_time_filter_resolution_observation_records_one_closed_metric_and_warning(
     capfire: CaptureLogfire,
+    read_logs,
     result: str,
     reason: str,
     expected_warning: list[dict[str, object]],
 ) -> None:
-    with capture_logs() as logs:
-        observability.observe_time_filter_resolution(
-            result=result,
-            reason=reason,
-        )
+    observability.observe_time_filter_resolution(
+        result=result,
+        reason=reason,
+    )
     metrics = collected_metrics(capfire)
     warnings = [
         entry
-        for entry in logs
+        for entry in read_logs()
         if entry.get("event") == "external_search_time_filter_failed"
     ]
 
@@ -89,34 +89,55 @@ def test_time_filter_resolution_observation_rejects_inconsistent_closed_pairs(
         )
 
 
-@pytest.mark.parametrize("failing_sink", ["metric", "warning"])
-def test_time_filter_resolution_observation_isolates_metric_and_warning_sink_failures(
+def test_time_filter_resolution_metric_failure_keeps_warning(
     monkeypatch: pytest.MonkeyPatch,
-    failing_sink: str,
+    read_logs,
 ) -> None:
-    attempts: list[str] = []
+    """メトリクスの記録に失敗しても、期間解決の失敗のwarningは出る。"""
 
     def record_time_filter_resolution(*, result: str, reason: str) -> None:
-        attempts.append("metric")
-        if failing_sink == "metric":
-            raise RuntimeError("metric sink unavailable")
-
-    def warning(event: str, **_kwargs: object) -> None:
-        assert event == "external_search_time_filter_failed"
-        attempts.append("warning")
-        if failing_sink == "warning":
-            raise RuntimeError("warning sink unavailable")
+        raise RuntimeError("metric sink unavailable")
 
     monkeypatch.setattr(
         observability,
         "record_time_filter_resolution",
         record_time_filter_resolution,
     )
-    monkeypatch.setattr(observability.logger, "warning", warning)
 
     observability.observe_time_filter_resolution(
         result="failed",
         reason="future_calendar_month",
     )
 
-    assert attempts == ["metric", "warning"]
+    assert read_logs() == [
+        {
+            "reason": "future_calendar_month",
+            "event": "external_search_time_filter_failed",
+            "level": "warning",
+            "log_policy": "research",
+        }
+    ]
+
+
+def test_time_filter_resolution_log_failure_keeps_metric(
+    monkeypatch: pytest.MonkeyPatch,
+    broken_output,
+) -> None:
+    """ログの書き込みに失敗しても、メトリクスは記録され、呼び出し元へ例外は上がらない。"""
+    attempts: list[str] = []
+
+    def record_time_filter_resolution(*, result: str, reason: str) -> None:
+        attempts.append("metric")
+
+    monkeypatch.setattr(
+        observability,
+        "record_time_filter_resolution",
+        record_time_filter_resolution,
+    )
+
+    observability.observe_time_filter_resolution(
+        result="failed",
+        reason="future_calendar_month",
+    )
+
+    assert attempts == ["metric"]
