@@ -12,7 +12,6 @@ from pathlib import Path
 
 import app.models as _models  # noqa: F401  # populate Base.metadata
 from app.models.article_curation import ArticleCuration
-from app.models.backfill_exclusion import EmbeddingBackfillExclusion
 from app.models.base import Base
 from app.models.watchlist_entry import WatchlistEntry
 
@@ -102,19 +101,6 @@ def test_analyzed_article_fk_columns_use_explicit_id_name() -> None:
     assert "article_analysis_id" not in watchlist_columns
     assert "assessment_id" not in watchlist_columns
     assert _fk_targets("watchlist_entries", "analyzed_article_id") == {
-        "analyzed_articles.id"
-    }
-
-    exclusion_columns = set(EmbeddingBackfillExclusion.__table__.c.keys())
-    exclusion_attrs = set(EmbeddingBackfillExclusion.__mapper__.attrs.keys())
-
-    assert "analyzed_article_id" in exclusion_columns
-    assert "analyzed_article_id" in exclusion_attrs
-    assert "analysis_id" not in exclusion_columns
-    assert "analysis_id" not in exclusion_attrs
-    assert "article_analysis_id" not in exclusion_columns
-    assert "assessment_id" not in exclusion_columns
-    assert _fk_targets("embedding_backfill_exclusions", "analyzed_article_id") == {
         "analyzed_articles.id"
     }
 

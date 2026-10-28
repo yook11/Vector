@@ -6,11 +6,6 @@ from app.models.analyzable_article_record import AnalyzableArticleRecord
 from app.models.analyzed_article_record import AnalyzedArticleRecord
 from app.models.article_curation import ArticleCuration
 from app.models.auth_ref import auth_user_ref  # noqa: F401
-from app.models.backfill_exclusion import (
-    AssessmentBackfillExclusion,
-    BackfillExclusionReason,
-    EmbeddingBackfillExclusion,
-)
 from app.models.category import Category
 from app.models.curation_noise import CurationNoise
 from app.models.incomplete_article import IncompleteArticle
@@ -31,11 +26,8 @@ __all__ = [
     "AgentUserDailyQuota",
     "AnalyzableArticleRecord",
     "ArticleCuration",
-    "AssessmentBackfillExclusion",
-    "BackfillExclusionReason",
     "Category",
     "CurationNoise",
-    "EmbeddingBackfillExclusion",
     "AnalyzedArticleRecord",
     "NewsSource",
     "OutOfScopeArticleRecord",
