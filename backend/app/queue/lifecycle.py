@@ -18,7 +18,6 @@ from dataclasses import dataclass
 from typing import Literal
 
 import logfire
-import structlog
 from taskiq import TaskiqEvents, TaskiqState
 from taskiq_redis import RedisStreamBroker
 
@@ -32,6 +31,8 @@ from app.db.engine import (
     worker_service_name,
 )
 from app.db.session import caller_managed_session_factory
+from app.log_policy.policies.process_runtime import PROCESS_RUNTIME_LOG_RULES
+from app.log_policy.runtime import create_policy_json_logger
 from app.logfire.db_pool import log_pool_initialized, register_pool_metrics
 from app.logfire.setup import setup_logfire
 from app.queue.brokers import (
@@ -45,7 +46,7 @@ from app.queue.composition import (
 from app.queue.deadline_schedule import create_deadline_schedule_source
 from app.redis import create_worker_agent_live_client
 
-logger = structlog.get_logger(__name__)
+logger = create_policy_json_logger(__name__, PROCESS_RUNTIME_LOG_RULES)
 
 type _RedisFactory = Callable[..., object]
 type _Compose = Callable[[TaskiqState], Awaitable[None]]
@@ -135,12 +136,12 @@ def _register_worker_lifecycle(
             )
         _attach_worker_redis(state, runtime)
         await _compose(runtime, state)
-        logger.info(f"{label}_worker_startup")
+        logger.info("worker_startup", broker=label)
 
     @broker.on_event(TaskiqEvents.WORKER_SHUTDOWN)
     async def on_shutdown(state: TaskiqState) -> None:
         await _aclose_worker_resources(state)
-        logger.info(f"{label}_worker_shutdown")
+        logger.info("worker_shutdown", broker=label)
 
 
 def _register_client_lifecycle(broker: RedisStreamBroker, label: str) -> None:
@@ -165,11 +166,11 @@ def _register_client_lifecycle(broker: RedisStreamBroker, label: str) -> None:
 
     @broker.on_event(TaskiqEvents.CLIENT_STARTUP)
     async def on_client_startup(state: TaskiqState) -> None:
-        logger.info(f"{label}_client_startup")
+        logger.info("client_startup", broker=label)
 
     @broker.on_event(TaskiqEvents.CLIENT_SHUTDOWN)
     async def on_client_shutdown(state: TaskiqState) -> None:
-        logger.info(f"{label}_client_shutdown")
+        logger.info("client_shutdown", broker=label)
 
 
 _register_worker_lifecycle(

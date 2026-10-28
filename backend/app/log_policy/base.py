@@ -17,6 +17,7 @@ class LogPolicy(StrEnum):
     BRIEFING = "briefing"
     TREND_DISCOVERY = "trend_discovery"
     PIPELINE_CONTROL = "pipeline_control"
+    PROCESS_RUNTIME = "process_runtime"
     INFRASTRUCTURE = "infrastructure"
 
 

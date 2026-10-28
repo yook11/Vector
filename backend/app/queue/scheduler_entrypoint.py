@@ -17,20 +17,21 @@ import signal
 from contextlib import AsyncExitStack
 from datetime import timedelta
 
-import structlog
 from taskiq import TaskiqScheduler
 from taskiq.abc.schedule_source import ScheduleSource
 from taskiq.cli.scheduler.run import SchedulerLoop
 
 import app.queue.registry  # noqa: F401  cron 登録の副作用 import (get_all_tasks を満たす)
 from app.insights.trend_discovery.scheduler import create_scheduler
+from app.log_policy.policies.process_runtime import PROCESS_RUNTIME_LOG_RULES
+from app.log_policy.runtime import create_policy_json_logger
 from app.logfire.setup import setup_logfire
 from app.queue.schedulers import (
     scheduler_agent,
     scheduler_briefing,
 )
 
-logger = structlog.get_logger(__name__)
+logger = create_policy_json_logger(__name__, PROCESS_RUNTIME_LOG_RULES)
 
 _UPDATE_INTERVAL = timedelta(seconds=60)
 _LOOP_INTERVAL = timedelta(seconds=1)

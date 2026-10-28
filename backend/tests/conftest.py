@@ -6,10 +6,12 @@
 # .env 不在の sandbox でも collection が通るよう、app.* import 前に非機密 dummy を補う。
 # .env がある環境では pydantic-settings の優先順位を壊さないよう補完しない。
 # DATABASE_URL は .invalid に向け、integration fixture 外で実 DB へ誤接続しない。
+import json
 import os
 import re
+import sys
 import time
-from collections.abc import AsyncGenerator
+from collections.abc import AsyncGenerator, Callable
 from pathlib import Path
 
 # 外部通信はモックし、プロキシ必須条件には非機密のテスト専用値を渡す。
@@ -443,3 +445,34 @@ async def sample_av_source(db_session: AsyncSession) -> NewsSource:
     await db_session.commit()
     await db_session.refresh(source)
     return source
+
+
+@pytest.fixture
+def read_logs(capsys) -> Callable[[], list[dict[str, object]]]:
+    """出力されたログを、実行ごとに変わる時刻と、原因の例外を含む発生位置を除いて返す。"""
+
+    def _read() -> list[dict[str, object]]:
+        logs = [json.loads(line) for line in capsys.readouterr().out.splitlines()]
+        for log in logs:
+            del log["timestamp"]
+            log.pop("frames", None)
+            for related in log.get("related_exceptions", []):
+                if isinstance(related["exception"], dict):
+                    related["exception"].pop("frames", None)
+        return logs
+
+    return _read
+
+
+@pytest.fixture
+def broken_output(monkeypatch):
+    """ログの書き込みが毎回失敗する標準出力へ差し替える。"""
+
+    class BrokenOutput:
+        def write(self, text):
+            raise OSError("log-private")
+
+        def flush(self):
+            raise OSError("log-private")
+
+    monkeypatch.setattr(sys, "stdout", BrokenOutput())

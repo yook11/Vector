@@ -22,16 +22,17 @@ from __future__ import annotations
 from contextlib import AbstractAsyncContextManager
 from typing import TYPE_CHECKING
 
-import structlog
 from taskiq import TaskiqState
 
 from app.ai_providers.gemini.settings import GeminiConnectionSettings
 from app.config import settings
+from app.log_policy.policies.process_runtime import PROCESS_RUNTIME_LOG_RULES
+from app.log_policy.runtime import create_policy_json_logger
 
 if TYPE_CHECKING:
     from google.genai.client import AsyncClient
 
-logger = structlog.get_logger(__name__)
+logger = create_policy_json_logger(__name__, PROCESS_RUNTIME_LOG_RULES)
 
 # タスクの打ち切り(300秒)が先に効くよう、1回の試行の上限はそれより長くする。
 _BRIEFING_GEMINI_CONNECTION = GeminiConnectionSettings(read_timeout=600.0)
