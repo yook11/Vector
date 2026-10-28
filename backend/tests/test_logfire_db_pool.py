@@ -7,7 +7,6 @@ from typing import Any
 import logfire
 import pytest
 from opentelemetry.metrics import CallbackOptions
-from structlog.testing import capture_logs
 
 from app.config import settings
 from app.db.engine import WORKER_POOL_SIZING, create_worker_engine
@@ -21,20 +20,20 @@ from app.logfire.db_pool import (
 class TestLogPoolInitialized:
     """起動時 pool profile ログの構造を検証する。"""
 
-    def test_logs_pool_profile_with_derived_capacity(self) -> None:
+    def test_logs_pool_profile_with_derived_capacity(self, read_logs) -> None:
         pool_size, max_overflow = 5, 5
-        with capture_logs() as logs:
-            log_pool_initialized(
-                service_name="vector-worker-collection",
-                pool_size=pool_size,
-                max_overflow=max_overflow,
-                pool_recycle=240,
-                pool_timeout=5,
-            )
-        assert logs == [
+        log_pool_initialized(
+            service_name="vector-worker-collection",
+            pool_size=pool_size,
+            max_overflow=max_overflow,
+            pool_recycle=240,
+            pool_timeout=5,
+        )
+        assert read_logs() == [
             {
                 "event": "db_pool_initialized",
-                "log_level": "info",
+                "level": "info",
+                "log_policy": "process_runtime",
                 "service": "vector-worker-collection",
                 "pool_size": pool_size,
                 "max_overflow": max_overflow,

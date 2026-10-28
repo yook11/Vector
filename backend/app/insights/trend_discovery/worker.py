@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import logfire
-import structlog
 from taskiq import TaskiqEvents, TaskiqState
 from taskiq_redis import RedisStreamBroker
 
@@ -17,12 +16,14 @@ from app.db.engine import (
 )
 from app.db.session import caller_managed_session_factory
 from app.insights.trend_discovery.taskiq_job import register_trend_discovery_task
+from app.log_policy.policies.process_runtime import PROCESS_RUNTIME_LOG_RULES
+from app.log_policy.runtime import create_policy_json_logger
 from app.logfire.db_pool import log_pool_initialized, register_pool_metrics
 from app.logfire.setup import setup_logfire
 from app.redis.clients import taskiq_stream_connection
 from app.redis.taskiq_stream_broker import create_taskiq_stream_broker
 
-logger = structlog.get_logger(__name__)
+logger = create_policy_json_logger(__name__, PROCESS_RUNTIME_LOG_RULES)
 
 _WORKER_LABEL = "trend_discovery"
 _QUEUE_NAME = "trend_discovery"
@@ -55,20 +56,21 @@ def _attach_worker_resources(broker: RedisStreamBroker) -> None:
                 await engine.dispose()
             except Exception as exc:
                 logger.error(
-                    "trend_discovery_worker_startup_cleanup_failed",
-                    error_type=exc.__class__.__name__,
+                    "worker_startup_cleanup_failed",
+                    broker=_WORKER_LABEL,
+                    exc_info=exc,
                 )
             raise
         state.engine = engine
         state.session_factory = session_factory
-        logger.info("trend_discovery_worker_startup")
+        logger.info("worker_startup", broker=_WORKER_LABEL)
 
     @broker.on_event(TaskiqEvents.WORKER_SHUTDOWN)
     async def on_shutdown(state: TaskiqState) -> None:
         engine = getattr(state, "engine", None)
         if engine is not None:
             await engine.dispose()
-        logger.info("trend_discovery_worker_shutdown")
+        logger.info("worker_shutdown", broker=_WORKER_LABEL)
 
 
 def create_broker() -> RedisStreamBroker:

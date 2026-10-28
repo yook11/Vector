@@ -3,7 +3,6 @@ from contextlib import AsyncExitStack, asynccontextmanager
 from typing import Any
 
 import logfire
-import structlog
 from fastapi import APIRouter, Depends, FastAPI, Request, Response, WebSocket
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.routing import APIRoute
@@ -35,6 +34,8 @@ from app.insights.briefing.router import router as briefing_router
 from app.insights.trend_discovery.router import (
     router as trends_router,
 )
+from app.log_policy.policies.process_runtime import PROCESS_RUNTIME_LOG_RULES
+from app.log_policy.runtime import create_policy_json_logger
 from app.logfire.db_pool import log_pool_initialized, register_pool_metrics
 from app.logfire.setup import setup_logfire
 from app.queue.brokers import broker_agent
@@ -46,7 +47,7 @@ from app.routers import (
     watchlist,
 )
 
-logger = structlog.get_logger(__name__)
+logger = create_policy_json_logger(__name__, PROCESS_RUNTIME_LOG_RULES)
 
 _API_PRODUCER_BROKERS = (broker_agent,)
 
@@ -238,10 +239,7 @@ async def health_check(request: Request) -> dict:
             await conn.execute(text("SELECT 1"))
             db_connected = True
     except Exception as exc:
-        logger.warning(
-            "health_check_db_unreachable",
-            error_type=type(exc).__name__,
-        )
+        logger.warning("health_check_db_unreachable", exc_info=exc)
 
     return {
         "status": "ok",

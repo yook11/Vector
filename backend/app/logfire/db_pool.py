@@ -6,12 +6,14 @@ from collections.abc import Iterable
 from typing import cast
 
 import logfire
-import structlog
 from opentelemetry.metrics import CallbackOptions, Observation
 from sqlalchemy.ext.asyncio import AsyncEngine
 from sqlalchemy.pool import QueuePool
 
-logger = structlog.get_logger(__name__)
+from app.log_policy.policies.process_runtime import PROCESS_RUNTIME_LOG_RULES
+from app.log_policy.runtime import create_policy_json_logger
+
+logger = create_policy_json_logger(__name__, PROCESS_RUNTIME_LOG_RULES)
 
 
 def log_pool_initialized(
