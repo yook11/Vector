@@ -13,10 +13,10 @@ from app.collection.article_acquisition.reader.read_errors import (
     UnreadableResponseReason,
 )
 from app.collection.article_acquisition.tools.source_http import get_source_response
-from app.log_policy.policies.external_content import EXTERNAL_CONTENT_LOG_RULES
+from app.log_policy.policies.article_fetch import ARTICLE_FETCH_LOG_RULES
 from app.log_policy.runtime import create_policy_json_logger
 
-logger = create_policy_json_logger(__name__, EXTERNAL_CONTENT_LOG_RULES)
+logger = create_policy_json_logger(__name__, ARTICLE_FETCH_LOG_RULES)
 
 
 @dataclass(frozen=True, slots=True)

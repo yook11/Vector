@@ -30,7 +30,7 @@ def isolated_log_context() -> Iterator[None]:
 def test_inherited_policy_is_applied_to_the_final_json_log(capsys) -> None:
     """継承したポリシーを持つロガーは、共通情報・bind・ログ引数を合わせた一件のJSONを規則どおり出力する。"""
     common_rules = LogPolicyRules(
-        policy=LogPolicy.INFRASTRUCTURE,
+        policy=LogPolicy.PROCESS_RUNTIME,
         allow=frozenset({"request_id", "service", "canonical_url", "message"}),
         deny=frozenset({"private_note"}),
         mask=frozenset({"private_text"}),
@@ -66,7 +66,7 @@ def test_inherited_policy_is_applied_to_the_final_json_log(capsys) -> None:
     assert entry == {
         "event": "upstream_checked",
         "level": "info",
-        "log_policy": "infrastructure",
+        "log_policy": "process_runtime",
         "request_id": "request-001",
         "service": "catalog",
         "canonical_url": "https://example.com/a/1?p=123",
@@ -83,7 +83,7 @@ def test_inherited_policy_is_applied_to_the_final_json_log(capsys) -> None:
 def test_logger_writes_to_stdout_replaced_after_creation(monkeypatch) -> None:
     """作った後に差し替えた標準出力へ、ログを1件のJSONで出す。"""
     rules = LogPolicyRules(
-        policy=LogPolicy.INFRASTRUCTURE, allow=frozenset({"operation"})
+        policy=LogPolicy.PROCESS_RUNTIME, allow=frozenset({"operation"})
     )
     # モジュールの冒頭で作るロガーと同じく、標準出力の差し替えより前に作る。
     logger = create_policy_json_logger("test.logging", rules)
@@ -100,7 +100,7 @@ def test_logger_writes_to_stdout_replaced_after_creation(monkeypatch) -> None:
         {
             "event": "upstream_checked",
             "level": "info",
-            "log_policy": "infrastructure",
+            "log_policy": "process_runtime",
             "operation": "healthcheck",
         }
     ]

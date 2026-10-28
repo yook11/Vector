@@ -206,7 +206,7 @@ def test_field_limit_marker_is_rendered_without_raw_content(
     configure_chain, renderer
 ) -> None:
     """JSONとconsoleの実チェーンでも超過項目の原文を出さず正常なeventを残す。"""
-    rules = LogPolicyRules(LogPolicy.INFRASTRUCTURE, frozenset({"payload"}))
+    rules = LogPolicyRules(LogPolicy.PROCESS_RUNTIME, frozenset({"payload"}))
     capture = configure_chain()
     policy_logger("test", rules).info(
         "failed", payload=["synthetic private" * TEXT_LIMIT]
@@ -228,7 +228,7 @@ def test_field_limit_marker_is_rendered_without_raw_content(
 def test_budget_exceeded_fixed_output_is_renderable(configure_chain, renderer) -> None:
     """JSONとconsoleでも予算超過時は元のeventやpayloadを出さない。"""
     capture = configure_chain()
-    rules = LogPolicyRules(LogPolicy.INFRASTRUCTURE, frozenset({"payload"}))
+    rules = LogPolicyRules(LogPolicy.PROCESS_RUNTIME, frozenset({"payload"}))
     policy_logger("test", rules).info(
         "synthetic-private-event",
         payload=["synthetic-private-value"] * MAX_ITEMS_PER_LOG_EVENT,

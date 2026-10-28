@@ -21,7 +21,7 @@ from app.collection.domain.analyzable_article import (
     QualityTooLow,
 )
 from app.lambda_handlers.completion.message_recorder import CompletionMessageRecorder
-from app.log_policy.policies.external_content import EXTERNAL_CONTENT_LOG_RULES
+from app.log_policy.policies.article_fetch import ARTICLE_FETCH_LOG_RULES
 from app.log_policy.runtime import create_policy_json_logger
 
 pytestmark = pytest.mark.unit
@@ -42,7 +42,7 @@ def record_consumed(
     capsys: pytest.CaptureFixture[str], result: RetryCompletion | NoRetryCompletion
 ) -> object:
     """実際の外部取得のログ規則で補完の結果を1件出力し、時刻と発生位置を除いて返す。"""
-    logger = create_policy_json_logger("article_fetch", EXTERNAL_CONTENT_LOG_RULES)
+    logger = create_policy_json_logger("article_fetch", ARTICLE_FETCH_LOG_RULES)
     CompletionMessageRecorder(logger).record_consumed(result, duration_ms=12.5)
     (line,) = capsys.readouterr().out.splitlines()
     logged = json.loads(line)
@@ -68,7 +68,7 @@ def test_html_input_rejection_log_keeps_content_type_and_reason(capsys) -> None:
     assert logged == {
         "event": "completion_message_processing_failed",
         "level": "warning",
-        "log_policy": "external_content_fetch",
+        "log_policy": "article_fetch",
         "code": "content_type_unsupported",
         "requires_investigation": False,
         "duration_ms": 12.5,
@@ -117,7 +117,7 @@ def test_extraction_retry_log_keeps_cause_chain_at_error_level(capsys) -> None:
     assert logged == {
         "event": "completion_message_processing_failed",
         "level": "error",
-        "log_policy": "external_content_fetch",
+        "log_policy": "article_fetch",
         "code": "extraction_failed",
         "requires_investigation": True,
         "duration_ms": 12.5,
@@ -172,7 +172,7 @@ def test_build_rejection_log_keeps_all_domain_defects(capsys) -> None:
     assert logged == {
         "event": "completion_message_processing_failed",
         "level": "warning",
-        "log_policy": "external_content_fetch",
+        "log_policy": "article_fetch",
         "code": "article_invalid",
         "requires_investigation": False,
         "duration_ms": 12.5,

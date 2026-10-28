@@ -135,7 +135,7 @@ async def test_cleanup_log_uses_secret_policy_and_invocation_context(sdk, capsys
 
     output = capsys.readouterr().out
     record = json.loads(output)
-    assert record["log_policy"] == "infrastructure"
+    assert record["log_policy"] == "secret_access"
     assert record["event"] == "ssm_parameter_cleanup_failed"
     assert record["operation"] == "cleanup"
     assert record["resource"] == "ssm"

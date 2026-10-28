@@ -166,7 +166,7 @@ def main() -> None:
                     "after": _measure(lambda: new(value)),
                 }
             )
-    rules = LogPolicyRules(LogPolicy.INFRASTRUCTURE, frozenset({"payload"}))
+    rules = LogPolicyRules(LogPolicy.PROCESS_RUNTIME, frozenset({"payload"}))
     processor = LogPolicyProcessor()
     logger = create_policy_logger(
         "benchmark", rules, output_logger_factory=structlog.ReturnLoggerFactory()

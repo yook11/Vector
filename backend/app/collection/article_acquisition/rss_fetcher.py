@@ -27,10 +27,10 @@ from app.collection.sources.rss_hooks import (
 )
 from app.http.destination_policy import DestinationRejectedError
 from app.http.errors import HttpResponseError, HttpTransportError
-from app.log_policy.policies.external_content import EXTERNAL_CONTENT_LOG_RULES
+from app.log_policy.policies.article_fetch import ARTICLE_FETCH_LOG_RULES
 from app.log_policy.runtime import create_policy_json_logger
 
-logger = create_policy_json_logger(__name__, EXTERNAL_CONTENT_LOG_RULES)
+logger = create_policy_json_logger(__name__, ARTICLE_FETCH_LOG_RULES)
 
 _HTML_TAG_RE = re.compile(r"<[^>]+>")
 _WHITESPACE_RE = re.compile(r"\s+")

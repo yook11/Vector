@@ -135,7 +135,7 @@ def test_handler_outputs_json_without_global_logging_configuration(
             for record in records
             if record["event"] == "curation_message_processing_completed"
         )
-        assert completed["log_policy"] == "ai_inference"
+        assert completed["log_policy"] == "article_analysis"
         assert completed["message_id"] == "message-001"
     finally:
         configure(**original_config)
@@ -184,7 +184,7 @@ def test_completion_is_logged_after_start_with_its_outcome(
         {
             "event": "curation_message_processing_started",
             "level": "info",
-            "log_policy": "ai_inference",
+            "log_policy": "article_analysis",
             "service": "article_analysis",
             "stage": "curation",
             "request_id": "request-001",
@@ -194,7 +194,7 @@ def test_completion_is_logged_after_start_with_its_outcome(
         {
             "event": "curation_message_processing_completed",
             "level": "info",
-            "log_policy": "ai_inference",
+            "log_policy": "article_analysis",
             "service": "article_analysis",
             "stage": "curation",
             "request_id": "request-001",
@@ -241,7 +241,7 @@ def test_ready_build_rejection_is_logged_as_failure_completed(
     assert read_logs()[-1] == {
         "event": "curation_message_processing_failed",
         "level": "warning",
-        "log_policy": "ai_inference",
+        "log_policy": "article_analysis",
         "service": "article_analysis",
         "stage": "curation",
         "request_id": "request-001",
@@ -278,7 +278,7 @@ def test_failure_not_retried_is_logged_as_failure_completed(wiring, read_logs):
     assert read_logs()[-1] == {
         "event": "curation_message_processing_failed",
         "level": "warning",
-        "log_policy": "ai_inference",
+        "log_policy": "article_analysis",
         "service": "article_analysis",
         "stage": "curation",
         "request_id": "request-001",
@@ -313,7 +313,7 @@ def test_retried_failure_is_logged_with_its_exception(wiring, read_logs):
     assert read_logs()[-1] == {
         "event": "curation_message_processing_failed",
         "level": "error",
-        "log_policy": "ai_inference",
+        "log_policy": "article_analysis",
         "service": "article_analysis",
         "stage": "curation",
         "request_id": "request-001",
@@ -350,7 +350,7 @@ def test_consumer_exception_is_logged_as_call_failure_and_redelivered(
     assert read_logs()[-1] == {
         "event": "curation_message_processing_failed",
         "level": "error",
-        "log_policy": "ai_inference",
+        "log_policy": "article_analysis",
         "service": "article_analysis",
         "stage": "curation",
         "request_id": "request-001",
@@ -433,7 +433,7 @@ def test_invalid_message_is_logged_without_previous_event(
     assert read_logs()[-1] == {
         "event": "curation_message_processing_failed",
         "level": "warning",
-        "log_policy": "ai_inference",
+        "log_policy": "article_analysis",
         "service": "article_analysis",
         "stage": "curation",
         "request_id": "request-001",
@@ -468,7 +468,7 @@ def test_unexpected_parser_failure_is_logged_as_error(wiring, read_logs, monkeyp
     assert read_logs()[-1] == {
         "event": "curation_message_processing_failed",
         "level": "error",
-        "log_policy": "ai_inference",
+        "log_policy": "article_analysis",
         "service": "article_analysis",
         "stage": "curation",
         "request_id": "request-001",
@@ -506,7 +506,7 @@ def test_settings_failure_is_logged_and_aborts_entire_batch(wiring, read_logs):
         {
             "event": "curation_initialization_failed",
             "level": "error",
-            "log_policy": "ai_inference",
+            "log_policy": "article_analysis",
             "service": "article_analysis",
             "stage": "curation",
             "request_id": "request-001",
@@ -535,7 +535,7 @@ def test_invalid_message_id_is_logged_and_rejects_batch(wiring, read_logs):
         {
             "event": "curation_sqs_input_invalid",
             "level": "warning",
-            "log_policy": "ai_inference",
+            "log_policy": "article_analysis",
             "service": "article_analysis",
             "stage": "curation",
             "request_id": "request-001",

@@ -171,7 +171,7 @@ async def test_partial_failure_is_logged_and_other_feeds_continue(
         {
             "event": "source_feed_fetch_failed",
             "level": "warning",
-            "log_policy": "external_content_fetch",
+            "log_policy": "article_fetch",
             "source_name": str(Source.name),
             "feed_url": _FEEDS[1],
             "code": code,

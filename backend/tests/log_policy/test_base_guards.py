@@ -13,7 +13,7 @@ from app.log_policy.processor import LogPolicyProcessor
 pytestmark = pytest.mark.unit
 
 _SECRET = "synthetic private value"
-_RULES = LogPolicyRules(LogPolicy.INFRASTRUCTURE, frozenset({"payload"}))
+_RULES = LogPolicyRules(LogPolicy.PROCESS_RUNTIME, frozenset({"payload"}))
 
 
 class TestUnsupportedValues:

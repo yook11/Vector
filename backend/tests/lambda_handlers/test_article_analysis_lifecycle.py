@@ -321,7 +321,7 @@ def test_recorder_logs_initialization_failure_under_stage_name(read_log):
     assert read_log() == {
         "event": "curation_initialization_failed",
         "level": "error",
-        "log_policy": "ai_inference",
+        "log_policy": "article_analysis",
         "service": "article_analysis",
         "operation": "ai_client",
         "error_class": "builtins.RuntimeError",
@@ -340,7 +340,7 @@ def test_recorder_logs_cleanup_failure_with_resource(read_log):
     assert read_log() == {
         "event": "curation_resources_cleanup_failed",
         "level": "error",
-        "log_policy": "ai_inference",
+        "log_policy": "article_analysis",
         "service": "article_analysis",
         "operation": "cleanup",
         "resource": "engine",

@@ -10,15 +10,17 @@ from enum import StrEnum
 class LogPolicy(StrEnum):
     """logger 構築時に宣言する、適用するポリシーの識別子。"""
 
-    EXTERNAL_CONTENT_FETCH = "external_content_fetch"
-    AI_INFERENCE = "ai_inference"
+    ARTICLE_FETCH = "article_fetch"
+    ARTICLE_ANALYSIS = "article_analysis"
+    AI_PROVIDER = "ai_provider"
     CACHE_REVALIDATION = "cache_revalidation"
     RESEARCH = "research"
     BRIEFING = "briefing"
     TREND_DISCOVERY = "trend_discovery"
     PIPELINE_CONTROL = "pipeline_control"
     PROCESS_RUNTIME = "process_runtime"
-    INFRASTRUCTURE = "infrastructure"
+    SECRET_ACCESS = "secret_access"  # noqa: S105 — 秘密値ではなくログ方針の識別子。
+    AUTH_RATE_LIMIT_CLEANUP = "auth_rate_limit_cleanup"
 
 
 # パスワード・トークン・APIキーなど、値そのもので認証できる項目のキー名。

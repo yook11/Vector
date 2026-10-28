@@ -31,8 +31,8 @@ _TEST_RULES = LogPolicyRules(
     allow=frozenset({"source_id", "url", "sample_length", "payload", "items"}),
     deny=frozenset({"restricted_sample", "restricted_nested"}),
 )
-_INFRA_RULES = LogPolicyRules(
-    policy=LogPolicy.INFRASTRUCTURE,
+_RUNTIME_RULES = LogPolicyRules(
+    policy=LogPolicy.PROCESS_RUNTIME,
     allow=frozenset({"resource", "endpoint", "error_message"}),
 )
 
@@ -49,7 +49,7 @@ def masking_logger() -> PolicyLogger:
 @pytest.fixture
 def sanitizing_logger() -> PolicyLogger:
     rules = LogPolicyRules(
-        policy=LogPolicy.INFRASTRUCTURE,
+        policy=LogPolicy.PROCESS_RUNTIME,
         allow=frozenset({"payload"}),
         sanitize=frozenset({"canonical_url"}),
     )
@@ -129,7 +129,7 @@ class TestRuleApplication:
     ) -> None:
         """ロガーが持つ完成済みの規則を繰り返し出力しても再構築しない。"""
         parent = LogPolicyRules(
-            LogPolicy.INFRASTRUCTURE, frozenset(), frozenset({"restricted_sample"})
+            LogPolicy.PROCESS_RUNTIME, frozenset(), frozenset({"restricted_sample"})
         )
         rules = parent.extend(allow=frozenset({"count"}))
 
@@ -146,7 +146,7 @@ class TestRuleApplication:
         expected = {
             "event": "completed",
             "count": 3,
-            "log_policy": "infrastructure",
+            "log_policy": "process_runtime",
             "_denied_keys": ["restricted_sample"],
         }
         assert (
@@ -162,7 +162,7 @@ class TestRuleApplication:
         self, configure_chain
     ) -> None:
         """同じ識別子のlogger同士でも、それぞれが受け取った規則を適用する。"""
-        first = LogPolicyRules(LogPolicy.INFRASTRUCTURE, frozenset({"first_count"}))
+        first = LogPolicyRules(LogPolicy.PROCESS_RUNTIME, frozenset({"first_count"}))
         last = first.extend(allow=frozenset({"last_count"}))
         capture = configure_chain()
         first_logger = policy_logger("first", first)
@@ -192,7 +192,7 @@ class TestRuleApplication:
             PolicyLogger(BASE_LOG_RULES, structlog.ReturnLogger()),
             "info",
             {
-                "_log_policy_rules": LogPolicy.INFRASTRUCTURE,
+                "_log_policy_rules": LogPolicy.PROCESS_RUNTIME,
                 "event": "completed",
                 "password": "synthetic private value",
                 "count": 3,
@@ -455,7 +455,7 @@ class TestLeakPrevention:
     def test_credential_inside_allowed_text_is_redacted(self, configure_chain) -> None:
         """許可した自由文に混入した credential だけを置き換え、原因文は残す。"""
         capture = configure_chain()
-        logger = policy_logger("test", _INFRA_RULES)
+        logger = policy_logger("test", _RUNTIME_RULES)
         logger.warning(
             "db_connect_failed",
             error_message=(
@@ -473,7 +473,7 @@ class TestLeakPrevention:
     ) -> None:
         """許可した自由文に混入した内部宛先のURLを置き換え、原因文は残す。"""
         capture = configure_chain()
-        logger = policy_logger("test", _INFRA_RULES)
+        logger = policy_logger("test", _RUNTIME_RULES)
         logger.warning(
             "fetch_failed",
             error_message="Client error '403 Forbidden' for url 'http://10.0.0.5/a'",
@@ -806,7 +806,7 @@ class TestExceptionFields:
     def test_generated_exception_message_replaces_same_named_input(self) -> None:
         """同名の入力があっても、例外から抽出した項目を出力に採用する。"""
         output = LogPolicyProcessor()(
-            PolicyLogger(_INFRA_RULES, structlog.ReturnLogger()),
+            PolicyLogger(_RUNTIME_RULES, structlog.ReturnLogger()),
             "error",
             {
                 "event": "failed",
@@ -819,7 +819,7 @@ class TestExceptionFields:
             "error_class": "builtins.ValueError",
             "error_message": "token=[redacted:credential]",
             "frames": [],
-            "log_policy": "infrastructure",
+            "log_policy": "process_runtime",
         }
 
     @pytest.mark.parametrize("exc_info", [None, False, "invalid"])
@@ -828,13 +828,13 @@ class TestExceptionFields:
     ) -> None:
         """例外項目を生成できない場合は、入力の同名項目を通常どおり準備する。"""
         prepared_event = LogPolicyProcessor()(
-            PolicyLogger(_INFRA_RULES, structlog.ReturnLogger()),
+            PolicyLogger(_RUNTIME_RULES, structlog.ReturnLogger()),
             "error",
             {"error_message": "token=synthetic", "exc_info": exc_info},
         )
         assert prepared_event == {
             "error_message": "token=[redacted:credential]",
-            "log_policy": "infrastructure",
+            "log_policy": "process_runtime",
         }
 
     def test_invalid_exc_info_is_not_forwarded(self) -> None:

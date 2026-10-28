@@ -29,7 +29,7 @@ from app.lambda_handlers.acquisition.message_recorder import AcquisitionMessageR
 from app.lambda_handlers.acquisition.settings import AcquisitionConsumerSettings
 from app.lambda_handlers.article_fetch_lifecycle import ArticleFetchLifecycleRecorder
 from app.lambda_handlers.event_reader import EventReader, EventReadFailed
-from app.log_policy.policies.external_content import EXTERNAL_CONTENT_LOG_RULES
+from app.log_policy.policies.article_fetch import ARTICLE_FETCH_LOG_RULES
 from app.log_policy.runtime import create_policy_json_logger
 from app.shared.time import elapsed_ms_since
 
@@ -71,7 +71,7 @@ def _open_invocation(
         request_id = getattr(context, "aws_request_id", None)
         if isinstance(request_id, str) and request_id.strip():
             structlog.contextvars.bind_contextvars(request_id=request_id)
-        logger = create_policy_json_logger("article_fetch", EXTERNAL_CONTENT_LOG_RULES)
+        logger = create_policy_json_logger("article_fetch", ARTICLE_FETCH_LOG_RULES)
         yield logger, ArticleFetchLifecycleRecorder(logger, stage="acquisition")
     finally:
         structlog.contextvars.clear_contextvars()

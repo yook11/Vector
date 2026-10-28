@@ -3,13 +3,13 @@
 from app.log_policy.base import LogPolicy, LogPolicyRules
 from app.log_policy.policies.article_text import ARTICLE_TEXT_KEYS
 
-EXTERNAL_CONTENT_POLICY = LogPolicyRules(
-    policy=LogPolicy.EXTERNAL_CONTENT_FETCH,
+ARTICLE_FETCH_POLICY = LogPolicyRules(
+    policy=LogPolicy.ARTICLE_FETCH,
     allow=frozenset(),
     deny=ARTICLE_TEXT_KEYS,
 )
 
-EXTERNAL_CONTENT_LOG_RULES = EXTERNAL_CONTENT_POLICY.extend(
+ARTICLE_FETCH_LOG_RULES = ARTICLE_FETCH_POLICY.extend(
     allow=frozenset(
         {
             "service",

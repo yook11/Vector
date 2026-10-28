@@ -78,11 +78,13 @@ AWSランタイムのシステムログやOS・proxy・DBサービス自体の�
 
 ポリシーの正本を記録基盤内に置き、共通規則と処理目的ごとの許可項目・値制約・変換規則を定義する。識別子は基底の`LogPolicy`を使い、bounded context名ごとに別の識別子を作らない。
 
-- `external_content_fetch`: 記事取得・本文補完のURL、HTTP結果、抽出結果、失敗診断。目的別allowは未定義。
-- `ai_inference`: 記事のAI分析の相関情報・結果・失敗診断。Curation・Assessment・Embeddingは一つの完成済みルールを使い、stage属性で区別する。項目・出所・保護方法は[AI分析ポリシー](./ai-analysis-logging-policy.md)を正本とする。
+- `article_fetch`: 記事取得・本文補完のURL、HTTP結果、抽出結果、失敗診断。記事本文と派生テキストは禁止する。
+- `article_analysis`: 記事のAI分析の相関情報・結果・失敗診断。Curation・Assessment・Embeddingは一つの完成済みルールを使い、stage属性で区別する。項目・出所・保護方法は[AI分析ポリシー](./ai-analysis-logging-policy.md)を正本とする。
 - Embeddingは2026-10-08に接続した（[AI分析ポリシー §3.3.4](./ai-analysis-logging-policy.md)）。Agent等への適用は、対象情報と責務を確認してから定義する。AI利用という理由だけで同じポリシーを無条件に適用しない。
+- `ai_provider`: AIプロバイダー呼び出しの資源終了と枠超過の診断。記事分析・リサーチ・ブリーフィングのどこから呼ばれてもこの規則で出す。記事本文と派生テキストは禁止する。
 - `cache_revalidation`: キャッシュ更新通知の対象・処理箇所・相関情報。§2.4に定義する。
-- `infrastructure`: 秘密情報取得の資源終了ログを§2.4の限定したルールへ、認証カウンター掃除の終端ログを専用のルール（[認証カウンターの定期掃除](../platform/auth-rate-limit-cleanup.md)）へ接続済み。インフラ全般の項目を許可した状態ではない。
+- `secret_access`: 秘密情報取得の資源終了の診断。§2.4に定義する。
+- `auth_rate_limit_cleanup`: 認証カウンター掃除の削除件数と失敗した処理（[認証カウンターの定期掃除](../platform/auth-rate-limit-cleanup.md)）。
 - `research`: リサーチのRun・日次上限・ライブ配信・根拠収集の相関情報・結果・失敗診断。質問文・回答・検索語は禁止する。
 - `briefing`: 週次ブリーフィングの投入・生成・保存の週・カテゴリ・件数・結果・失敗診断。記事本文とAIが書いたブリーフィングの文は禁止する。
 - `trend_discovery`: 週次トレンドの集計・保存の週・件数・結果と、読み飛ばしたメンションの検証失敗。記事本文とメンションの名前は禁止する。
@@ -132,7 +134,7 @@ loggerの構築時に、コードが所有する完成済みルールを結び�
 | 目的 | 識別子・ルール | 目的固有のallow |
 | --- | --- | --- |
 | キャッシュ更新通知 | `cache_revalidation` / `CACHE_REVALIDATION_LOG_RULES` | `tags` / `operation` / `error_class` |
-| 秘密情報取得 | `infrastructure` / `SECRET_ACCESS_LOG_RULES` | `operation` / `resource` / `error_class` |
+| 秘密情報取得 | `secret_access` / `SECRET_ACCESS_LOG_RULES` | `operation` / `resource` / `error_class` |
 
 両ルールとも`service` / `environment` / `stage` / `request_id` / `message_id` / `event_id`と、記事分析の相関情報として`analyzable_article_id` / `curation_id` / `analyzed_article_id`（2026-10-09に追加）をallowに持つ。基底の認証情報denyを継承し、基底項目と自動生成の`log_policy`は重複定義しない。モデル・使用量は追加しない。`tags`はアプリが組み立てるキャッシュタグのリストで、任意の外部入力を許可するものではない。タグの意味は呼び出し側が所有し、ポリシーはタグの業務検証を複製しない。
 
@@ -239,13 +241,13 @@ password、API key、Authorization、session token、認証cookie、秘密鍵、
 公開記事URLを保持し、失敗の説明を読める例:
 
 ```json
-{"timestamp":"2026-09-17T00:00:00Z","level":"warning","service":"collection","environment":"test","log_policy":"external_content_fetch","event":"content_parse_error","article_id":123,"url":"https://example.com/news/article?id=42","error_class":"RuntimeError","error_message":"Article extraction failed: unsupported document structure"}
+{"timestamp":"2026-09-17T00:00:00Z","level":"warning","service":"collection","environment":"test","log_policy":"article_fetch","event":"content_parse_error","article_id":123,"url":"https://example.com/news/article?id=42","error_class":"RuntimeError","error_message":"Article extraction failed: unsupported document structure"}
 ```
 
 DBの原因を残し、パラメーターと行データを出さない例:
 
 ```json
-{"timestamp":"2026-09-17T00:00:00Z","level":"error","log_policy":"ai_inference","event":"assessment_message_failed","stage":"assessment","operation":"save_result","error_class":"sqlalchemy.exc.IntegrityError","error_message":"duplicate key value violates unique constraint","error_details":{"kind":"postgresql","sqlstate":"23505","constraint_name":"example_unique_constraint"}}
+{"timestamp":"2026-09-17T00:00:00Z","level":"error","log_policy":"article_analysis","event":"assessment_message_failed","stage":"assessment","operation":"save_result","error_class":"sqlalchemy.exc.IntegrityError","error_message":"duplicate key value violates unique constraint","error_details":{"kind":"postgresql","sqlstate":"23505","constraint_name":"example_unique_constraint"}}
 ```
 
 `http://127.0.0.1/private`を含む失敗では、URL属性を`[redacted]`とし、原因文の同じURLも置換する。timeout等の説明や例外型は保持する。記事本文が同時に渡されても出力しない。

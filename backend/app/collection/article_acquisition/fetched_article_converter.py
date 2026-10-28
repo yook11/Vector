@@ -10,10 +10,10 @@ from app.collection.domain.analyzable_article import AnalyzableArticle
 from app.collection.domain.observed_article import ObservedArticle
 from app.collection.domain.value_objects import PublishedAt
 from app.collection.sources.source_metadata import SourceMetadata
-from app.log_policy.policies.external_content import EXTERNAL_CONTENT_LOG_RULES
+from app.log_policy.policies.article_fetch import ARTICLE_FETCH_LOG_RULES
 from app.log_policy.runtime import create_policy_json_logger
 
-logger = create_policy_json_logger(__name__, EXTERNAL_CONTENT_LOG_RULES)
+logger = create_policy_json_logger(__name__, ARTICLE_FETCH_LOG_RULES)
 
 
 def convert_fetched_article(

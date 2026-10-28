@@ -149,7 +149,7 @@ def test_handler_outputs_json_without_global_logging_configuration(
             for record in records
             if record["event"] == "assessment_message_processing_completed"
         )
-        assert completed["log_policy"] == "ai_inference"
+        assert completed["log_policy"] == "article_analysis"
         assert completed["message_id"] == "message-001"
     finally:
         configure(**original_config)
@@ -299,7 +299,7 @@ def test_consumer_exception_is_logged_as_call_failure_and_redelivered(
     assert read_logs()[-1] == {
         "event": "assessment_message_processing_failed",
         "level": "error",
-        "log_policy": "ai_inference",
+        "log_policy": "article_analysis",
         "service": "article_analysis",
         "stage": "assessment",
         "request_id": "request-001",
@@ -622,7 +622,7 @@ def test_settings_failure_is_logged_and_aborts_entire_batch(wiring, read_logs):
         {
             "event": "assessment_initialization_failed",
             "level": "error",
-            "log_policy": "ai_inference",
+            "log_policy": "article_analysis",
             "service": "article_analysis",
             "stage": "assessment",
             "request_id": "request-001",

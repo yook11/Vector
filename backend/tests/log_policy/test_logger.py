@@ -17,7 +17,7 @@ from app.log_policy import (
 
 pytestmark = pytest.mark.unit
 
-_RULES = LogPolicyRules(LogPolicy.INFRASTRUCTURE, frozenset({"count"}))
+_RULES = LogPolicyRules(LogPolicy.PROCESS_RUNTIME, frozenset({"count"}))
 
 
 class TestLoggerCreation:
@@ -46,7 +46,7 @@ class TestLoggerCreation:
         output_factory.assert_called_once_with("article_analysis")
 
     @pytest.mark.parametrize(
-        "rules", [None, "infrastructure", LogPolicy.INFRASTRUCTURE]
+        "rules", [None, "process_runtime", LogPolicy.PROCESS_RUNTIME]
     )
     def test_factory_rejects_invalid_rules_before_creating_output_logger(
         self, rules
@@ -156,10 +156,10 @@ class TestRulesAreFixed:
         """名前が同じでも異なるルールを指定したロガーは互いに影響しない。"""
         capture = configure_chain()
         first_rules = LogPolicyRules(
-            LogPolicy.INFRASTRUCTURE, frozenset({"first_count"})
+            LogPolicy.PROCESS_RUNTIME, frozenset({"first_count"})
         )
         second_rules = LogPolicyRules(
-            LogPolicy.INFRASTRUCTURE, frozenset({"second_count"})
+            LogPolicy.PROCESS_RUNTIME, frozenset({"second_count"})
         )
         first = policy_logger("same_name", first_rules)
         second = policy_logger("same_name", second_rules)

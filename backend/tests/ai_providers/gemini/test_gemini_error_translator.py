@@ -488,7 +488,7 @@ def _resource_exhausted_logs(logs: list[dict]) -> list[dict]:
                 "level": "warning",
                 "reason": "rate_limited",
                 "retry_after_header": False,
-                "log_policy": "ai_inference",
+                "log_policy": "ai_provider",
                 "error_class": "google.genai.errors.ClientError",
                 "error_message": "Gemini API error: RESOURCE_EXHAUSTED",
                 "error_details": {
@@ -509,7 +509,7 @@ def _resource_exhausted_logs(logs: list[dict]) -> list[dict]:
                 "level": "warning",
                 "reason": "quota_exhausted",
                 "retry_after_header": False,
-                "log_policy": "ai_inference",
+                "log_policy": "ai_provider",
                 "error_class": "google.genai.errors.ClientError",
                 "error_message": "Gemini API error: RESOURCE_EXHAUSTED",
                 "error_details": {
@@ -553,7 +553,7 @@ def test_resource_exhausted_log_records_retry_after_header(read_logs) -> None:
             "level": "warning",
             "reason": "rate_limited",
             "retry_after_header": True,
-            "log_policy": "ai_inference",
+            "log_policy": "ai_provider",
             "error_class": "google.genai.errors.ClientError",
             "error_message": "Gemini API error: RESOURCE_EXHAUSTED",
             "error_details": {
@@ -582,7 +582,7 @@ def test_resource_exhausted_log_omits_values_of_unexpected_shape(read_logs) -> N
             "level": "warning",
             "reason": "quota_exhausted",
             "retry_after_header": False,
-            "log_policy": "ai_inference",
+            "log_policy": "ai_provider",
             "error_class": "google.genai.errors.ClientError",
             "error_message": "Gemini API error: RESOURCE_EXHAUSTED",
             "error_details": {
@@ -606,7 +606,7 @@ def test_resource_exhausted_log_keeps_quota_id_in_identifier_shape(read_logs) ->
             "level": "warning",
             "reason": "rate_limited",
             "retry_after_header": False,
-            "log_policy": "ai_inference",
+            "log_policy": "ai_provider",
             "error_class": "google.genai.errors.ClientError",
             "error_message": "Gemini API error: RESOURCE_EXHAUSTED",
             "error_details": {

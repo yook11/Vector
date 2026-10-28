@@ -3,7 +3,7 @@
 from app.log_policy.base import LogPolicy, LogPolicyRules
 
 AUTH_RATE_LIMIT_CLEANUP_LOG_RULES = LogPolicyRules(
-    policy=LogPolicy.INFRASTRUCTURE,
+    policy=LogPolicy.AUTH_RATE_LIMIT_CLEANUP,
     allow=frozenset(
         {
             "service",

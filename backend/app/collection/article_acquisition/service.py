@@ -31,11 +31,11 @@ from app.collection.persistence.analyzable_article_repository import (
 )
 from app.collection.sources.article_source import AcquirableSource
 from app.db.session import SessionFactory
-from app.log_policy.policies.external_content import EXTERNAL_CONTENT_LOG_RULES
+from app.log_policy.policies.article_fetch import ARTICLE_FETCH_LOG_RULES
 from app.log_policy.runtime import create_policy_json_logger
 from app.models.outbox_event import OutboxEvent
 
-logger = create_policy_json_logger(__name__, EXTERNAL_CONTENT_LOG_RULES)
+logger = create_policy_json_logger(__name__, ARTICLE_FETCH_LOG_RULES)
 
 
 class ArticleAcquisitionService:
