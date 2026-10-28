@@ -82,14 +82,20 @@ jobs:
               - 'frontend/src/lib/auth/**'
               - 'frontend/src/lib/proxy/**'
               - 'frontend/src/features/auth/**'
+              - 'frontend/src/features/research/**'
+              - 'frontend/src/components/layout/**'
+              - 'frontend/src/app/**'
               - 'frontend/src/proxy.ts'
+              - 'frontend/src/instrumentation-client.ts'
               # E2E spec / config
               - 'frontend/e2e/**'
-              - 'frontend/playwright.config.ts'
+              - 'frontend/playwright*.config.ts'
               # 依存・設定
               - 'frontend/package.json'
               - 'frontend/package-lock.json'
               - 'frontend/next.config.js'
+              - 'frontend/Dockerfile'
+              - 'frontend/.dockerignore'
               # backend (E2E が叩く API + auth 認可経路)
               - 'backend/app/main.py'
               - 'backend/app/config.py'
@@ -439,13 +445,7 @@ jobs:
     if: >-
       github.event_name == 'pull_request'
       && needs.changes.outputs.e2e == 'true'
-    # smoke スコープは anon project の login / register と、admin project の
-    # source-admin / admin-user-provisioning。CI DB の seed 済み一般・admin
-    # ユーザーと、各 spec による原状回復 cleanup を前提とする。
-    #
-    # path-filter で auth/E2E 関連変更のみ実行する (`changes` job 参照)。
-    # 無関係な PR では skip され、CI wallclock は backend-integration の 95s
-    # 程度に律速される。
+    # 専用DBのseedユーザーで認証・管理画面と、本番イメージのリサーチ・ユーザー表示を検証する。
 
     services:
       postgres:
@@ -700,13 +700,7 @@ jobs:
           cat "${RUNNER_TEMP}/backend.log" || true
           exit 1
 
-      # `next start` は `output: "standalone"` build と組み合わせると静的 asset
-      # の serve 経路が乖離し、本番 build の JS bundle が browser に届かず
-      # hydration 不能になる (E2E では form の onSubmit が attach されず
-      # GET 経由で submit されてしまう)。
-      # smoke の目的は user flow の regression 検出であり build 経路の検証
-      # ではないので、dev 経路 (`next dev`) で済ませる。本番 build のスモーク
-      # は Phase 4 で別 PR にて検討する。
+      # 認証・管理操作の既存ケースは開発サーバーで実行し、CSPと画面起動は後段の本番イメージで検証する。
       - name: Start frontend (next dev, background)
         run: |
           nohup npm run dev -- --port 3000 \
@@ -731,12 +725,54 @@ jobs:
         run: npx playwright test --project=anon --project=admin
         working-directory: frontend
 
+      # 本番と同じstatic assets配置とstandalone起動を検証するため、production stageを使う。
+      - name: Build production frontend image
+        run: docker build --target production --tag vector-frontend-e2e frontend
+
+      - name: Start production frontend
+        run: |
+          docker run -d --name vector-frontend-e2e --network host \
+            --add-host api.vector.internal:127.0.0.1 \
+            -e PORT=3100 -e HOSTNAME=127.0.0.1 \
+            -e BETTER_AUTH_URL=http://localhost:3100 \
+            -e INTERNAL_API_URL=http://api.vector.internal:8000/api/v1 \
+            -e CLIENT_IP_TRUST=alb-xff-last \
+            -e AUTH_DATABASE_URL -e BETTER_AUTH_SECRET \
+            -e BFF_JWT_SIGNING_SECRET -e REVALIDATE_BEARER_SECRET \
+            -e REDIS_URL -e REDIS_URL_RL="$REDIS_URL" \
+            vector-frontend-e2e
+          for attempt in $(seq 1 60); do
+            if curl -sf --max-time 2 http://localhost:3100/auth/login > /dev/null; then
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "Production frontend did not become ready after $attempt attempts"
+          docker logs vector-frontend-e2e
+          exit 1
+
+      - name: Verify production research and user display
+        env:
+          E2E_BASE_URL: http://localhost:3100
+        run: npm run test:e2e:production
+        working-directory: frontend
+
+      - name: Stop production frontend
+        if: always()
+        run: |
+          if docker container inspect vector-frontend-e2e > /dev/null 2>&1; then
+            docker logs vector-frontend-e2e > "${RUNNER_TEMP}/frontend-production.log" 2>&1
+            docker rm -f vector-frontend-e2e
+          fi
+
       - name: Upload Playwright report
         if: failure()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
         with:
           name: playwright-report
-          path: frontend/playwright-report/
+          path: |
+            frontend/playwright-report/
+            frontend/test-results/
           retention-days: 7
 
       - name: Upload server logs on failure
@@ -747,6 +783,7 @@ jobs:
           path: |
             ${{ runner.temp }}/backend.log
             ${{ runner.temp }}/frontend.log
+            ${{ runner.temp }}/frontend-production.log
           retention-days: 7
 
   # ---- pre-commit (gitleaks + hadolint のみ、ruff/biome は backend-unit/frontend job に重複) ----
