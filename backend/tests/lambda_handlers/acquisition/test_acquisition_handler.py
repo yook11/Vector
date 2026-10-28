@@ -2,8 +2,6 @@
 
 import asyncio
 import json
-import sys
-from collections.abc import Callable
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from types import SimpleNamespace
@@ -44,34 +42,6 @@ def runtime(monkeypatch):
     monkeypatch.setattr(entrypoint, "perf_counter", lambda: 100.0)
     monkeypatch.setattr("app.shared.time.perf_counter", lambda: 100.125)
     return state
-
-
-@pytest.fixture
-def read_logs(capsys) -> Callable[[], list[dict[str, object]]]:
-    """出力されたログを、実行ごとに変わる時刻と発生位置を除いて返す。"""
-
-    def _read() -> list[dict[str, object]]:
-        logs = [json.loads(line) for line in capsys.readouterr().out.splitlines()]
-        for log in logs:
-            del log["timestamp"]
-            log.pop("frames", None)
-        return logs
-
-    return _read
-
-
-@pytest.fixture
-def broken_output(monkeypatch):
-    """ログの書き込みが毎回失敗する標準出力へ差し替える。"""
-
-    class BrokenOutput:
-        def write(self, text):
-            raise OSError("private-log")
-
-        def flush(self):
-            raise OSError("private-log")
-
-    monkeypatch.setattr(sys, "stdout", BrokenOutput())
 
 
 def test_id_mismatch_fails_message_without_exposing_body(runtime, read_logs):

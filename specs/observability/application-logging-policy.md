@@ -3,7 +3,7 @@
 作成: 2026-09-17
 更新: 2026-09-22（AssessmentのLambda共通ログ設定への依存を解消）
 Status: Accepted
-Implementation: Partially implemented。共通基底の規則・processor・例外構造化・チェーン部品を実装済み。Assessmentは目的別ロガーでJSON出力し、Lambda共通ログ設定への依存を解消済み。他の既存アプリへの接続、詳細な原因抽出、URLの目的別変換、CloudWatch配送の検証は未完了。
+Implementation: Partially implemented。共通基底の規則・processor・例外構造化・チェーン部品を実装済み。Assessmentは目的別ロガーでJSON出力し、Lambda共通ログ設定への依存を解消済み。API・worker・scheduler・Lambdaの全ロガーを目的別ロガーへ接続し、全体設定を撤去した（2026-10-28）。詳細な原因抽出、URLの目的別変換、CloudWatch配送の検証は未完了。
 
 関連: [#317 記録方針の共通化](https://github.com/yook11/Vector/issues/317)、[#328 エラーの情報保持と安全な記録の分離](https://github.com/yook11/Vector/issues/328)
 

@@ -41,5 +41,5 @@ def create_policy_logger(
 def policy_logger(
     name: str, rules: LogPolicyRules = BASE_LOG_RULES
 ) -> FilteringBoundLogger:
-    """ルールを生成引数として預け、共通設定で実体化する遅延ロガーを返す。"""
+    """ルールを生成引数として預け、テストが構成した全体設定で実体化する遅延ロガーを返す。"""
     return structlog.wrap_logger(None, logger_factory_args=(name, rules))
