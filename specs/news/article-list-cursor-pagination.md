@@ -18,7 +18,7 @@ Status: Implemented
 | 認可 | BFF 経由証明 | ログイン |
 
 - `AnalyzedArticlePreviewList` は `items: AnalyzedArticlePreview[]` と `nextCursor: string | null`。`nextCursor` は必須で、null なら続きはない。
-- 1回24件 (`ARTICLE_LIST_LIMIT`)。1件多く読んで続きの有無を決め、件数は数えない。
+- 1回24件 (`ARTICLE_PAGE_SIZE`)。1件多く読んで続きの有無を決め、件数は数えない。
 - 廃止: `page` / `perPage` / `sortOrder` パラメータと、`total` / `page` / `perPage` / `totalPages`。廃止したパラメータを付けても無視して 200 を返す。
 
 ## カーソル

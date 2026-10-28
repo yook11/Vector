@@ -6,7 +6,7 @@ from app.exceptions import NotFoundError, NotFoundResource
 from app.models.analyzed_article_record import AnalyzedArticleRecord
 from app.repositories.articles import ArticleRepository
 from app.schemas.articles import (
-    ARTICLE_LIST_LIMIT,
+    ARTICLE_PAGE_SIZE,
     AnalyzedArticle,
     AnalyzedArticlePreview,
     AnalyzedArticlePreviewList,
@@ -113,10 +113,10 @@ class ArticleService:
         query: ArticleListParams,
     ) -> AnalyzedArticlePreviewList:
         """ニュース閲覧用に分析済み記事を1回分取得する。1件多く読んで続きの有無を判定する。"""
-        analyses = await self.repo.fetch_articles(query, limit=ARTICLE_LIST_LIMIT + 1)
-        page = analyses[:ARTICLE_LIST_LIMIT]
+        analyses = await self.repo.fetch_articles(query, limit=ARTICLE_PAGE_SIZE + 1)
+        page = analyses[:ARTICLE_PAGE_SIZE]
         next_cursor = None
-        if len(analyses) > ARTICLE_LIST_LIMIT:
+        if len(analyses) > ARTICLE_PAGE_SIZE:
             last = page[-1]
             next_cursor = ArticleListPosition(
                 published_at=last.curation.analyzable_article.published_at,

@@ -12,7 +12,7 @@ Status: Implemented
 
 `GET /api/v1/me/watchlist/ids?articleIds=1&articleIds=2`
 
-- `articleIds` は必須で 1〜24件 (`ARTICLE_LIST_LIMIT`)。各要素は記事 ID と同じ範囲 (1〜int4 の上限)。欠落・件数外・範囲外は 422。
+- `articleIds` は必須で 1〜24件 (`ARTICLE_PAGE_SIZE`)。各要素は記事 ID と同じ範囲 (1〜int4 の上限)。欠落・件数外・範囲外は 422。
 - レスポンスは `WatchlistIds { ids }` のまま。渡した記事のうち本人がウォッチ中のものの ID を、記事 ID の昇順で返す。存在しない記事 ID は含まれないだけで、エラーにしない。
 - 認可はログイン (変えない)。
 

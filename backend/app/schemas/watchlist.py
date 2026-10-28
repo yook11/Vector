@@ -4,7 +4,7 @@ from fastapi import Query
 from pydantic import AwareDatetime, BaseModel, BeforeValidator, ConfigDict
 from pydantic.dataclasses import dataclass
 
-from app.schemas.articles import ARTICLE_LIST_LIMIT, ArticleId
+from app.schemas.articles import ARTICLE_PAGE_SIZE, ArticleId
 from app.schemas.base import _CamelBase
 from app.schemas.cursor import CURSOR_JSON_SCHEMA, CursorPosition
 
@@ -12,13 +12,13 @@ from app.schemas.cursor import CURSOR_JSON_SCHEMA, CursorPosition
 class WatchlistIdsParams(BaseModel):
     """GET /api/v1/me/watchlist/ids のクエリパラメータ。
 
-    問い合わせるのは記事一覧の1回の取得分なので、その上限 (ARTICLE_LIST_LIMIT) を
+    問い合わせるのは記事一覧の1回の取得分なので、その上限 (ARTICLE_PAGE_SIZE) を
     超える数の記事 ID は受け付けない。
     """
 
     article_ids: Annotated[
         list[ArticleId],
-        Query(alias="articleIds", min_length=1, max_length=ARTICLE_LIST_LIMIT),
+        Query(alias="articleIds", min_length=1, max_length=ARTICLE_PAGE_SIZE),
     ]
 
 

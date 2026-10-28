@@ -3,7 +3,7 @@ from uuid import UUID
 from app.exceptions import NotFoundError, NotFoundResource
 from app.repositories.articles import ArticleRepository
 from app.repositories.watchlist import WatchlistRepository
-from app.schemas.articles import ARTICLE_LIST_LIMIT, AnalyzedArticlePreviewList
+from app.schemas.articles import ARTICLE_PAGE_SIZE, AnalyzedArticlePreviewList
 from app.schemas.watchlist import WatchlistParams, WatchlistPosition
 from app.services.articles import build_analyzed_article_preview
 
@@ -24,12 +24,12 @@ class WatchlistService:
         params: WatchlistParams,
     ) -> AnalyzedArticlePreviewList:
         """ウォッチ中の記事を1回分取得する。1件多く読んで続きの有無を判定する。"""
-        rows = await self.repo.fetch_watched_articles(
-            self.user_id, params.cursor, limit=ARTICLE_LIST_LIMIT + 1
+        watched = await self.repo.fetch_watched_articles(
+            self.user_id, params.cursor, limit=ARTICLE_PAGE_SIZE + 1
         )
-        page = rows[:ARTICLE_LIST_LIMIT]
+        page = watched[:ARTICLE_PAGE_SIZE]
         next_cursor = None
-        if len(rows) > ARTICLE_LIST_LIMIT:
+        if len(watched) > ARTICLE_PAGE_SIZE:
             last, watched_at = page[-1]
             next_cursor = WatchlistPosition(
                 watched_at=watched_at, article_id=last.id
