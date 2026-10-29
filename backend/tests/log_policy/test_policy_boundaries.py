@@ -5,13 +5,11 @@ import json
 import pkgutil
 
 import pytest
-import structlog
 
 from app.log_policy import (
     BASE_LOG_RULES,
     LogPolicy,
     LogPolicyRules,
-    PolicyLogger,
     policies,
 )
 from app.log_policy.policies.article_fetch import ARTICLE_FETCH_POLICY
@@ -59,8 +57,8 @@ class TestPurposeRuleConstants:
     )
     def test_credential_field_is_denied(self, key) -> None:
         """認証情報の項目は、設定名や表記揺れを含めて基底のdenyで除外する。"""
-        output = LogPolicyProcessor()(
-            PolicyLogger(BASE_LOG_RULES, structlog.ReturnLogger()),
+        output = LogPolicyProcessor(BASE_LOG_RULES)(
+            None,
             "info",
             {"event": "failed", key: "synthetic"},
         )
@@ -85,8 +83,8 @@ class TestPurposeRuleConstants:
     )
     def test_article_fetch_denies_article_fields(self, key) -> None:
         """記事取得のポリシーはdenyで本文項目を除外する。"""
-        output = LogPolicyProcessor()(
-            PolicyLogger(ARTICLE_FETCH_POLICY, structlog.ReturnLogger()),
+        output = LogPolicyProcessor(ARTICLE_FETCH_POLICY)(
+            None,
             "info",
             {"event": "failed", key: "synthetic body"},
         )
@@ -111,8 +109,8 @@ class TestDenyAndMaskSeparation:
             allow=frozenset(), deny=frozenset({"RestrictedSample"})
         )
         rules = purpose.extend(allow=frozenset({"payload"}))
-        output = LogPolicyProcessor()(
-            PolicyLogger(rules, structlog.ReturnLogger()),
+        output = LogPolicyProcessor(rules)(
+            None,
             "info",
             {
                 "RestrictedSample": "synthetic field",
@@ -142,8 +140,8 @@ class TestDenyAndMaskSeparation:
         rules = LogPolicyRules(
             LogPolicy.PROCESS_RUNTIME, frozenset({"payload"}), **protection_rules
         )
-        output = LogPolicyProcessor()(
-            PolicyLogger(rules, structlog.ReturnLogger()),
+        output = LogPolicyProcessor(rules)(
+            None,
             "info",
             {
                 "event": "restricted_sample=synthetic",
@@ -177,8 +175,8 @@ class TestTopLevelAllow:
         rules = LogPolicyRules(
             LogPolicy.PROCESS_RUNTIME, frozenset(), **protection_rules
         )
-        output = LogPolicyProcessor()(
-            PolicyLogger(rules, structlog.ReturnLogger()),
+        output = LogPolicyProcessor(rules)(
+            None,
             "info",
             {"canonical_url": "synthetic"},
         )

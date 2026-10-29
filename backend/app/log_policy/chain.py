@@ -5,12 +5,14 @@ from __future__ import annotations
 import structlog
 from structlog.types import Processor
 
+from app.log_policy.base import LogPolicyRules
 from app.log_policy.exceptions.conversion import convert_exception
 from app.log_policy.exceptions.types import ExceptionConverter
 from app.log_policy.processor import LogPolicyProcessor
 
 
 def build_processors(
+    rules: LogPolicyRules,
     renderer: Processor,
     *,
     exception_converter: ExceptionConverter = convert_exception,
@@ -20,6 +22,6 @@ def build_processors(
         structlog.contextvars.merge_contextvars,
         structlog.processors.add_log_level,
         structlog.processors.TimeStamper(fmt="iso", utc=True),
-        LogPolicyProcessor(exception_converter=exception_converter),
+        LogPolicyProcessor(rules, exception_converter=exception_converter),
         renderer,
     ]

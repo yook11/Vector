@@ -1,32 +1,23 @@
 """キャッシュ更新通知のポリシーを通したJSON出力を確認する。"""
 
 import json
-from functools import partial
 
 import pytest
 import structlog
 
-from app.log_policy import build_processors, create_policy_logger, policy_logger
+from app.log_policy.runtime import create_policy_json_logger
 
 pytestmark = pytest.mark.unit
 
 
 @pytest.fixture
-def logger_with_cache_revalidation_policy(configure_chain):
+def logger_with_cache_revalidation_policy():
     from app.log_policy.policies.cache_revalidation import (
         CACHE_REVALIDATION_LOG_RULES,
     )
 
-    configure_chain()
     structlog.contextvars.clear_contextvars()
-    structlog.configure(
-        logger_factory=partial(
-            create_policy_logger,
-            output_logger_factory=structlog.WriteLoggerFactory(),
-        ),
-        processors=build_processors(structlog.processors.JSONRenderer()),
-    )
-    return policy_logger(
+    return create_policy_json_logger(
         "test.logger_with_cache_revalidation_policy", CACHE_REVALIDATION_LOG_RULES
     )
 

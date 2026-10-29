@@ -63,8 +63,6 @@ select = ["E", "F", "I", "UP", "S", "FAST", "TID"]
 "httpx2.AsyncClient".msg = "Pick a client by destination: app.http.external.make_external_async_client for third-party destinations, app.http.internal.make_internal_async_client for resources we own. Direct httpx2.AsyncClient declares neither."
 "structlog.get_logger".msg = "Declare a module logger with app.log_policy.runtime.create_policy_json_logger(__name__, RULES). There is no global structlog config, so structlog.get_logger bypasses the log policy."
 "structlog.getLogger".msg = "Declare a module logger with app.log_policy.runtime.create_policy_json_logger(__name__, RULES). There is no global structlog config, so structlog.getLogger bypasses the log policy."
-"app.log_policy.policy_logger".msg = "policy_logger is a lazy test entry that needs a global structlog config. Use app.log_policy.runtime.create_policy_json_logger in app code."
-"app.log_policy.logger.policy_logger".msg = "policy_logger is a lazy test entry that needs a global structlog config. Use app.log_policy.runtime.create_policy_json_logger in app code."
 
 [tool.ruff.lint.per-file-ignores]
 "tests/**" = ["S101", "S105", "S106", "S311", "TID251"]
@@ -73,8 +71,6 @@ select = ["E", "F", "I", "UP", "S", "FAST", "TID"]
 # 型ヒントとしての参照のみ。本ファイル群で AsyncClient を直接構築することはない。
 "app/collection/fetchers/**" = ["TID251"]
 "app/collection/fetchers/tools/**" = ["TID251"]
-# 遅延版の policy_logger をテストが使う入口として再公開するため。
-"app/log_policy/__init__.py" = ["TID251"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

@@ -3,19 +3,18 @@
 from __future__ import annotations
 
 import json
-from functools import partial
 
 import pytest
 import structlog
+from structlog.testing import LogCapture
 
 from app.log_policy import (
     BASE_LOG_RULES,
     LogPolicy,
     LogPolicyRules,
-    PolicyLogger,
-    policy_logger,
 )
 from app.log_policy.budget import MAX_ITEMS_PER_LOG_EVENT, TEXT_LIMIT
+from app.log_policy.runtime import create_policy_json_logger
 
 pytestmark = pytest.mark.unit
 
@@ -46,10 +45,10 @@ _DETAIL_FRAGMENTS = (
 )
 
 
-def _emit_redacted_failure(configure_chain) -> dict:
+def _emit_redacted_failure(chain_logger) -> dict:
     """通常の logger 呼び出しをチェーン末尾の LogCapture で受け取る。"""
-    capture = configure_chain()
-    logger = policy_logger("test", _RULES)
+    capture = LogCapture()
+    logger = chain_logger(_RULES, capture)
     try:
         raise RuntimeError(f"connect failed password={_SECRET}")
     except RuntimeError:
@@ -65,9 +64,9 @@ def _emit_redacted_failure(configure_chain) -> dict:
     return dict(capture.entries[0])
 
 
-def test_json_and_console_keep_the_same_redaction(configure_chain) -> None:
+def test_json_and_console_keep_the_same_redaction(chain_logger) -> None:
     """JSON と console のどちらでも、禁止値・各形式の認証情報・traceback は戻らない。"""
-    entry = _emit_redacted_failure(configure_chain)
+    entry = _emit_redacted_failure(chain_logger)
     assert entry["_denied_keys"] == ["content"]
     assert "content" not in entry
     assert entry["payload"] == {"wrapper": [{"status": "kept"}]}
@@ -100,12 +99,12 @@ def test_chain_generates_string_level_before_console_rendering() -> None:
     """入力のlevelが非文字列でも前段の生成処理が文字列へ置き換える。"""
     from app.log_policy import build_processors
 
-    processors = build_processors(structlog.dev.ConsoleRenderer(colors=False))
+    processors = build_processors(
+        BASE_LOG_RULES, structlog.dev.ConsoleRenderer(colors=False)
+    )
     entry = {"event": "completed", "level": {"invalid": 1}}
     for processor in processors[:-1]:
-        entry = processor(
-            PolicyLogger(BASE_LOG_RULES, structlog.ReturnLogger()), "info", entry
-        )
+        entry = processor(None, "info", entry)
 
     assert entry["level"] == "info"
     rendered = processors[-1](None, "info", dict(entry))
@@ -122,11 +121,9 @@ def test_structured_event_is_prepared_before_rendering(renderer) -> None:
     from app.log_policy import build_processors
 
     entry = {"event": {"password": _SECRET, "message": "token=synthetic", "count": 3}}
-    processors = build_processors(renderer)
+    processors = build_processors(BASE_LOG_RULES, renderer)
     for processor in processors[:-1]:
-        entry = processor(
-            PolicyLogger(BASE_LOG_RULES, structlog.ReturnLogger()), "info", entry
-        )
+        entry = processor(None, "info", entry)
 
     assert entry["event"] == {
         "message": "token=[redacted:credential]",
@@ -137,37 +134,18 @@ def test_structured_event_is_prepared_before_rendering(renderer) -> None:
     assert "synthetic" not in rendered
 
 
-def test_declared_logger_uses_globally_configured_json_renderer(
-    configure_chain,
-) -> None:
-    """設定前に宣言したロガーも共通設定のJSONで秘匿済みのログを出す。"""
-    from app.log_policy import build_processors, create_policy_logger
-
-    logger = policy_logger("test", _RULES)
-    configure_chain()
-    structlog.configure(
-        logger_factory=partial(
-            create_policy_logger, output_logger_factory=structlog.ReturnLoggerFactory()
-        ),
-        processors=build_processors(structlog.processors.JSONRenderer()),
-    )
-    rendered = logger.info("completed", reason=f"token={_SECRET}")
+def test_production_logger_outputs_redacted_json(capsys) -> None:
+    """本番の組み立てで作ったロガーも、秘匿済みのログをJSONで標準出力へ出す。"""
+    logger = create_policy_json_logger("test", _RULES)
+    logger.info("completed", reason=f"token={_SECRET}")
+    rendered = capsys.readouterr().out
     assert json.loads(rendered)["reason"] == "token=[redacted:credential]"
     assert _SECRET not in rendered
 
 
-def test_zero_value_is_preserved_in_json_output(configure_chain) -> None:
+def test_zero_value_is_preserved_in_json_output(chain_logger) -> None:
     """許可された項目の0は未取得として除外せず、JSONへ数値のまま出力する。"""
-    from app.log_policy import build_processors, create_policy_logger
-
-    configure_chain()
-    structlog.configure(
-        logger_factory=partial(
-            create_policy_logger, output_logger_factory=structlog.ReturnLoggerFactory()
-        ),
-        processors=build_processors(structlog.processors.JSONRenderer()),
-    )
-    logger = policy_logger("test", _RULES)
+    logger = chain_logger(_RULES, structlog.processors.JSONRenderer())
 
     log_entry = json.loads(logger.info("completed", source_id=0))
 
@@ -175,20 +153,9 @@ def test_zero_value_is_preserved_in_json_output(configure_chain) -> None:
     assert log_entry["source_id"] == 0
 
 
-def test_declared_logger_uses_globally_configured_console_renderer(
-    configure_chain,
-) -> None:
-    """設定前に宣言したロガーも共通設定のconsoleで秘匿済みのログを出す。"""
-    from app.log_policy import build_processors, create_policy_logger
-
-    logger = policy_logger("test", _RULES)
-    configure_chain()
-    structlog.configure(
-        logger_factory=partial(
-            create_policy_logger, output_logger_factory=structlog.ReturnLoggerFactory()
-        ),
-        processors=build_processors(structlog.dev.ConsoleRenderer(colors=False)),
-    )
+def test_console_renderer_outputs_redacted_log(chain_logger) -> None:
+    """consoleの実チェーンでも秘匿済みのログを出す。"""
+    logger = chain_logger(_RULES, structlog.dev.ConsoleRenderer(colors=False))
     rendered = logger.info("completed", reason=f"token={_SECRET}")
     assert "completed" in rendered
     assert "token=[redacted:credential]" in rendered
@@ -203,12 +170,12 @@ def test_declared_logger_uses_globally_configured_console_renderer(
     ],
 )
 def test_field_limit_marker_is_rendered_without_raw_content(
-    configure_chain, renderer
+    chain_logger, renderer
 ) -> None:
     """JSONとconsoleの実チェーンでも超過項目の原文を出さず正常なeventを残す。"""
     rules = LogPolicyRules(LogPolicy.PROCESS_RUNTIME, frozenset({"payload"}))
-    capture = configure_chain()
-    policy_logger("test", rules).info(
+    capture = LogCapture()
+    chain_logger(rules, capture).info(
         "failed", payload=["synthetic private" * TEXT_LIMIT]
     )
     assert capture.entries[0]["payload"] == ["[limit]"]
@@ -225,11 +192,11 @@ def test_field_limit_marker_is_rendered_without_raw_content(
         structlog.dev.ConsoleRenderer(colors=False),
     ],
 )
-def test_budget_exceeded_fixed_output_is_renderable(configure_chain, renderer) -> None:
+def test_budget_exceeded_fixed_output_is_renderable(chain_logger, renderer) -> None:
     """JSONとconsoleでも予算超過時は元のeventやpayloadを出さない。"""
-    capture = configure_chain()
+    capture = LogCapture()
     rules = LogPolicyRules(LogPolicy.PROCESS_RUNTIME, frozenset({"payload"}))
-    policy_logger("test", rules).info(
+    chain_logger(rules, capture).info(
         "synthetic-private-event",
         payload=["synthetic-private-value"] * MAX_ITEMS_PER_LOG_EVENT,
     )

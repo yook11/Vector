@@ -11,8 +11,6 @@ import time
 from collections.abc import Callable
 from itertools import product
 
-import structlog
-
 from app.log_policy.base import LogPolicy, LogPolicyRules
 from app.log_policy.budget import EVENT_TEXT_LIMIT, MAX_ITEMS_PER_LOG_EVENT, TEXT_LIMIT
 from app.log_policy.leak_prevention import (
@@ -20,7 +18,6 @@ from app.log_policy.leak_prevention import (
     redact_jwts,
     redact_url_userinfo,
 )
-from app.log_policy.logger import create_policy_logger
 from app.log_policy.processor import LogPolicyProcessor
 
 _REFERENCE_URL = re.compile(r"([a-z][a-z0-9+.\-]*)://[^@/\s]+@", re.IGNORECASE)
@@ -167,10 +164,7 @@ def main() -> None:
                 }
             )
     rules = LogPolicyRules(LogPolicy.PROCESS_RUNTIME, frozenset({"payload"}))
-    processor = LogPolicyProcessor()
-    logger = create_policy_logger(
-        "benchmark", rules, output_logger_factory=structlog.ReturnLoggerFactory()
-    )
+    processor = LogPolicyProcessor(rules)
     for total in [8192, 16384, 32768, 65536]:
         for fields in [1, 16, 128, 512, 900]:
             for name, seed in [
@@ -191,7 +185,7 @@ def main() -> None:
                     "event": "benchmark",
                     "payload": payload,
                 }
-                prepared_event = processor(logger, "info", event)
+                prepared_event = processor(None, "info", event)
                 report["events"].append(
                     {
                         "case": name,
@@ -203,7 +197,7 @@ def main() -> None:
                         "payload_retained": "payload" in prepared_event,
                         "value_chars": sum(map(len, payload.values())),
                         "key_chars": key_chars,
-                        **_measure(lambda: processor(logger, "info", event)),
+                        **_measure(lambda: processor(None, "info", event)),
                     }
                 )
     print(json.dumps(report, ensure_ascii=False, indent=2))

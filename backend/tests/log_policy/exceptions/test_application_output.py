@@ -12,7 +12,7 @@ from app.analysis.assessment.events import (
     ArticleAssessedInScopeEvent,
     AssessedEventInvalidError,
 )
-from app.log_policy import BASE_LOG_RULES, PolicyLogger, build_processors, policy_logger
+from app.log_policy import BASE_LOG_RULES
 from app.log_policy.exceptions.extraction import EXCEPTION_LIMIT
 
 pytestmark = pytest.mark.unit
@@ -39,16 +39,9 @@ def validation_failure() -> AssessedEventInvalidError:
 
 
 @pytest.fixture
-def application_logger(configure_chain):
+def application_logger(chain_logger):
     """既定の共通変換を通して、実際のJSON出力を返すロガーを作る。"""
-    configure_chain()
-    structlog.configure(
-        processors=build_processors(structlog.processors.JSONRenderer()),
-        logger_factory=lambda *_: PolicyLogger(
-            BASE_LOG_RULES, structlog.ReturnLogger()
-        ),
-    )
-    return policy_logger("test")
+    return chain_logger(BASE_LOG_RULES, structlog.processors.JSONRenderer())
 
 
 def test_boundary_diagnostics_reach_json_without_input(
