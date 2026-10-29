@@ -6,22 +6,17 @@ import pytest
 import structlog
 from asyncpg import PostgresError
 from sqlalchemy.exc import IntegrityError
+from structlog.testing import LogCapture
 
-from app.log_policy import BASE_LOG_RULES, LogPolicyRules, PolicyLogger, policy_logger
+from app.log_policy import BASE_LOG_RULES, LogPolicyRules
 from app.log_policy.processor import LogPolicyProcessor
 
 pytestmark = pytest.mark.unit
 
 
-def test_sql_details_are_redacted_in_json_renderer(configure_chain) -> None:
+def test_sql_details_are_redacted_in_json_renderer(chain_logger) -> None:
     """診断属性もJSON化前に情報漏洩防止を通す。"""
-    configure_chain()
-    structlog.configure(
-        processors=[LogPolicyProcessor(), structlog.processors.JSONRenderer()],
-        logger_factory=lambda *_: PolicyLogger(
-            BASE_LOG_RULES, structlog.ReturnLogger()
-        ),
-    )
+    logger = chain_logger(BASE_LOG_RULES, structlog.processors.JSONRenderer())
     exc = IntegrityError(
         "synthetic-private-sql",
         ("synthetic-private-row",),
@@ -35,7 +30,7 @@ def test_sql_details_are_redacted_in_json_renderer(configure_chain) -> None:
             }
         ),
     )
-    output = json.loads(policy_logger("test").error("failed", exc_info=exc))
+    output = json.loads(logger.error("failed", exc_info=exc))
     assert output["error_details"] == {
         "kind": "postgresql",
         "sqlstate": "23505",
@@ -46,13 +41,13 @@ def test_sql_details_are_redacted_in_json_renderer(configure_chain) -> None:
 
 
 @pytest.mark.parametrize("source", ["argument", "bind", "contextvars"])
-def test_exception_details_cannot_be_injected(source, configure_chain) -> None:
+def test_exception_details_cannot_be_injected(source, chain_logger) -> None:
     """allow宣言があっても入力経路の診断辞書を受け入れない。"""
-    capture = configure_chain()
+    capture = LogCapture()
     rules = LogPolicyRules(
         None, frozenset({"error_details", "related_exceptions", "errorDetails"})
     )
-    logger = policy_logger("test", rules)
+    logger = chain_logger(rules, capture)
     payload = {
         "error_details": {"unknown": "synthetic-private"},
         "related_exceptions": [{"error_message": "synthetic-private"}],
@@ -70,13 +65,13 @@ def test_exception_details_cannot_be_injected(source, configure_chain) -> None:
     assert "related_exceptions" not in capture.entries[0]
 
 
-def test_generated_details_replace_injected_details(configure_chain) -> None:
+def test_generated_details_replace_injected_details(chain_logger) -> None:
     """有効な例外がある場合も入力辞書を混ぜず、抽出した診断だけを出す。"""
-    capture = configure_chain()
+    capture = LogCapture()
     exc = IntegrityError(
         "INSERT ...", (), PostgresError.new({"C": "23505", "M": "duplicate"})
     )
-    policy_logger("test").error(
+    chain_logger(BASE_LOG_RULES, capture).error(
         "failed", exc_info=exc, error_details={"unknown": "synthetic-private"}
     )
     assert capture.entries[0]["error_details"] == {
@@ -97,8 +92,8 @@ def test_cause_details_are_redacted() -> None:
     )
     outer = RuntimeError("wrapped")
     outer.__cause__ = cause
-    output = LogPolicyProcessor()(
-        PolicyLogger(BASE_LOG_RULES, structlog.ReturnLogger()),
+    output = LogPolicyProcessor(BASE_LOG_RULES)(
+        None,
         "error",
         {"event": "failed", "exc_info": outer},
     )

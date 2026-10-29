@@ -3,14 +3,13 @@
 import json
 
 import pytest
-import structlog
 from sqlalchemy import insert
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.errors import DatabaseConstraintError
 from app.db.session import open_entry_managed_session
-from app.log_policy import BASE_LOG_RULES, PolicyLogger
+from app.log_policy import BASE_LOG_RULES
 from app.log_policy.processor import LogPolicyProcessor
 from app.models.category import Category
 
@@ -20,8 +19,8 @@ _ROW_VALUE = "synthetic-private-category-name"
 
 
 def _log_exception(exc: BaseException) -> dict:
-    return LogPolicyProcessor()(
-        PolicyLogger(BASE_LOG_RULES, structlog.ReturnLogger()),
+    return LogPolicyProcessor(BASE_LOG_RULES)(
+        None,
         "error",
         {"event": "database_operation_failed", "exc_info": exc},
     )

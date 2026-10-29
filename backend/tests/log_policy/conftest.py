@@ -7,36 +7,29 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Iterator
-from functools import partial
 
 import pytest
 import structlog
-from structlog.testing import LogCapture
+from structlog.typing import FilteringBoundLogger, Processor
 
-from app.log_policy import build_processors, create_policy_logger
+from app.log_policy import LogPolicyRules, build_processors
 
 pytestmark = pytest.mark.unit
 
 
 @pytest.fixture
-def configure_chain() -> Iterator[Callable[[], LogCapture]]:
-    """規則の登録を持たない実チェーンを構成し、捕捉した entries を返す。"""
-    original = structlog.get_config().copy()
+def chain_logger() -> Iterator[
+    Callable[[LogPolicyRules, Processor], FilteringBoundLogger]
+]:
+    """実チェーンの末尾に renderer を置いたロガーを、規則ごとに作る。"""
 
-    def _configure() -> LogCapture:
-        capture = LogCapture()
-        structlog.configure(
-            processors=build_processors(capture),
+    def _create(rules: LogPolicyRules, renderer: Processor) -> FilteringBoundLogger:
+        return structlog.wrap_logger(
+            structlog.ReturnLogger(),
+            processors=build_processors(rules, renderer),
             wrapper_class=structlog.make_filtering_bound_logger(0),
             context_class=dict,
-            logger_factory=partial(
-                create_policy_logger,
-                output_logger_factory=structlog.PrintLoggerFactory(),
-            ),
-            cache_logger_on_first_use=False,
-        )
-        return capture
+        ).bind()
 
-    yield _configure
+    yield _create
     structlog.contextvars.clear_contextvars()
-    structlog.configure(**original)

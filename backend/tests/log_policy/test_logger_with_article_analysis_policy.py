@@ -1,14 +1,13 @@
 """記事分析ポリシーのallow・denyが実際のJSON標準出力に適用される。"""
 
 import json
-from functools import partial
 
 import pytest
 import structlog
 
-from app.log_policy import build_processors, create_policy_logger, policy_logger
 from app.log_policy.base import BASE_ALLOW
 from app.log_policy.policies.article_analysis import ARTICLE_ANALYSIS_LOG_RULES
+from app.log_policy.runtime import create_policy_json_logger
 
 pytestmark = pytest.mark.unit
 
@@ -28,18 +27,10 @@ ARTICLE_FIELDS_TO_PROTECT = (
 
 
 @pytest.fixture
-def logger_with_article_analysis_policy(configure_chain):
-    """製品の記事分析ルール・factory・processor・JSON整形を標準出力へ接続する。"""
-    configure_chain()
+def logger_with_article_analysis_policy():
+    """製品の記事分析ルールを、本番と同じ組み立てで標準出力のJSONへ接続する。"""
     structlog.contextvars.clear_contextvars()
-    structlog.configure(
-        logger_factory=partial(
-            create_policy_logger,
-            output_logger_factory=structlog.WriteLoggerFactory(),
-        ),
-        processors=build_processors(structlog.processors.JSONRenderer()),
-    )
-    return policy_logger(
+    return create_policy_json_logger(
         "test.logger_with_article_analysis_policy", ARTICLE_ANALYSIS_LOG_RULES
     )
 

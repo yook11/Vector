@@ -7,7 +7,7 @@ import json
 import pytest
 import structlog
 
-from app.log_policy import LogPolicy, LogPolicyRules, PolicyLogger
+from app.log_policy import LogPolicy, LogPolicyRules
 from app.log_policy.processor import LogPolicyProcessor
 
 pytestmark = pytest.mark.unit
@@ -40,9 +40,7 @@ class TestUnsupportedValues:
             "event": "failed",
             "payload": {"object": Unsafe(), "bytes": _SECRET.encode()},
         }
-        output = LogPolicyProcessor()(
-            PolicyLogger(_RULES, structlog.ReturnLogger()), "error", event
-        )
+        output = LogPolicyProcessor(_RULES)(None, "error", event)
         rendered = renderer(None, "error", output)
         assert _SECRET not in rendered
         assert "[unsupported]" in rendered
@@ -55,8 +53,8 @@ class TestCyclicReferences:
         """循環は `[cycle]` にし、同じオブジェクトの安全な兄弟値は残す。"""
         payload = {"password": _SECRET, "attempt": 2}
         payload["cycle"] = payload
-        output = LogPolicyProcessor()(
-            PolicyLogger(_RULES, structlog.ReturnLogger()),
+        output = LogPolicyProcessor(_RULES)(
+            None,
             "info",
             {
                 "event": "failed",
@@ -69,8 +67,8 @@ class TestCyclicReferences:
     def test_shared_value_is_not_mistaken_for_cycle(self) -> None:
         """循環していない同一オブジェクトの参照はそれぞれ保護して出す。"""
         shared = {"attempt": 2, "password": _SECRET}
-        output = LogPolicyProcessor()(
-            PolicyLogger(_RULES, structlog.ReturnLogger()),
+        output = LogPolicyProcessor(_RULES)(
+            None,
             "info",
             {
                 "event": "failed",

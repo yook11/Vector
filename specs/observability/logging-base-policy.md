@@ -50,10 +50,10 @@ structlog の処理チェーンに共通の禁止規則がなく、秘匿は呼�
 - 継承はクラス継承ではなく、`LogPolicyRules.extend(*, allow, deny=frozenset(), mask=frozenset())` で新しい規則を作る操作で表す。直接生成時は基底allow・deny・maskを必ず含め、継承時は親のdeny・maskへそれぞれ追加分を足す。親の識別子を維持し、親の規則は変更しない。
 - `allow` は継承時に必ず明示し、親の目的別allowは自動追加しない。基底allowは常に自動追加する。`allow` と `deny` が重なっても構築時には拒否せず、実行時に `deny` を優先して、共通・親・子の禁止をallowで解除させない。実際のポリシーで重ならないことはテストで確認する。
 - `mask` は `allow`・`deny` と重複できるが、項目の採用・除外には影響しない。`deny` と重なる項目は先に除外されるため、`mask` の指定は働かない。
-- `LogPolicyRules.allow`・`deny`・`mask` は基底・継承分を含む正規化済みの確定集合として構築時に保持する。processorは登録表を持たず、`PolicyLogger.rules` に保持された完成済みルールを直接適用する。同じ識別子のlogger同士でも規則を上書きし合わない。
-- processorは確定したdenyをフィールド選別・ネスト内の除外へ、確定したmaskを通常値・例外・診断の文字列準備へ渡し、下流で再合成しない。`create_policy_logger` はルール省略時に `BASE_LOG_RULES` を使い、指定値が厳密に `LogPolicyRules` 型でなければ生成時に拒否する。アプリは全体設定を持たず、通常の `structlog.get_logger()` はlint（TID251）で禁止する。processorはログごとの型確認や基本ルールへの差し戻しを行わず、factory未接続などの処理失敗では既存の固定エラーを返す。
+- `LogPolicyRules.allow`・`deny`・`mask` は基底・継承分を含む正規化済みの確定集合として構築時に保持する。processorは登録表を持たず、生成時に受け取った完成済みルールを直接適用する。同じ識別子のlogger同士でも規則を上書きし合わない。
+- processorは確定したdenyをフィールド選別・ネスト内の除外へ、確定したmaskを通常値・例外・診断の文字列準備へ渡し、下流で再合成しない。`LogPolicyProcessor` は指定値が厳密に `LogPolicyRules` 型でなければ生成時に拒否する。アプリは全体設定を持たず、通常の `structlog.get_logger()` はlint（TID251）で禁止する。processorはログごとの型確認や基本ルールへの差し戻しを行わず、処理失敗では既存の固定エラーを返す。
 - deny・allow・mask はいずれもキー名の正規化後 (小文字・camelCase / PascalCase / 略語境界 / ハイフン → snake_case) の**完全一致**で判定する。部分一致や正規表現を使うと `completion_tokens` `rds_iam_auth_token_port` 等を巻き込み、例外リストが必要になる。基底に例外 (逃げ道) を置かないための条件である。
-- アプリのロガーは [runtime.py](../../backend/app/log_policy/runtime.py) の `create_policy_json_logger(name, rules)` で作り、`create_policy_logger`・`build_processors`・`ApplicationBoundLogger`・`JSONRenderer`・`PrintLoggerFactory` を明示して、ルールを属性に持つ出力先ロガーを生成する。`policy_logger(name, rules=BASE_LOG_RULES)` は全体設定を前提にした遅延版で、ログ基底のテストが実チェーンを構成して使う入口に限り、アプリからの利用はlintで禁止する。ルールは `event_dict` に入らず、ログ引数・bind・contextvarsから変更できない。`PolicyLogger` はルールの再代入を禁止し、出力処理を内包した出力先へ委譲する。基底ルールの `policy` は `None` とし、目的別の場合だけ `log_policy` に識別子を出力する。
+- アプリのロガーは [runtime.py](../../backend/app/log_policy/runtime.py) の `create_policy_json_logger(name, rules)` で作り、`build_processors`・`ApplicationBoundLogger`・`JSONRenderer`・`PrintLogger` を明示して、ルールを生成時に受け取ったprocessorをチェーンに置く。ルールは `event_dict` に入らず、ログ引数・bind・contextvarsから変更できない。processorはルールの再代入を禁止する。基底ルールの `policy` は `None` とし、目的別の場合だけ `log_policy` に識別子を出力する。
 - 明示禁止は IAM と同じ `deny` と呼ぶ (explicit deny は allow に常に優先する)。OpenTelemetry Collector の redaction processor は allow-list 非該当の削除を "redacted"、値の置換を "masked" と呼ぶため `redact` は使わない。Pydantic の `extra="forbid"` (未登録拒否に近い別概念) と混同しないよう `forbid` も使わない。
 - アプリログは Logfire から切り離す。Logfire は trace / span 専用とし、structlog のチェーンは本ポリシーが独自に構成して stdout JSON → CloudWatch へ出す。
 - 階層 (public / restricted) は出力先の軸であり本書では扱わない。アプリの stdout → CloudWatch は restricted 単一とする。
@@ -305,7 +305,6 @@ processorは各 `preparer.prepare_field_value(...)` の結果を格納した辞�
 - [backend/app/log_policy/value_preparation.py](../../backend/app/log_policy/value_preparation.py): 選別済みの値をログに使える状態へ準備する処理、構造検査とサニタイズ、共有予算
 - [backend/app/log_policy/bound_logger.py](../../backend/app/log_policy/bound_logger.py): `wrapper_class`に指定するINFO以上の共通ラッパー。通常のログメソッドからprocessor・整形・出力までの例外を捕捉し、再記録しない。`bind()`後も同じ保護を維持し、プロセス中断は抑止しない。位置引数の文字列展開は保護範囲外。検証は`test_bound_logger.py`に集約する
 - [backend/app/log_policy/processor.py](../../backend/app/log_policy/processor.py): 完成済みルールの受け取り、選別結果の値準備・格納、例外と診断の接続、固定の失敗イベント
-- [backend/app/log_policy/logger.py](../../backend/app/log_policy/logger.py): `PolicyLogger`、`create_policy_logger`、structlogの遅延生成を使うテスト用の `policy_logger`
 - [backend/app/log_policy/chain.py](../../backend/app/log_policy/chain.py): `build_processors`。各ロガーは [runtime.py](../../backend/app/log_policy/runtime.py) の `create_policy_json_logger` からこのチェーンを使う
 
 ## Done

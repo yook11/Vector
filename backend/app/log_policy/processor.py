@@ -1,7 +1,10 @@
 """完成済みルールで入力検査・deny除外・allow選別・ログ値の準備をつなぐ。"""
 
 from collections.abc import MutableMapping
+from dataclasses import dataclass, field
 from typing import Any
+
+from structlog.typing import WrappedLogger
 
 from app.log_policy.base import LogPolicyRules
 from app.log_policy.budget import LogBudgetExceeded, LogEventBudget, UncountedBudget
@@ -10,28 +13,31 @@ from app.log_policy.exceptions.conversion import convert_exception
 from app.log_policy.exceptions.extraction import extract_exception_fields
 from app.log_policy.exceptions.types import ExceptionConverter
 from app.log_policy.field_selection import LogFieldSelector
-from app.log_policy.logger import PolicyLogger
 from app.log_policy.value_preparation import LogValuePreparer
 
 
+# 生成後に規則を差し替えられないよう、属性の代入を禁止する。
+@dataclass(frozen=True)
 class LogPolicyProcessor:
     """各処理を順に適用し、失敗時も原文を出さない。"""
 
-    def __init__(
-        self,
-        *,
-        exception_converter: ExceptionConverter = convert_exception,
-    ) -> None:
-        self._exception_converter = exception_converter
+    rules: LogPolicyRules
+    exception_converter: ExceptionConverter = field(
+        default=convert_exception, kw_only=True
+    )
+
+    def __post_init__(self) -> None:
+        if type(self.rules) is not LogPolicyRules:
+            raise TypeError("rules must be LogPolicyRules")
 
     def __call__(
         self,
-        logger: PolicyLogger,
+        logger: WrappedLogger,
         method_name: str,
         event_dict: MutableMapping[str, Any],
     ) -> MutableMapping[str, Any]:
         try:
-            return self._process(event_dict, rules=logger.rules)
+            return self._process(event_dict, rules=self.rules)
         except Exception:
             return {"event": "log_policy_failed", "_policy_error": "processing_failed"}
 
@@ -65,7 +71,7 @@ class LogPolicyProcessor:
             # 同名の通常入力より、実際の例外から抽出した情報を優先する。
             exception_fields = extract_exception_fields(
                 event_dict.get("exc_info"),
-                exception_converter=self._exception_converter,
+                exception_converter=self.exception_converter,
             )
             if exception_fields is not None:
                 # 例外の出力の量は例外の変換の上限で決まるため、予算では数えない。

@@ -146,7 +146,7 @@ loggerの構築時に、コードが所有する完成済みルールを結び�
 
 内部URL・パラメーターパス・秘密値・認証ヘッダー・SDK応答全体を渡さない。HTTP・AWS SDK例外の専用変換は後続とし、この3イベントには生の例外文や`exc_info`を追加しない。SSMの取得失敗は既存どおり呼び出し元へ伝播させ、取得開始・成功・失敗のイベントを増やさない。通知の通常失敗の抑止、SSMの取得結果・先行例外保持、キャンセル伝播、通信設定・資源解放順序を維持する。
 
-[共通のJSONロガー構築口](../../backend/app/log_policy/runtime.py)は既存の`create_policy_logger`・`build_processors`・`ApplicationBoundLogger`・`JSONRenderer`・`PrintLoggerFactory`を明示し、書き込み時点の標準出力へ出す。INFO以上を出力し、グローバルstructlog設定に依存しない。記事分析ロガーもこの構築口を使う。通常の出力障害は共通ラッパーで捕捉し、通知・SSMに同じ保護を再実装しない。
+[共通のJSONロガー構築口](../../backend/app/log_policy/runtime.py)は既存の`build_processors`・`ApplicationBoundLogger`・`JSONRenderer`・`PrintLogger`を明示し、書き込み時点の標準出力へ出す。INFO以上を出力し、グローバルstructlog設定に依存しない。記事分析ロガーもこの構築口を使う。通常の出力障害は共通ラッパーで捕捉し、通知・SSMに同じ保護を再実装しない。
 
 記事分析の3工程は呼び出し境界で`service` / `stage` / 有効な`request_id` / 設定取得後の`environment`をcontextvarsへ束縛し、終了時に外側のcontextを復元する。各メッセージの処理中は`message_id`と、検証済みイベントの`event_id`・記事IDを追加し、そのメッセージの処理を終えると解除・復元する（2026-10-09）。SSMの`asyncio.to_thread`にも現在のcontextが伝わるため、AIキー取得時は呼び出し情報、通知キー取得時はそのメッセージの相関情報が残る。メッセージ情報を後のライフサイクルcleanupへ持ち越さない。
 

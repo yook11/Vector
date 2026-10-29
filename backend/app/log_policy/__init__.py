@@ -12,7 +12,6 @@ from app.log_policy.base import (
     LogPolicyRules,
 )
 from app.log_policy.chain import build_processors
-from app.log_policy.logger import PolicyLogger, create_policy_logger, policy_logger
 from app.log_policy.processor import LogPolicyProcessor
 
 __all__ = [
@@ -23,8 +22,5 @@ __all__ = [
     "LogPolicy",
     "LogPolicyProcessor",
     "LogPolicyRules",
-    "PolicyLogger",
     "build_processors",
-    "create_policy_logger",
-    "policy_logger",
 ]
