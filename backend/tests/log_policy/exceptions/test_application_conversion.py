@@ -432,8 +432,10 @@ def test_assessment_missing_curation_keeps_reason_and_code() -> None:
             {
                 "message": "記事が分析に必要な条件を満たしません",
                 "error_details": {
-                    "defects": "analyzable_article_body_missing,"
-                    "analyzable_article_published_at_missing"
+                    "defects": [
+                        "analyzable_article_body_missing",
+                        "analyzable_article_published_at_missing",
+                    ]
                 },
                 "cause_is_aggregated": False,
             },

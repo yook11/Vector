@@ -21,7 +21,7 @@ class ArticleBuildRejectedError(ApplicationError):
     def __init__(self, rejection: QualityTooLow) -> None:
         super().__init__(
             "記事が分析に必要な条件を満たしません",
-            details={"defects": ",".join(defect.value for defect in rejection.defects)},
+            details={"defects": [defect.value for defect in rejection.defects]},
         )
         self.rejection = rejection
 

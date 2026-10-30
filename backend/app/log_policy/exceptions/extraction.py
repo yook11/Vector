@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import math
 import sys
 from collections.abc import Mapping
 from dataclasses import dataclass, field
@@ -187,14 +188,19 @@ class _ExceptionConversion:
         return {key: self.take_detail_texts(value) for key, value in details.items()}
 
     def take_detail_texts(self, value: object) -> object:
-        """診断情報の構造を保ったまま、文字列の値だけを残りの文字数に収める。"""
+        """診断情報の構造を保ったまま、文字列を残りの文字数に収め、JSONに出せない値を[unsupported]にする。"""
         if isinstance(value, str):
             return self.take_text(value)
         if isinstance(value, Mapping):
             return {key: self.take_detail_texts(item) for key, item in value.items()}
         if isinstance(value, list | tuple):
             return [self.take_detail_texts(item) for item in value]
-        return value
+        if value is None or isinstance(value, int):
+            return value
+        if isinstance(value, float) and math.isfinite(value):
+            return value
+        # details の型は実行時に守られないため、外れた値はその位置だけ置き換える。
+        return "[unsupported]"
 
 
 def extract_exception_fields(

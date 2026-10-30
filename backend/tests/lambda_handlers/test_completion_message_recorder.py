@@ -192,8 +192,10 @@ def test_build_rejection_log_keeps_all_domain_defects(capsys) -> None:
                     ),
                     "error_message": "記事が分析に必要な条件を満たしません",
                     "error_details": {
-                        "defects": "analyzable_article_body_too_short,"
-                        "analyzable_article_published_at_missing"
+                        "defects": [
+                            "analyzable_article_body_too_short",
+                            "analyzable_article_published_at_missing",
+                        ]
                     },
                 },
             }
