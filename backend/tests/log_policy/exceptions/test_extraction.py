@@ -1003,3 +1003,20 @@ class TestDetailsLimit:
         )
 
         assert fields["error_details"] == "[limit]"
+
+
+class TestDetailsValues:
+    """error_detailsの値を、厳しいJSONに出せる形にそろえる。"""
+
+    def test_details_with_values_json_cannot_output_serialize_strictly(self) -> None:
+        """変換担当がbytesとNaNを返しても、抽出の出力は厳しいJSONに変換でき、bytesの中身を含まない。"""
+        details = {"payload": _SECRET.encode(), "ratio": float("nan")}
+        converter = Mock(
+            return_value=ConvertedException(message="failed", error_details=details)
+        )
+
+        fields = extraction.extract_exception_fields(
+            ValueError("failed"), exception_converter=converter
+        )
+
+        assert _SECRET not in json.dumps(fields, allow_nan=False)

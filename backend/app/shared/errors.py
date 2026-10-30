@@ -1,7 +1,8 @@
 """アプリケーションで定義した例外のメッセージと診断情報の共通契約。"""
 
-# 構造を持つ診断情報は、例外の種類ごとの変換と TypedDict で表す。
-type ApplicationErrorValue = str | int | float | bool | None
+# 入れ子の辞書を持つ診断情報は、例外の種類ごとの変換と TypedDict で表す。
+type ApplicationErrorScalar = str | int | float | bool | None
+type ApplicationErrorValue = ApplicationErrorScalar | list[ApplicationErrorScalar]
 
 
 class ApplicationError(Exception):
