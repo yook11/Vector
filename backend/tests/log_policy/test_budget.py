@@ -26,7 +26,7 @@ class TestItemAccounting:
     ) -> None:
         """まとめて計上する項目が上限を超える場合は途中まで加算しない。"""
         budget = LogEventBudget(log_item_count=MAX_ITEMS_PER_LOG_EVENT - 2)
-        with pytest.raises(LogBudgetExceeded, match="^value_count$"):
+        with pytest.raises(LogBudgetExceeded, match="^value_count_exceeded$"):
             budget.check_and_count_log_items(3)
         assert budget.log_item_count == MAX_ITEMS_PER_LOG_EVENT - 2
 
@@ -43,5 +43,5 @@ class TestTextAccounting:
     def test_text_budget_stops_on_shared_limit_exceeded(self) -> None:
         """合計文字数の超過はログ全体を中断する理由として通知する。"""
         budget = LogEventBudget(counted_text_chars=EVENT_TEXT_LIMIT)
-        with pytest.raises(LogBudgetExceeded, match="text_total"):
+        with pytest.raises(LogBudgetExceeded, match="^total_text_length_exceeded$"):
             budget.check_and_count_text_chars(1)
