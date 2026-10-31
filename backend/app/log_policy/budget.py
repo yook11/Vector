@@ -7,7 +7,7 @@ TEXT_LIMIT = 4000
 EVENT_TEXT_LIMIT = 16000
 MAX_ITEMS_PER_LOG_EVENT = 256
 
-BudgetLimitReason = Literal["value_count", "text_total"]
+BudgetLimitReason = Literal["value_count_exceeded", "total_text_length_exceeded"]
 
 
 class LogBudgetExceeded(Exception):
@@ -15,7 +15,7 @@ class LogBudgetExceeded(Exception):
 
     def __init__(self, reason: BudgetLimitReason) -> None:
         super().__init__(reason)
-        self.reason = reason
+        self.reason: BudgetLimitReason = reason
 
 
 @dataclass
@@ -28,14 +28,14 @@ class LogEventBudget:
     def check_and_count_log_items(self, additional_count: int) -> None:
         """追加項目が上限内に収まることを確認して計上し、超過時は中断する。"""
         if self.log_item_count + additional_count > MAX_ITEMS_PER_LOG_EVENT:
-            raise LogBudgetExceeded("value_count")
+            raise LogBudgetExceeded("value_count_exceeded")
         self.log_item_count += additional_count
 
     def check_and_count_text_chars(self, additional_chars: int) -> None:
         """保護対象の文字数を合算し、ログ一件の上限を超えたら中断する。"""
         self.counted_text_chars += additional_chars
         if self.counted_text_chars > EVENT_TEXT_LIMIT:
-            raise LogBudgetExceeded("text_total")
+            raise LogBudgetExceeded("total_text_length_exceeded")
 
 
 class UncountedBudget(LogEventBudget):

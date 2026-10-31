@@ -193,7 +193,7 @@ class TestPreparedFields:
         diagnostics.record_top_level_denied("token=first")
         diagnostics.record_top_level_denied("password=second")
         budget = LogEventBudget(log_item_count=MAX_ITEMS_PER_LOG_EVENT - 2)
-        with pytest.raises(LogBudgetExceeded, match="value_count"):
+        with pytest.raises(LogBudgetExceeded, match="^value_count_exceeded$"):
             diagnostics.prepare_log_fields(budget=budget)
         redact.assert_not_called()
 
@@ -211,6 +211,6 @@ class TestPreparedFields:
         budget = LogEventBudget(
             counted_text_chars=EVENT_TEXT_LIMIT - len("_denied_keystoken=first")
         )
-        with pytest.raises(LogBudgetExceeded, match="text_total"):
+        with pytest.raises(LogBudgetExceeded, match="^total_text_length_exceeded$"):
             diagnostics.prepare_log_fields(budget=budget)
         redact.assert_not_called()

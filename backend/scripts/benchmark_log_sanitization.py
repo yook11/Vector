@@ -192,7 +192,7 @@ def main() -> None:
                         "fields": fields,
                         "input_chars_excluding_top_level_keys": total,
                         "budget_limit_reason": prepared_event.get(
-                            "_policy_limit_reason"
+                            "_policy_replaced_reason"
                         ),
                         "payload_retained": "payload" in prepared_event,
                         "value_chars": sum(map(len, payload.values())),

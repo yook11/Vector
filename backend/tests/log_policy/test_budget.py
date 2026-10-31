@@ -13,35 +13,34 @@ pytestmark = pytest.mark.unit
 
 
 class TestItemAccounting:
-    """出力側で使う件数計上の境界と、超過時に部分加算しない契約。"""
+    """件数の上限ちょうどは計上し、超えたら理由付きで知らせる。"""
 
     def test_check_and_count_log_items_accepts_exact_shared_limit(self) -> None:
-        """複数項目の追加で共有上限ちょうどになった場合は計上できる。"""
-        budget = LogEventBudget(log_item_count=MAX_ITEMS_PER_LOG_EVENT - 3)
-        budget.check_and_count_log_items(3)
+        """1件足して共有上限ちょうどになる場合は計上できる。"""
+        budget = LogEventBudget(log_item_count=MAX_ITEMS_PER_LOG_EVENT - 1)
+        budget.check_and_count_log_items(1)
         assert budget.log_item_count == MAX_ITEMS_PER_LOG_EVENT
 
-    def test_check_and_count_log_items_rejects_batch_without_partial_count(
-        self,
-    ) -> None:
-        """まとめて計上する項目が上限を超える場合は途中まで加算しない。"""
-        budget = LogEventBudget(log_item_count=MAX_ITEMS_PER_LOG_EVENT - 2)
-        with pytest.raises(LogBudgetExceeded, match="^value_count$"):
-            budget.check_and_count_log_items(3)
-        assert budget.log_item_count == MAX_ITEMS_PER_LOG_EVENT - 2
+    def test_check_and_count_log_items_rejects_over_limit(self) -> None:
+        """上限ちょうどからさらに1件足すと value_count_exceeded で知らせる。"""
+        budget = LogEventBudget(log_item_count=MAX_ITEMS_PER_LOG_EVENT)
+        with pytest.raises(LogBudgetExceeded) as exc_info:
+            budget.check_and_count_log_items(1)
+        assert exc_info.value.reason == "value_count_exceeded"
 
 
 class TestTextAccounting:
-    """出力側へ文字数予算の超過を通知する契約。"""
+    """文字数の上限ちょうどは計上し、超えたら理由付きで知らせる。"""
 
     def test_text_budget_accepts_exact_shared_limit(self) -> None:
-        """合計文字数が上限ちょうどなら計上して継続する。"""
+        """足して合計が共有上限ちょうどになる場合は計上できる。"""
         budget = LogEventBudget(counted_text_chars=EVENT_TEXT_LIMIT - 3)
         budget.check_and_count_text_chars(3)
         assert budget.counted_text_chars == EVENT_TEXT_LIMIT
 
     def test_text_budget_stops_on_shared_limit_exceeded(self) -> None:
-        """合計文字数の超過はログ全体を中断する理由として通知する。"""
+        """上限ちょうどからさらに1文字足すと total_text_length_exceeded で知らせる。"""
         budget = LogEventBudget(counted_text_chars=EVENT_TEXT_LIMIT)
-        with pytest.raises(LogBudgetExceeded, match="text_total"):
+        with pytest.raises(LogBudgetExceeded) as exc_info:
             budget.check_and_count_text_chars(1)
+        assert exc_info.value.reason == "total_text_length_exceeded"

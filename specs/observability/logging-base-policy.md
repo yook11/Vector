@@ -51,9 +51,9 @@ structlog の処理チェーンに共通の禁止規則がなく、秘匿は呼�
 - `allow` は継承時に必ず明示し、親の目的別allowは自動追加しない。基底allowは常に自動追加する。`allow` と `deny` が重なっても構築時には拒否せず、実行時に `deny` を優先して、共通・親・子の禁止をallowで解除させない。実際のポリシーで重ならないことはテストで確認する。
 - `mask` は `allow`・`deny` と重複できるが、項目の採用・除外には影響しない。`deny` と重なる項目は先に除外されるため、`mask` の指定は働かない。
 - `LogPolicyRules.allow`・`deny`・`mask` は基底・継承分を含む正規化済みの確定集合として構築時に保持する。processorは登録表を持たず、生成時に受け取った完成済みルールを直接適用する。同じ識別子のlogger同士でも規則を上書きし合わない。
-- processorは確定したdenyをフィールド選別・ネスト内の除外へ、確定したmaskを通常値・例外・診断の文字列準備へ渡し、下流で再合成しない。`LogPolicyProcessor` は指定値が厳密に `LogPolicyRules` 型でなければ生成時に拒否する。アプリは全体設定を持たず、通常の `structlog.get_logger()` はlint（TID251）で禁止する。processorはログごとの型確認や基本ルールへの差し戻しを行わず、処理失敗では既存の固定エラーを返す。
+- processorは確定したdenyをフィールド選別・ネスト内の除外へ、確定したmaskを通常値・例外・診断の文字列準備へ渡し、下流で再合成しない。`LogPolicyProcessor` は指定値が厳密に `LogPolicyRules` 型でなければ生成時に拒否する。アプリは全体設定を持たず、通常の `structlog.get_logger()` はlint（TID251）で禁止する。processorはログごとの型確認や基本ルールへの差し戻しを行わず、処理失敗ではログ全体を置き換える。
 - deny・allow・mask はいずれもキー名の正規化後 (小文字・camelCase / PascalCase / 略語境界 / ハイフン → snake_case) の**完全一致**で判定する。部分一致や正規表現を使うと `completion_tokens` `rds_iam_auth_token_port` 等を巻き込み、例外リストが必要になる。基底に例外 (逃げ道) を置かないための条件である。
-- アプリのロガーは [runtime.py](../../backend/app/log_policy/runtime.py) の `create_policy_json_logger(name, rules)` で作り、`build_processors`・`ApplicationBoundLogger`・`JSONRenderer`・`PrintLogger` を明示して、ルールを生成時に受け取ったprocessorをチェーンに置く。ルールは `event_dict` に入らず、ログ引数・bind・contextvarsから変更できない。processorはルールの再代入を禁止する。基底ルールの `policy` は `None` とし、目的別の場合だけ `log_policy` に識別子を出力する。
+- アプリのロガーは [runtime.py](../../backend/app/log_policy/runtime.py) の `create_policy_json_logger(name, rules)` で作り、`build_processors`・`ApplicationBoundLogger`・`render_policy_json`・`PrintLogger` を明示して、ルールを生成時に受け取ったprocessorをチェーンに置く。ルールは `event_dict` に入らず、ログ引数・bind・contextvarsから変更できない。processorはルールの再代入を禁止する。基底ルールの `policy` は `None` とし、目的別の場合だけ `log_policy` に識別子を出力する。
 - 明示禁止は IAM と同じ `deny` と呼ぶ (explicit deny は allow に常に優先する)。OpenTelemetry Collector の redaction processor は allow-list 非該当の削除を "redacted"、値の置換を "masked" と呼ぶため `redact` は使わない。Pydantic の `extra="forbid"` (未登録拒否に近い別概念) と混同しないよう `forbid` も使わない。
 - アプリログは Logfire から切り離す。Logfire は trace / span 専用とし、structlog のチェーンは本ポリシーが独自に構成して stdout JSON → CloudWatch へ出す。
 - 階層 (public / restricted) は出力先の軸であり本書では扱わない。アプリの stdout → CloudWatch は restricted 単一とする。
@@ -186,7 +186,7 @@ DB層はアプリ用例外への変換と`raise ... from exc`による原因の�
 - `stack` / `stack_info` / `exception` / `_record` / `_from_structlog` / `_log_policy_rules` / `exc_info` は renderer へ転送しない。スタック調査には `exc_info` から抽出した frame metadata を使う。
 - 出力値は組み込みの JSON 相当型に限定する。bytes / set / 独自オブジェクト / 組み込み型の subclass は固定マーカーにし、`repr` / `__structlog__` 等を呼ばない。
 - 単一文字列4000文字、イベント内合計16000文字、走査256件、通常入力のネスト深さ10、抽出した例外項目のネスト深さ19までとする。深さ上限の超過は、その位置の値だけを `[limit]` に置換する。循環参照と非有限浮動小数はそれぞれ `[cycle]` / `[non-finite]` とし、共有参照は循環扱いしない。ネストした辞書に非文字列キーがあれば、その辞書全体を `[non-string-key]` にし値は見ない。
-- 例外の `__str__` が失敗しても型と frame を残し、message は固定文にする。processor 自体の失敗は入力を含まない `log_policy_failed` に置き換え、業務側へ例外を伝播させない。原文 fallback や保護処理からの再帰ログはしない。
+- 例外の `__str__` が失敗しても型と frame を残し、message は固定文にする。processor 自体の失敗（理由 `processing_failed`）と、renderer が厳しい JSON にできないログ（理由 `json_serialization_failed`）は、ログ全体を `log_policy_replaced` に置き換え、業務側へ例外を伝播させない。置き換えには、チェーンの前段が入れる `level`・`timestamp` と、`log_policy`、理由の `_policy_replaced_reason` だけを残す。原文 fallback や保護処理からの再帰ログはしない。
 - ネスト内の未登録キーの allow 制御、自由文中の未知の秘密・本文の判別は別の保証であり、共通 deny の完全一致検査だけでは保証しない。
 
 #### 入力上限と置換単位
@@ -196,8 +196,8 @@ DB層はアプリ用例外への変換と`raise ... from exc`による原因の�
 | 制約 | 上限 | 超過時 |
 | --- | ---: | --- |
 | サニタイズ前の単一文字列・キー名 | 4000文字 | 文字列はその値だけを `[limit]` にする。キー名ならその項目を除外し、診断へ記録する。 |
-| イベント内の保護対象文字数合計 | 16000文字 | ログ全体を共有予算超過の固定出力へ置換する（理由 `text_total`）。 |
-| イベント内の走査数 | 256件 | ログ全体を共有予算超過の固定出力へ置換し、走査を止める（理由 `value_count`）。 |
+| イベント内の保護対象文字数合計 | 16000文字 | ログ全体を共有予算超過の固定出力へ置換する（理由 `total_text_length_exceeded`）。 |
+| イベント内の走査数 | 256件 | ログ全体を共有予算超過の固定出力へ置換し、走査を止める（理由 `value_count_exceeded`）。 |
 | 通常入力のネストの深さ | 10 | 超過した位置の値だけを `[limit]` にする。 |
 | 抽出した例外項目のネストの深さ | 19 | 超過した位置の値だけを `[limit]` にし、型検査・サニタイズ・マスクへ進まない。 |
 | 例外frame数 | 50 | `frames` 全体を `[limit]` にし、末尾への切り詰めや残りの走査をしない。 |

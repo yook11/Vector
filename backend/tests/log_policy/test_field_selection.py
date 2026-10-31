@@ -193,4 +193,4 @@ def test_item_overflow_stops_before_reading_next_field() -> None:
     )
     with pytest.raises(LogBudgetExceeded) as exc_info:
         selector.select_fields(BoundedInput())
-    assert exc_info.value.reason == "value_count"
+    assert exc_info.value.reason == "value_count_exceeded"

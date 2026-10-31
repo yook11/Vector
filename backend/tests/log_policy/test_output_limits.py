@@ -155,9 +155,9 @@ class TestWholeLogReplacementByTextBudget:
         rules = LogPolicyRules(LogPolicy.PROCESS_RUNTIME, frozenset(fields))
         output = LogPolicyProcessor(rules)(None, "info", {**fields})
         assert output == {
-            "event": "log_policy_budget_exceeded",
-            "_policy_limited": True,
-            "_policy_limit_reason": "text_total",
+            "event": "log_policy_replaced",
+            "log_policy": "process_runtime",
+            "_policy_replaced_reason": "total_text_length_exceeded",
         }
 
     def test_nested_text_at_budget_preserves_log(self) -> None:
@@ -189,9 +189,8 @@ class TestWholeLogReplacementByTextBudget:
             {"event": payload},
         )
         assert output == {
-            "event": "log_policy_budget_exceeded",
-            "_policy_limited": True,
-            "_policy_limit_reason": "text_total",
+            "event": "log_policy_replaced",
+            "_policy_replaced_reason": "total_text_length_exceeded",
         }
 
     def test_nested_keys_at_text_budget_preserve_log(self) -> None:
@@ -215,9 +214,8 @@ class TestWholeLogReplacementByTextBudget:
             {"event": payload},
         )
         assert output == {
-            "event": "log_policy_budget_exceeded",
-            "_policy_limited": True,
-            "_policy_limit_reason": "text_total",
+            "event": "log_policy_replaced",
+            "_policy_replaced_reason": "total_text_length_exceeded",
         }
 
     def test_denied_long_value_does_not_consume_event_text(self) -> None:
@@ -241,9 +239,9 @@ class TestWholeLogReplacementByTextBudget:
             {"event": payload, "z": 1},
         )
         assert output == {
-            "event": "log_policy_budget_exceeded",
-            "_policy_limited": True,
-            "_policy_limit_reason": "text_total",
+            "event": "log_policy_replaced",
+            "log_policy": "process_runtime",
+            "_policy_replaced_reason": "total_text_length_exceeded",
         }
 
     def test_denied_names_share_event_text_budget(self) -> None:
@@ -258,9 +256,9 @@ class TestWholeLogReplacementByTextBudget:
             },
         )
         assert output == {
-            "event": "log_policy_budget_exceeded",
-            "_policy_limited": True,
-            "_policy_limit_reason": "text_total",
+            "event": "log_policy_replaced",
+            "log_policy": "process_runtime",
+            "_policy_replaced_reason": "total_text_length_exceeded",
         }
 
 
@@ -286,9 +284,8 @@ class TestWholeLogReplacementByItemBudget:
             {"event": {"password": "synthetic", **kept}},
         )
         assert output == {
-            "event": "log_policy_budget_exceeded",
-            "_policy_limited": True,
-            "_policy_limit_reason": "value_count",
+            "event": "log_policy_replaced",
+            "_policy_replaced_reason": "value_count_exceeded",
         }
 
     def test_mixed_containers_at_item_budget_preserve_log(self) -> None:
@@ -302,9 +299,8 @@ class TestWholeLogReplacementByItemBudget:
         fields = {"event": {"items": list(range(MAX_ITEMS_PER_LOG_EVENT - 1))}}
         output = LogPolicyProcessor(BASE_LOG_RULES)(None, "info", fields)
         assert output == {
-            "event": "log_policy_budget_exceeded",
-            "_policy_limited": True,
-            "_policy_limit_reason": "value_count",
+            "event": "log_policy_replaced",
+            "_policy_replaced_reason": "value_count_exceeded",
         }
 
     def test_mixed_containers_across_fields_at_item_budget_preserve_log(self) -> None:
@@ -326,9 +322,9 @@ class TestWholeLogReplacementByItemBudget:
         rules = LogPolicyRules(LogPolicy.PROCESS_RUNTIME, frozenset({"payload"}))
         output = LogPolicyProcessor(rules)(None, "info", fields)
         assert output == {
-            "event": "log_policy_budget_exceeded",
-            "_policy_limited": True,
-            "_policy_limit_reason": "value_count",
+            "event": "log_policy_replaced",
+            "log_policy": "process_runtime",
+            "_policy_replaced_reason": "value_count_exceeded",
         }
 
     def test_top_level_count_at_limit_is_not_counted_twice(self) -> None:
@@ -345,9 +341,9 @@ class TestWholeLogReplacementByItemBudget:
         rules = LogPolicyRules(LogPolicy.PROCESS_RUNTIME, frozenset(fields))
         output = LogPolicyProcessor(rules)(None, "info", fields)
         assert output == {
-            "event": "log_policy_budget_exceeded",
-            "_policy_limited": True,
-            "_policy_limit_reason": "value_count",
+            "event": "log_policy_replaced",
+            "log_policy": "process_runtime",
+            "_policy_replaced_reason": "value_count_exceeded",
         }
 
     def test_container_counts_towards_value_limit(self) -> None:
@@ -376,9 +372,8 @@ class TestWholeLogReplacementByItemBudget:
             {"event": payload},
         )
         assert output == {
-            "event": "log_policy_budget_exceeded",
-            "_policy_limited": True,
-            "_policy_limit_reason": "value_count",
+            "event": "log_policy_replaced",
+            "_policy_replaced_reason": "value_count_exceeded",
         }
 
     def test_mapping_at_item_budget_preserves_log(self) -> None:
@@ -407,9 +402,9 @@ class TestWholeLogReplacementByItemBudget:
             },
         )
         assert output == {
-            "event": "log_policy_budget_exceeded",
-            "_policy_limited": True,
-            "_policy_limit_reason": "value_count",
+            "event": "log_policy_replaced",
+            "log_policy": "process_runtime",
+            "_policy_replaced_reason": "value_count_exceeded",
         }
 
     def test_budget_overflow_in_denied_key_diagnostics_replaces_whole_log(self) -> None:
@@ -423,9 +418,8 @@ class TestWholeLogReplacementByItemBudget:
             },
         )
         assert output == {
-            "event": "log_policy_budget_exceeded",
-            "_policy_limited": True,
-            "_policy_limit_reason": "value_count",
+            "event": "log_policy_replaced",
+            "_policy_replaced_reason": "value_count_exceeded",
         }
 
 
@@ -446,9 +440,9 @@ class TestBudgetOverflowReason:
             },
         )
         assert prepared_event == {
-            "event": "log_policy_budget_exceeded",
-            "_policy_limited": True,
-            "_policy_limit_reason": "value_count",
+            "event": "log_policy_replaced",
+            "log_policy": "process_runtime",
+            "_policy_replaced_reason": "value_count_exceeded",
         }
 
 
