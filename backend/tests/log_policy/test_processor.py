@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from datetime import datetime
 from typing import Any
 
 import pytest
@@ -1054,9 +1055,8 @@ class TestProcessingOrder:
             BoundedInput(),
         )
         assert output == {
-            "event": "log_policy_budget_exceeded",
-            "_policy_limited": True,
-            "_policy_limit_reason": "value_count",
+            "event": "log_policy_replaced",
+            "_policy_replaced_reason": "value_count_exceeded",
         }
 
     def test_nested_budget_overflow_skips_later_field_values(self, monkeypatch) -> None:
@@ -1078,9 +1078,9 @@ class TestProcessingOrder:
         )
         assert prepared_field_names == ["payload"]
         assert prepared_event == {
-            "event": "log_policy_budget_exceeded",
-            "_policy_limited": True,
-            "_policy_limit_reason": "value_count",
+            "event": "log_policy_replaced",
+            "log_policy": "pipeline_control",
+            "_policy_replaced_reason": "value_count_exceeded",
         }
 
 
@@ -1103,8 +1103,8 @@ class TestProcessingFailures:
             {"event": "completed", "password": _SECRET},
         )
         assert prepared_event == {
-            "event": "log_policy_failed",
-            "_policy_error": "processing_failed",
+            "event": "log_policy_replaced",
+            "_policy_replaced_reason": "processing_failed",
         }
 
     def test_value_leak_prevention_failure_returns_only_fixed_metadata(
@@ -1122,8 +1122,8 @@ class TestProcessingFailures:
             {"event": _SECRET},
         )
         assert output == {
-            "event": "log_policy_failed",
-            "_policy_error": "processing_failed",
+            "event": "log_policy_replaced",
+            "_policy_replaced_reason": "processing_failed",
         }
 
     def test_processing_failure_emits_one_fixed_event_without_reentry(
@@ -1145,10 +1145,14 @@ class TestProcessingFailures:
         monkeypatch.setattr(LogPolicyProcessor, "__call__", counted)
         capture = LogCapture()
         chain_logger(BASE_LOG_RULES, capture).error(_SECRET)
-        assert [dict(entry) for entry in capture.entries] == [
+        entries = [dict(entry) for entry in capture.entries]
+        # 出力時刻は実行ごとに変わるため、形式を確認して本文の期待値から分ける。
+        assert datetime.fromisoformat(entries[0].pop("timestamp")).tzinfo is not None
+        assert entries == [
             {
-                "event": "log_policy_failed",
-                "_policy_error": "processing_failed",
+                "event": "log_policy_replaced",
+                "level": "error",
+                "_policy_replaced_reason": "processing_failed",
                 "log_level": "error",
             }
         ]

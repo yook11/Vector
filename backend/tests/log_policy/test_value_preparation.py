@@ -227,7 +227,7 @@ class TestInspectionOrder:
         preparer = LogValuePreparer(
             BASE_DENY, budget=LogEventBudget(log_item_count=MAX_ITEMS_PER_LOG_EVENT - 2)
         )
-        with pytest.raises(LogBudgetExceeded, match="^value_count$"):
+        with pytest.raises(LogBudgetExceeded, match="^value_count_exceeded$"):
             field_value = {"password": "synthetic", "token": "synthetic", "count": 1}
             preparer.budget.check_and_count_log_items(1)
             preparer.prepare_field_value(field_value)
@@ -276,7 +276,7 @@ class TestInspectionOrder:
             return original(value, depth, **kwargs)
 
         monkeypatch.setattr(preparer, "inspect_value", inspect)
-        with pytest.raises(LogBudgetExceeded, match="^value_count$"):
+        with pytest.raises(LogBudgetExceeded, match="^value_count_exceeded$"):
             preparer.inspect_sequence(InputSequence(), depth=0)
         assert preparer.budget.log_item_count == MAX_ITEMS_PER_LOG_EVENT
         assert inspected_values == [1]
@@ -303,7 +303,7 @@ class TestInspectionOrder:
             return original(value, depth, **kwargs)
 
         monkeypatch.setattr(preparer, "inspect_value", inspect)
-        with pytest.raises(LogBudgetExceeded, match="^value_count$"):
+        with pytest.raises(LogBudgetExceeded, match="^value_count_exceeded$"):
             preparer.inspect_dictionary(InputMapping(), depth=0)
         assert preparer.budget.log_item_count == MAX_ITEMS_PER_LOG_EVENT
         assert inspected_values == [1]
@@ -446,7 +446,7 @@ class TestSharedBudget:
         preparer = LogValuePreparer(BASE_DENY, budget=budget)
 
         with patch("app.log_policy.value_preparation.prevent_leaks") as redact:
-            with pytest.raises(LogBudgetExceeded, match="^value_count$"):
+            with pytest.raises(LogBudgetExceeded, match="^value_count_exceeded$"):
                 preparer.prepare_field_value(["token=first", "password=second"])
 
         redact.assert_not_called()
@@ -476,7 +476,7 @@ class TestSharedBudget:
         preparer = LogValuePreparer(BASE_DENY, budget=budget)
 
         with patch("app.log_policy.value_preparation.prevent_leaks") as redact:
-            with pytest.raises(LogBudgetExceeded, match="^text_total$"):
+            with pytest.raises(LogBudgetExceeded, match="^total_text_length_exceeded$"):
                 preparer.prepare_field_value(["token=first", "password=second"])
 
         redact.assert_not_called()

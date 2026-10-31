@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from datetime import datetime
 
 import pytest
 import structlog
@@ -14,7 +15,7 @@ from app.log_policy import (
     LogPolicyRules,
 )
 from app.log_policy.budget import MAX_ITEMS_PER_LOG_EVENT, TEXT_LIMIT
-from app.log_policy.runtime import create_policy_json_logger
+from app.log_policy.runtime import create_policy_json_logger, render_policy_json
 
 pytestmark = pytest.mark.unit
 
@@ -143,6 +144,17 @@ def test_production_logger_outputs_redacted_json(capsys) -> None:
     assert _SECRET not in rendered
 
 
+@pytest.mark.parametrize(
+    "value", [_SECRET.encode(), float("nan")], ids=["bytes", "nan"]
+)
+def test_production_renderer_drops_value_it_cannot_serialize(value: object) -> None:
+    """JSONにできない値を受けても、本番のrendererは例外を投げず、その値を含まないJSONの1行を返す。"""
+    rendered = render_policy_json(
+        None, "info", {"event": "completed", "payload": value}
+    )
+    assert "payload" not in json.loads(rendered)
+
+
 def test_zero_value_is_preserved_in_json_output(chain_logger) -> None:
     """許可された項目の0は未取得として除外せず、JSONへ数値のまま出力する。"""
     logger = chain_logger(_RULES, structlog.processors.JSONRenderer())
@@ -201,12 +213,15 @@ def test_budget_exceeded_fixed_output_is_renderable(chain_logger, renderer) -> N
         payload=["synthetic-private-value"] * MAX_ITEMS_PER_LOG_EVENT,
     )
     output = capture.entries[0]
+    # 出力時刻は実行ごとに変わるため、形式を確認して本文の期待値から分ける。
+    assert datetime.fromisoformat(output.pop("timestamp")).tzinfo is not None
     assert output == {
-        "event": "log_policy_budget_exceeded",
-        "_policy_limited": True,
-        "_policy_limit_reason": "value_count",
+        "event": "log_policy_replaced",
+        "level": "info",
+        "log_policy": "process_runtime",
+        "_policy_replaced_reason": "value_count_exceeded",
         "log_level": "info",
     }
     rendered = renderer(None, "info", dict(output))
     assert "synthetic-private" not in rendered
-    assert "log_policy_budget_exceeded" in rendered
+    assert "log_policy_replaced" in rendered
