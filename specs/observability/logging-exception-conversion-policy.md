@@ -90,7 +90,8 @@ Implementation: 実装済み。
 ## error_details
 
 - 例外の種類ごとに型で形を決める。SQL例外は `PostgresErrorDetails`、Gemini SDK例外は `GeminiErrorDetails`、イベントの検証エラーは `EventValidationDetails`、アプリの例外は `ApplicationError.details` とする。
-- `ApplicationErrorValue` を `str | int | float | bool | None` に絞る。構造を持つ診断情報が必要な例外には、専用の変換と `TypedDict` を用意する。
+- `ApplicationErrorValue` を `str | int | float | bool | None` と、その list に絞る。入れ子の辞書を持つ診断情報が必要な例外には、専用の変換と `TypedDict` を用意する。
+- `error_details` の値のうち、文字列・整数・有限の小数・真偽値・None・list・辞書のどれでもないものは、例外の変換がその位置を `"[unsupported]"` にする。
 
 ## 上限
 
@@ -156,7 +157,7 @@ Implementation: 実装済み。
 - 例外の変換が本書の上限（件数8・frame 数の合計64・1つの文字列4000文字・文字数の合計16000文字・`error_details` の項目数の合計32）を持ち、`CAUSE_DEPTH_LIMIT` と `FRAME_LIMIT` がなくなっている。
 - `depth_limit` 引数と `EXCEPTION_DEPTH_LIMIT` がなくなり、深さの上限が10に統一されている。
 - 例外の出力が予算で数えられず、通常の項目の予算に影響しない。
-- `ApplicationErrorValue` が平らな値に絞られ、診断情報を作る側がその型に沿っている。
+- `ApplicationErrorValue` が平らな値とその list に絞られ、診断情報を作る側がその型に沿っている。
 - 次をテストで確認している。
   - 例外の変換の上限いっぱいの出力は、値の検査を通っても置き換えられない。
   - frame 数の合計の上限いっぱいの連鎖でも、通常の項目を含むログ全体が置き換わらない。
