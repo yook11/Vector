@@ -1,4 +1,4 @@
-"""ログ値と診断が共有するログ一件の件数・文字数の上限を管理する。"""
+"""ログ一件の件数・文字数の上限を管理する。"""
 
 from dataclasses import dataclass
 from typing import Literal
@@ -20,7 +20,7 @@ class LogBudgetExceeded(Exception):
 
 @dataclass
 class LogEventBudget:
-    """呼び出し側の通常項目と診断で使う予算を一か所に保持する。"""
+    """トップレベルの選別と通常の項目の値で使う予算を一か所に保持する。"""
 
     log_item_count: int = 0
     counted_text_chars: int = 0
@@ -36,13 +36,3 @@ class LogEventBudget:
         self.counted_text_chars += additional_chars
         if self.counted_text_chars > EVENT_TEXT_LIMIT:
             raise LogBudgetExceeded("total_text_length_exceeded")
-
-
-class UncountedBudget(LogEventBudget):
-    """例外の出力のように量が上流の上限で決まっている値に使い、件数と文字数を数えない。"""
-
-    def check_and_count_log_items(self, additional_count: int) -> None:
-        pass
-
-    def check_and_count_text_chars(self, additional_chars: int) -> None:
-        pass

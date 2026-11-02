@@ -60,7 +60,7 @@ def test_application_error_subclass_keeps_message_and_details() -> None:
 
     converted_error = convert_exception(error)
 
-    assert converted_error.message == "処理を実行できません"
+    assert converted_error.error_message == "処理を実行できません"
     assert converted_error.error_details == {"reason": "missing_required_field"}
 
 
@@ -85,7 +85,7 @@ def test_analyzable_event_keeps_reason_and_issues() -> None:
     result = convert_exception(exc)
 
     assert asdict(result) == {
-        "message": "Validation failed: invalid_payload",
+        "error_message": "Validation failed: invalid_payload",
         "error_details": {
             "kind": "application_validation",
             "reason": "invalid_payload",
@@ -101,7 +101,7 @@ def test_analyzable_event_keeps_reason_and_issues() -> None:
                 },
             ],
         },
-        "cause_is_aggregated": False,
+        "omit_inner_exceptions": False,
     }
 
 
@@ -126,7 +126,7 @@ def test_incomplete_article_event_keeps_reason_and_issues() -> None:
     result = convert_exception(exc)
 
     assert asdict(result) == {
-        "message": "Validation failed: invalid_payload",
+        "error_message": "Validation failed: invalid_payload",
         "error_details": {
             "kind": "application_validation",
             "reason": "invalid_payload",
@@ -138,7 +138,7 @@ def test_incomplete_article_event_keeps_reason_and_issues() -> None:
                 },
             ],
         },
-        "cause_is_aggregated": False,
+        "omit_inner_exceptions": False,
     }
 
 
@@ -163,7 +163,7 @@ def test_curated_event_keeps_reason_and_issues() -> None:
     result = convert_exception(exc)
 
     assert asdict(result) == {
-        "message": "Validation failed: invalid_payload",
+        "error_message": "Validation failed: invalid_payload",
         "error_details": {
             "kind": "application_validation",
             "reason": "invalid_payload",
@@ -175,7 +175,7 @@ def test_curated_event_keeps_reason_and_issues() -> None:
                 },
             ],
         },
-        "cause_is_aggregated": False,
+        "omit_inner_exceptions": False,
     }
 
 
@@ -200,7 +200,7 @@ def test_assessed_event_keeps_reason_and_issues() -> None:
     result = convert_exception(exc)
 
     assert asdict(result) == {
-        "message": "Validation failed: unsupported_schema_version",
+        "error_message": "Validation failed: unsupported_schema_version",
         "error_details": {
             "kind": "application_validation",
             "reason": "unsupported_schema_version",
@@ -212,7 +212,7 @@ def test_assessed_event_keeps_reason_and_issues() -> None:
                 },
             ],
         },
-        "cause_is_aggregated": False,
+        "omit_inner_exceptions": False,
     }
 
 
@@ -227,9 +227,9 @@ def test_unknown_exception_does_not_read_invalid_attribute() -> None:
     result = convert_exception(UnknownError("operation failed"))
 
     assert asdict(result) == {
-        "message": "operation failed",
+        "error_message": "operation failed",
         "error_details": None,
-        "cause_is_aggregated": False,
+        "omit_inner_exceptions": False,
     }
 
 
@@ -245,9 +245,9 @@ def test_raw_validation_error_uses_existing_protected_conversion() -> None:
     result = convert_exception(caught.value)
 
     assert asdict(result) == {
-        "message": "Validation failed (1 errors): int_parsing",
+        "error_message": "Validation failed (1 errors): int_parsing",
         "error_details": None,
-        "cause_is_aggregated": False,
+        "omit_inner_exceptions": False,
     }
 
 
@@ -264,9 +264,9 @@ def test_failed_diagnostic_access_does_not_stringify_exception() -> None:
     result = convert_exception(exc)
 
     assert asdict(result) == {
-        "message": "[exception message unavailable]",
+        "error_message": "[exception message unavailable]",
         "error_details": None,
-        "cause_is_aggregated": False,
+        "omit_inner_exceptions": False,
     }
 
 
@@ -283,9 +283,9 @@ def test_invalid_issue_does_not_return_partial_diagnostics() -> None:
     result = convert_exception(exc)
 
     assert asdict(result) == {
-        "message": "[exception message unavailable]",
+        "error_message": "[exception message unavailable]",
         "error_details": None,
-        "cause_is_aggregated": False,
+        "omit_inner_exceptions": False,
     }
 
 
@@ -303,7 +303,7 @@ def test_provider_error_keeps_message_code_and_reason() -> None:
 
     converted = convert_exception(error)
 
-    assert converted.message == "request failed"
+    assert converted.error_message == "request failed"
     assert converted.error_details == {
         "code": "ai_provider_transport_error",
         "reason": "timeout",
@@ -322,7 +322,7 @@ def test_provider_error_without_code_does_not_invent_code() -> None:
         )
     )
 
-    assert converted.message == "unclassified"
+    assert converted.error_message == "unclassified"
     assert converted.error_details == {"reason": "network_io"}
 
 
@@ -354,7 +354,7 @@ def test_assessment_response_error_keeps_specific_violation(
 
     converted = convert_exception(error)
 
-    assert converted.message == expected_message
+    assert converted.error_message == expected_message
     assert converted.error_details == {
         "reason": "response_invalid",
         "code": expected_code,
@@ -365,7 +365,7 @@ def test_assessment_missing_curation_keeps_reason_and_code() -> None:
     """Curation欠損も他のAssessment例外と同じ診断形式へ写す。"""
     converted = convert_exception(AssessmentCurationMissingError())
 
-    assert converted.message == "判定対象のCurationが存在しません"
+    assert converted.error_message == "判定対象のCurationが存在しません"
     assert converted.error_details == {
         "reason": "curation_missing",
         "code": "assessment_curation_missing",
@@ -384,13 +384,13 @@ def test_assessment_missing_curation_keeps_reason_and_code() -> None:
                 )
             ),
             {
-                "message": "HTTP通信で応答を受け取れませんでした",
+                "error_message": "HTTP通信で応答を受け取れませんでした",
                 "error_details": {
                     "stage": "connect",
                     "reason": "proxy",
                     "proxy_status": 407,
                 },
-                "cause_is_aggregated": False,
+                "omit_inner_exceptions": False,
             },
             id="http_transport_error",
         ),
@@ -401,9 +401,9 @@ def test_assessment_missing_curation_keeps_reason_and_code() -> None:
                 retry_after="120",
             ),
             {
-                "message": "HTTPの非成功応答を受け取りました",
+                "error_message": "HTTPの非成功応答を受け取りました",
                 "error_details": {"status_code": 429},
-                "cause_is_aggregated": False,
+                "omit_inner_exceptions": False,
             },
             id="http_response_error",
         ),
@@ -414,9 +414,9 @@ def test_assessment_missing_curation_keeps_reason_and_code() -> None:
                 address="10.0.0.1",
             ),
             {
-                "message": "宛先が外部通信の方針で拒否されました",
+                "error_message": "宛先が外部通信の方針で拒否されました",
                 "error_details": {"reason": "resolved_to_non_public"},
-                "cause_is_aggregated": False,
+                "omit_inner_exceptions": False,
             },
             id="destination_rejected_error",
         ),
@@ -430,14 +430,14 @@ def test_assessment_missing_curation_keeps_reason_and_code() -> None:
                 )
             ),
             {
-                "message": "記事が分析に必要な条件を満たしません",
+                "error_message": "記事が分析に必要な条件を満たしません",
                 "error_details": {
                     "defects": [
                         "analyzable_article_body_missing",
                         "analyzable_article_published_at_missing",
                     ]
                 },
-                "cause_is_aggregated": False,
+                "omit_inner_exceptions": False,
             },
             id="article_build_rejected_error",
         ),
@@ -461,9 +461,9 @@ def test_assessment_missing_curation_keeps_reason_and_code() -> None:
                 ]
             ),
             {
-                "message": "すべてのフィードの取得に失敗しました",
+                "error_message": "すべてのフィードの取得に失敗しました",
                 "error_details": {"failure_count": 2},
-                "cause_is_aggregated": False,
+                "omit_inner_exceptions": False,
             },
             id="rss_feed_errors",
         ),

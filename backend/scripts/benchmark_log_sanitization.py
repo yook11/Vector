@@ -163,43 +163,43 @@ def main() -> None:
                     "after": _measure(lambda: new(value)),
                 }
             )
-    rules = LogPolicyRules(LogPolicy.PROCESS_RUNTIME, frozenset({"payload"}))
+    field_names = [f"field_{index}" for index in range(900)]
+    rules = LogPolicyRules(
+        LogPolicy.PROCESS_RUNTIME, frozenset({"payload", *field_names})
+    )
     processor = LogPolicyProcessor(rules)
-    for total in [8192, 16384, 32768, 65536]:
-        for fields in [1, 16, 128, 512, 900]:
-            for name, seed in [
-                ("ascii", "x"),
-                ("jwt_tokens", "eyJa.eyJb.c "),
-                ("assignments", "sample_key=synthetic "),
-            ]:
-                keys = [f"field_{i}" for i in range(fields)]
-                key_chars = sum(map(len, keys))
-                value_length, remainder = divmod(
-                    total - key_chars - len("benchmark"), fields
-                )
-                payload = {
-                    key: _repeat(seed, value_length + (index < remainder))
-                    for index, key in enumerate(keys)
+    # 予算は項目をまたいで数えるため、1項目のlistとトップレベルの複数項目の両方を測る。
+    for layout, total, fields in product(
+        ["list", "top_level"], [8192, 16384, 32768, 65536], [1, 16, 128, 512, 900]
+    ):
+        for name, seed in [
+            ("ascii", "x"),
+            ("jwt_tokens", "eyJa.eyJb.c "),
+            ("assignments", "sample_key=synthetic "),
+        ]:
+            value_length, remainder = divmod(total - len("benchmark"), fields)
+            values = [
+                _repeat(seed, value_length + (index < remainder))
+                for index in range(fields)
+            ]
+            if layout == "list":
+                event = {"event": "benchmark", "payload": values}
+            else:
+                event = {"event": "benchmark", **dict(zip(field_names, values))}
+            prepared_event = processor(None, "info", event)
+            first_field_name = "payload" if layout == "list" else field_names[0]
+            report["events"].append(
+                {
+                    "layout": layout,
+                    "case": name,
+                    "fields": fields,
+                    "input_chars_excluding_top_level_keys": total,
+                    "replaced_reason": prepared_event.get("_policy_replaced_reason"),
+                    "values_retained": first_field_name in prepared_event,
+                    "value_chars": sum(map(len, values)),
+                    **_measure(lambda: processor(None, "info", event)),
                 }
-                event = {
-                    "event": "benchmark",
-                    "payload": payload,
-                }
-                prepared_event = processor(None, "info", event)
-                report["events"].append(
-                    {
-                        "case": name,
-                        "fields": fields,
-                        "input_chars_excluding_top_level_keys": total,
-                        "budget_limit_reason": prepared_event.get(
-                            "_policy_replaced_reason"
-                        ),
-                        "payload_retained": "payload" in prepared_event,
-                        "value_chars": sum(map(len, payload.values())),
-                        "key_chars": key_chars,
-                        **_measure(lambda: processor(None, "info", event)),
-                    }
-                )
+            )
     print(json.dumps(report, ensure_ascii=False, indent=2))
 
 

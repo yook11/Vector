@@ -45,6 +45,6 @@ def _is_gemini_sdk_error(exc: BaseException) -> bool:
 def _convert_standard_exception(exc: BaseException) -> ConvertedException:
     """通常例外はメッセージだけを取得し、任意属性を診断へ転記しない。"""
     try:
-        return ConvertedException(message=str(exc))
+        return ConvertedException(error_message=str(exc))
     except Exception:
-        return ConvertedException(message="[exception message unavailable]")
+        return ConvertedException(error_message="[exception message unavailable]")

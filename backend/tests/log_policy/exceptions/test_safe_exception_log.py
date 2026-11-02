@@ -8,7 +8,7 @@ import pytest
 from pydantic import BaseModel, ValidationError
 from pydantic_core import PydanticCustomError
 
-from app.log_policy.exceptions.extraction import extract_exception_fields
+from app.log_policy.exceptions.extraction import extract_exception_log
 
 pytestmark = pytest.mark.unit
 
@@ -30,7 +30,7 @@ class TestValidationException:
         with pytest.raises(ValidationError) as captured:
             Payload.model_validate({"values": {_SECRET: _SECRET}})
         assert _SECRET in str(captured.value)
-        fields = extract_exception_fields(captured.value)
+        fields = extract_exception_log(captured.value)
         assert fields is not None
         assert fields["error_class"] == "pydantic_core._pydantic_core.ValidationError"
         assert fields["error_message"] == "Validation failed (1 errors): int_parsing"
@@ -50,7 +50,7 @@ class TestValidationException:
             ],
         )
         assert _SECRET in str(exc)
-        fields = extract_exception_fields(exc)
+        fields = extract_exception_log(exc)
         assert fields is not None
         assert fields["error_message"] == "Validation failed (1 errors): custom_error"
         assert _SECRET not in json.dumps(fields)

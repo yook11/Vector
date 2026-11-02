@@ -44,13 +44,13 @@ class TestKnownResponseTextIsNotOutput:
                     response=httpx2.Response(400),
                 ),
                 {
-                    "message": "Gemini API error: INVALID_ARGUMENT",
+                    "error_message": "Gemini API error: INVALID_ARGUMENT",
                     "error_details": {
                         "kind": "gemini",
                         "http_status": 400,
                         "provider_code": "INVALID_ARGUMENT",
                     },
-                    "cause_is_aggregated": False,
+                    "omit_inner_exceptions": False,
                 },
                 id="message",
             ),
@@ -74,14 +74,14 @@ class TestKnownResponseTextIsNotOutput:
                     response=httpx2.Response(429),
                 ),
                 {
-                    "message": "Gemini API error: RESOURCE_EXHAUSTED",
+                    "error_message": "Gemini API error: RESOURCE_EXHAUSTED",
                     "error_details": {
                         "kind": "gemini",
                         "http_status": 429,
                         "provider_code": "RESOURCE_EXHAUSTED",
                         "quota_violations": [{"quota_id": _QUOTA_ID}],
                     },
-                    "cause_is_aggregated": False,
+                    "omit_inner_exceptions": False,
                 },
                 id="quota_violation_description",
             ),
@@ -105,14 +105,14 @@ class TestKnownResponseTextIsNotOutput:
                     response=httpx2.Response(429),
                 ),
                 {
-                    "message": "Gemini API error: RESOURCE_EXHAUSTED",
+                    "error_message": "Gemini API error: RESOURCE_EXHAUSTED",
                     "error_details": {
                         "kind": "gemini",
                         "http_status": 429,
                         "provider_code": "RESOURCE_EXHAUSTED",
                         "quota_violations": [{"quota_id": _QUOTA_ID}],
                     },
-                    "cause_is_aggregated": False,
+                    "omit_inner_exceptions": False,
                 },
                 id="quota_metric",
             ),
@@ -139,14 +139,14 @@ class TestKnownResponseTextIsNotOutput:
                     response=httpx2.Response(429),
                 ),
                 {
-                    "message": "Gemini API error: RESOURCE_EXHAUSTED",
+                    "error_message": "Gemini API error: RESOURCE_EXHAUSTED",
                     "error_details": {
                         "kind": "gemini",
                         "http_status": 429,
                         "provider_code": "RESOURCE_EXHAUSTED",
                         "quota_violations": [{"quota_id": _QUOTA_ID}],
                     },
-                    "cause_is_aggregated": False,
+                    "omit_inner_exceptions": False,
                 },
                 id="quota_dimensions",
             ),
@@ -170,7 +170,9 @@ class TestKnownResponseTextIsNotOutput:
                     response=httpx2.Response(400),
                 ),
                 {
-                    "message": "Gemini API error: INVALID_ARGUMENT / API_KEY_INVALID",
+                    "error_message": (
+                        "Gemini API error: INVALID_ARGUMENT / API_KEY_INVALID"
+                    ),
                     "error_details": {
                         "kind": "gemini",
                         "http_status": 400,
@@ -180,7 +182,7 @@ class TestKnownResponseTextIsNotOutput:
                             "domain": "googleapis.com",
                         },
                     },
-                    "cause_is_aggregated": False,
+                    "omit_inner_exceptions": False,
                 },
                 id="error_info_metadata",
             ),
@@ -207,13 +209,13 @@ class TestKnownResponseTextIsNotOutput:
                     response=httpx2.Response(400),
                 ),
                 {
-                    "message": "Gemini API error: INVALID_ARGUMENT",
+                    "error_message": "Gemini API error: INVALID_ARGUMENT",
                     "error_details": {
                         "kind": "gemini",
                         "http_status": 400,
                         "provider_code": "INVALID_ARGUMENT",
                     },
-                    "cause_is_aggregated": False,
+                    "omit_inner_exceptions": False,
                 },
                 id="help_links",
             ),
@@ -236,13 +238,13 @@ class TestKnownResponseTextIsNotOutput:
                     response=httpx2.Response(400),
                 ),
                 {
-                    "message": "Gemini API error: INVALID_ARGUMENT",
+                    "error_message": "Gemini API error: INVALID_ARGUMENT",
                     "error_details": {
                         "kind": "gemini",
                         "http_status": 400,
                         "provider_code": "INVALID_ARGUMENT",
                     },
-                    "cause_is_aggregated": False,
+                    "omit_inner_exceptions": False,
                 },
                 id="localized_message",
             ),
@@ -266,13 +268,13 @@ class TestKnownResponseTextIsNotOutput:
                     response=httpx2.Response(400),
                 ),
                 {
-                    "message": "Gemini API error: INVALID_ARGUMENT",
+                    "error_message": "Gemini API error: INVALID_ARGUMENT",
                     "error_details": {
                         "kind": "gemini",
                         "http_status": 400,
                         "provider_code": "INVALID_ARGUMENT",
                     },
-                    "cause_is_aggregated": False,
+                    "omit_inner_exceptions": False,
                 },
                 id="bad_request_field",
             ),
@@ -284,18 +286,18 @@ class TestKnownResponseTextIsNotOutput:
                     response=httpx2.Response(503),
                 ),
                 {
-                    "message": "Gemini API error",
+                    "error_message": "Gemini API error",
                     "error_details": {"kind": "gemini", "http_status": 503},
-                    "cause_is_aggregated": False,
+                    "omit_inner_exceptions": False,
                 },
                 id="non_json_body",
             ),
             pytest.param(
                 genai_errors.UnknownApiResponseError(_SECRET),
                 {
-                    "message": "Gemini API response could not be parsed as JSON",
+                    "error_message": "Gemini API response could not be parsed as JSON",
                     "error_details": None,
-                    "cause_is_aggregated": False,
+                    "omit_inner_exceptions": False,
                 },
                 id="unparseable_response",
             ),
@@ -323,13 +325,13 @@ class TestWantedDiagnosticsAreKept:
                     response=httpx2.Response(403),
                 ),
                 {
-                    "message": "Gemini API error: PERMISSION_DENIED",
+                    "error_message": "Gemini API error: PERMISSION_DENIED",
                     "error_details": {
                         "kind": "gemini",
                         "http_status": 403,
                         "provider_code": "PERMISSION_DENIED",
                     },
-                    "cause_is_aggregated": False,
+                    "omit_inner_exceptions": False,
                 },
                 id="status_and_http_status",
             ),
@@ -341,13 +343,13 @@ class TestWantedDiagnosticsAreKept:
                     response=httpx2.Response(200),
                 ),
                 {
-                    "message": "Gemini API error: RESOURCE_EXHAUSTED",
+                    "error_message": "Gemini API error: RESOURCE_EXHAUSTED",
                     "error_details": {
                         "kind": "gemini",
                         "http_status": 200,
                         "provider_code": "RESOURCE_EXHAUSTED",
                     },
-                    "cause_is_aggregated": False,
+                    "omit_inner_exceptions": False,
                 },
                 id="error_inside_stream",
             ),
@@ -370,7 +372,9 @@ class TestWantedDiagnosticsAreKept:
                     response=httpx2.Response(400),
                 ),
                 {
-                    "message": "Gemini API error: INVALID_ARGUMENT / API_KEY_INVALID",
+                    "error_message": (
+                        "Gemini API error: INVALID_ARGUMENT / API_KEY_INVALID"
+                    ),
                     "error_details": {
                         "kind": "gemini",
                         "http_status": 400,
@@ -380,7 +384,7 @@ class TestWantedDiagnosticsAreKept:
                             "domain": "googleapis.com",
                         },
                     },
-                    "cause_is_aggregated": False,
+                    "omit_inner_exceptions": False,
                 },
                 id="error_info",
             ),
@@ -409,7 +413,7 @@ class TestWantedDiagnosticsAreKept:
                     response=httpx2.Response(429),
                 ),
                 {
-                    "message": "Gemini API error: RESOURCE_EXHAUSTED",
+                    "error_message": "Gemini API error: RESOURCE_EXHAUSTED",
                     "error_details": {
                         "kind": "gemini",
                         "http_status": 429,
@@ -419,7 +423,7 @@ class TestWantedDiagnosticsAreKept:
                             {"quota_id": _DAILY_QUOTA_ID, "quota_value": 10000},
                         ],
                     },
-                    "cause_is_aggregated": False,
+                    "omit_inner_exceptions": False,
                 },
                 id="quota_violations",
             ),
@@ -436,14 +440,14 @@ class TestWantedDiagnosticsAreKept:
                     response=httpx2.Response(429),
                 ),
                 {
-                    "message": "Gemini API error: RESOURCE_EXHAUSTED",
+                    "error_message": "Gemini API error: RESOURCE_EXHAUSTED",
                     "error_details": {
                         "kind": "gemini",
                         "http_status": 429,
                         "provider_code": "RESOURCE_EXHAUSTED",
                         "retry_delay_seconds": 53,
                     },
-                    "cause_is_aggregated": False,
+                    "omit_inner_exceptions": False,
                 },
                 id="retry_delay",
             ),
@@ -461,14 +465,14 @@ class TestWantedDiagnosticsAreKept:
                     response=httpx2.Response(503),
                 ),
                 {
-                    "message": "Gemini API error: UNAVAILABLE",
+                    "error_message": "Gemini API error: UNAVAILABLE",
                     "error_details": {
                         "kind": "gemini",
                         "http_status": 503,
                         "provider_code": "UNAVAILABLE",
                         "retry_delay_seconds": 0.5,
                     },
-                    "cause_is_aggregated": False,
+                    "omit_inner_exceptions": False,
                 },
                 id="fractional_retry_delay",
             ),
@@ -501,7 +505,7 @@ class TestWantedDiagnosticsAreKept:
                     response=httpx2.Response(429),
                 ),
                 {
-                    "message": "Gemini API error: RESOURCE_EXHAUSTED",
+                    "error_message": "Gemini API error: RESOURCE_EXHAUSTED",
                     "error_details": {
                         "kind": "gemini",
                         "http_status": 429,
@@ -509,7 +513,7 @@ class TestWantedDiagnosticsAreKept:
                         "quota_violations": [{"quota_id": _QUOTA_ID}],
                         "retry_delay_seconds": 53,
                     },
-                    "cause_is_aggregated": False,
+                    "omit_inner_exceptions": False,
                 },
                 id="details_in_any_order",
             ),
@@ -529,7 +533,7 @@ class TestWantedDiagnosticsAreKept:
                     response=httpx2.Response(400),
                 ),
                 {
-                    "message": "Gemini API error: INVALID_ARGUMENT",
+                    "error_message": "Gemini API error: INVALID_ARGUMENT",
                     "error_details": {
                         "kind": "gemini",
                         "http_status": 400,
@@ -537,7 +541,7 @@ class TestWantedDiagnosticsAreKept:
                         "input_tokens": 1250000,
                         "max_input_tokens": 1048576,
                     },
-                    "cause_is_aggregated": False,
+                    "omit_inner_exceptions": False,
                 },
                 id="input_token_counts",
             ),
@@ -567,7 +571,9 @@ class TestWantedDiagnosticsAreKept:
                     response=httpx2.Response(429),
                 ),
                 {
-                    "message": "Gemini API error: RESOURCE_EXHAUSTED / NEW_REASON",
+                    "error_message": (
+                        "Gemini API error: RESOURCE_EXHAUSTED / NEW_REASON"
+                    ),
                     "error_details": {
                         "kind": "gemini",
                         "http_status": 429,
@@ -578,7 +584,7 @@ class TestWantedDiagnosticsAreKept:
                         },
                         "quota_violations": [{"quota_id": "NewQuotaPerHourPerProject"}],
                     },
-                    "cause_is_aggregated": False,
+                    "omit_inner_exceptions": False,
                 },
                 id="unknown_identifiers",
             ),
@@ -667,4 +673,4 @@ class TestUnexpectedInputIsHandledSafely:
         """型の違う値が混ざっても、その値を捨てて変換を続け、原因の文を作る。"""
         result = convert_exception(exc)
 
-        assert result.message == expected_message
+        assert result.error_message == expected_message

@@ -34,7 +34,7 @@ class PostgresErrorDetails(TypedDict):
 
 
 def convert_sql_exception(exc: BaseException) -> ConvertedException:
-    """SQLの原因文を保護し、診断属性と原因の集約状態を共通形式へ渡す。"""
+    """SQLの原因文を保護し、診断属性と、内側の例外を出さないことを共通形式へ渡す。"""
     try:
         message = (
             extract_sql_error_message(exc)
@@ -46,9 +46,9 @@ def convert_sql_exception(exc: BaseException) -> ConvertedException:
 
     # 原因文の取得に失敗しても、診断属性は独立して取得する。
     return ConvertedException(
-        message=message,
+        error_message=message,
         error_details=extract_sql_error_details(exc),
-        cause_is_aggregated=True,
+        omit_inner_exceptions=True,
     )
 
 

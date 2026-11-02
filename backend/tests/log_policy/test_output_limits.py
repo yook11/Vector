@@ -1,14 +1,11 @@
 """個別の制限とログ全体の共有予算超過を分けて検証する。"""
 
-from typing import Any
-
 import pytest
 from asyncpg import PostgresError
 from sqlalchemy.exc import IntegrityError
 
 from app.log_policy import BASE_LOG_RULES, LogPolicy, LogPolicyRules
 from app.log_policy.budget import (
-    EVENT_TEXT_LIMIT,
     MAX_ITEMS_PER_LOG_EVENT,
     TEXT_LIMIT,
 )
@@ -39,57 +36,6 @@ def _raised_through_frames[E: BaseException](exc: E, frame_count: int) -> E:
 
 class TestLocalReplacement:
     """超過した位置だけを置換し、正常な兄弟と前後の項目を残す。"""
-
-    def test_field_limit_preserves_earlier_and_later_normal_fields(self) -> None:
-        """単一項目の超過は前後の正常なトップレベル項目を巻き込まない。"""
-        fields = {"event": "failed", "payload": ["x" * (TEXT_LIMIT + 1)], "attempt": 2}
-        rules = LogPolicyRules(LogPolicy.PROCESS_RUNTIME, frozenset(fields))
-        output = LogPolicyProcessor(rules)(None, "info", fields)
-        assert output == {
-            "event": "failed",
-            "payload": ["[limit]"],
-            "attempt": 2,
-            "log_policy": "process_runtime",
-        }
-
-    def test_nested_key_at_limit_is_redacted_without_truncation(self) -> None:
-        """上限内の辞書キーは全文に情報漏洩防止を適用して残す。"""
-        suffix = " password='synthetic private'"
-        key = "x" * (TEXT_LIMIT - len(suffix)) + suffix
-        output = LogPolicyProcessor(BASE_LOG_RULES)(
-            None,
-            "info",
-            {"event": {key: 1}},
-        )
-        assert output == {
-            "event": {
-                "x" * (TEXT_LIMIT - len(suffix)) + " password=[redacted:credential]": 1
-            }
-        }
-
-    def test_integer_at_bit_limit_is_preserved(self) -> None:
-        """4096bitちょうどの整数は正常な別項目とともにログへ残す。"""
-        fields = {"event": (1 << 4096) - 1, "logger": "test"}
-        output = LogPolicyProcessor(BASE_LOG_RULES)(None, "info", fields)
-        assert output == fields
-
-    def test_integer_above_bit_limit_is_replaced(self) -> None:
-        """4097bitの整数だけを置換し、正常な別項目はログへ残す。"""
-        output = LogPolicyProcessor(BASE_LOG_RULES)(
-            None,
-            "info",
-            {"event": 1 << 4096, "logger": "test"},
-        )
-        assert output == {"event": "[limit]", "logger": "test"}
-
-    def test_nested_large_integer_preserves_siblings(self) -> None:
-        """ネスト内の巨大整数だけを置換し、同じ辞書の正常な値は保持する。"""
-        output = LogPolicyProcessor(BASE_LOG_RULES)(
-            None,
-            "info",
-            {"event": {"too_large": 1 << 4096, "count": 3}},
-        )
-        assert output == {"event": {"too_large": "[limit]", "count": 3}}
 
     def test_exception_message_at_limit_keeps_redaction(self) -> None:
         """上限ちょうどの例外文は検査後に秘匿して保持する。"""
@@ -139,7 +85,7 @@ class TestLocalReplacement:
 
 
 class TestWholeLogReplacementByTextBudget:
-    """通常項目・ネスト・診断の文字数を合算し、上限を超えたらログ全体を置換する。"""
+    """通常項目の名前と値の文字数を合算し、上限を超えたらログ全体を置換する。"""
 
     def test_processor_text_at_budget_is_not_exceeded(self) -> None:
         """イベント合計16000文字ちょうどで完了すれば通常出力を保持する。"""
@@ -160,172 +106,9 @@ class TestWholeLogReplacementByTextBudget:
             "_policy_replaced_reason": "total_text_length_exceeded",
         }
 
-    def test_nested_text_at_budget_preserves_log(self) -> None:
-        """トップレベル名とネストのキー・値を含め16000文字ならログを保持する。"""
-        payload = {key: "x" * (TEXT_LIMIT - 1) for key in "abcd"}
-        payload["a"] = "x" * (TEXT_LIMIT - 1 - len("event"))
-        assert (
-            len("event") + sum(len(k) + len(v) for k, v in payload.items())
-            == EVENT_TEXT_LIMIT
-        )
-        output = LogPolicyProcessor(BASE_LOG_RULES)(
-            None,
-            "info",
-            {"event": payload},
-        )
-        assert output == {"event": payload}
-
-    def test_nested_text_above_budget_replaces_whole_log(self) -> None:
-        """ネストを含む合計が16001文字になるとログ全体を置換する。"""
-        payload = {key: "x" * (TEXT_LIMIT - 1) for key in "abcd"}
-        payload["a"] = "x" * (TEXT_LIMIT - len("event"))
-        assert (
-            len("event") + sum(len(k) + len(v) for k, v in payload.items())
-            == EVENT_TEXT_LIMIT + 1
-        )
-        output = LogPolicyProcessor(BASE_LOG_RULES)(
-            None,
-            "info",
-            {"event": payload},
-        )
-        assert output == {
-            "event": "log_policy_replaced",
-            "_policy_replaced_reason": "total_text_length_exceeded",
-        }
-
-    def test_nested_keys_at_text_budget_preserve_log(self) -> None:
-        """トップレベル名とネストのキー名で16000文字なら数値の値を保持する。"""
-        payload = {letter * TEXT_LIMIT: 1 for letter in "abc"}
-        payload["d" * (TEXT_LIMIT - len("event"))] = 1
-        output = LogPolicyProcessor(BASE_LOG_RULES)(
-            None,
-            "info",
-            {"event": payload},
-        )
-        assert output == {"event": payload}
-
-    def test_nested_keys_share_event_text_budget(self) -> None:
-        """数値の値でもネストのキー名を合算し、16001文字でログ全体を置換する。"""
-        payload = {letter * TEXT_LIMIT: 1 for letter in "abc"}
-        payload["d" * (TEXT_LIMIT - len("event") + 1)] = 1
-        output = LogPolicyProcessor(BASE_LOG_RULES)(
-            None,
-            "info",
-            {"event": payload},
-        )
-        assert output == {
-            "event": "log_policy_replaced",
-            "_policy_replaced_reason": "total_text_length_exceeded",
-        }
-
-    def test_denied_long_value_does_not_consume_event_text(self) -> None:
-        """禁止値が合計上限より長くても、除外後の正常なログを保持する。"""
-        output = LogPolicyProcessor(BASE_LOG_RULES)(
-            None,
-            "info",
-            {"event": {"password": "x" * (EVENT_TEXT_LIMIT + 1), "count": 1}},
-        )
-        assert output == {"event": {"count": 1}, "_denied_nested_count": 1}
-
-    def test_local_replacement_does_not_refund_preserved_text(self) -> None:
-        """長文を局所置換しても保持した文字数は予算に残り、次の項目で超過する。"""
-        payload = {key: "x" * (TEXT_LIMIT - 1) for key in "abcd"}
-        payload["d"] = "x" * (TEXT_LIMIT - 1 - len("eventlong"))
-        payload["long"] = "x" * (TEXT_LIMIT + 1)
-        rules = LogPolicyRules(LogPolicy.PROCESS_RUNTIME, frozenset({"z"}))
-        output = LogPolicyProcessor(rules)(
-            None,
-            "info",
-            {"event": payload, "z": 1},
-        )
-        assert output == {
-            "event": "log_policy_replaced",
-            "log_policy": "process_runtime",
-            "_policy_replaced_reason": "total_text_length_exceeded",
-        }
-
-    def test_denied_names_share_event_text_budget(self) -> None:
-        """禁止キー名の診断出力もイベントの文字数予算を迂回しない。"""
-        rules = LogPolicyRules(LogPolicy.PROCESS_RUNTIME, frozenset("abcd"))
-        output = LogPolicyProcessor(rules)(
-            None,
-            "info",
-            {
-                **{key: "x" * (TEXT_LIMIT - 1) for key in "abcd"},
-                "password": "synthetic",
-            },
-        )
-        assert output == {
-            "event": "log_policy_replaced",
-            "log_policy": "process_runtime",
-            "_policy_replaced_reason": "total_text_length_exceeded",
-        }
-
 
 class TestWholeLogReplacementByItemBudget:
-    """除外項目・ネスト・診断も含めた走査件数が上限を超えたらログ全体を置換する。"""
-
-    def test_denied_mapping_entry_at_item_budget_preserves_log(self) -> None:
-        """ネストの禁止項目も一件に数え、合計が上限ちょうどなら残りを出力する。"""
-        kept = {f"item_{i}": i for i in range(MAX_ITEMS_PER_LOG_EVENT - 2)}
-        output = LogPolicyProcessor(BASE_LOG_RULES)(
-            None,
-            "info",
-            {"event": {"password": "synthetic", **kept}},
-        )
-        assert output == {"event": kept, "_denied_nested_count": 1}
-
-    def test_denied_mapping_entry_above_item_budget_replaces_log(self) -> None:
-        """除外した禁止項目を含めて一件超えると、診断も含めログ全体を置換する。"""
-        kept = {f"item_{i}": i for i in range(MAX_ITEMS_PER_LOG_EVENT - 1)}
-        output = LogPolicyProcessor(BASE_LOG_RULES)(
-            None,
-            "info",
-            {"event": {"password": "synthetic", **kept}},
-        )
-        assert output == {
-            "event": "log_policy_replaced",
-            "_policy_replaced_reason": "value_count_exceeded",
-        }
-
-    def test_mixed_containers_at_item_budget_preserve_log(self) -> None:
-        """辞書・配列・要素を各一件に数え、合計が上限ちょうどなら保持する。"""
-        fields = {"event": {"items": list(range(MAX_ITEMS_PER_LOG_EVENT - 2))}}
-        output = LogPolicyProcessor(BASE_LOG_RULES)(None, "info", fields)
-        assert output == fields
-
-    def test_mixed_containers_above_item_budget_replace_log(self) -> None:
-        """辞書と配列を含む入力が一件でも上限を超えるとログ全体を置換する。"""
-        fields = {"event": {"items": list(range(MAX_ITEMS_PER_LOG_EVENT - 1))}}
-        output = LogPolicyProcessor(BASE_LOG_RULES)(None, "info", fields)
-        assert output == {
-            "event": "log_policy_replaced",
-            "_policy_replaced_reason": "value_count_exceeded",
-        }
-
-    def test_mixed_containers_across_fields_at_item_budget_preserve_log(self) -> None:
-        """二つの項目にある辞書・配列の合計が上限ちょうどなら両方を保持する。"""
-        fields = {
-            "event": {"items": [1, 2]},
-            "payload": {"items": list(range(MAX_ITEMS_PER_LOG_EVENT - 6))},
-        }
-        rules = LogPolicyRules(LogPolicy.PROCESS_RUNTIME, frozenset({"payload"}))
-        output = LogPolicyProcessor(rules)(None, "info", fields)
-        assert output == {**fields, "log_policy": "process_runtime"}
-
-    def test_mixed_containers_across_fields_above_item_budget_replace_log(self) -> None:
-        """二つ目の項目で共有予算を一件超えると先行項目も含めて置換する。"""
-        fields = {
-            "event": {"items": [1, 2]},
-            "payload": {"items": list(range(MAX_ITEMS_PER_LOG_EVENT - 5))},
-        }
-        rules = LogPolicyRules(LogPolicy.PROCESS_RUNTIME, frozenset({"payload"}))
-        output = LogPolicyProcessor(rules)(None, "info", fields)
-        assert output == {
-            "event": "log_policy_replaced",
-            "log_policy": "process_runtime",
-            "_policy_replaced_reason": "value_count_exceeded",
-        }
+    """除外項目を含む項目と list の要素の件数が上限を超えたらログ全体を置換する。"""
 
     def test_top_level_count_at_limit_is_not_counted_twice(self) -> None:
         """選別で数えたトップレベル値を再加算せず上限件数ちょうどまで保持する。"""
@@ -356,35 +139,17 @@ class TestWholeLogReplacementByItemBudget:
         )
         assert output == {"event": items}
 
-    @pytest.mark.parametrize(
-        "payload",
-        [
-            ["safe"] * MAX_ITEMS_PER_LOG_EVENT,
-            {f"item_{i}": "safe" for i in range(MAX_ITEMS_PER_LOG_EVENT)},
-        ],
-        ids=["list", "mapping"],
-    )
-    def test_container_above_item_budget_replaces_whole_log(self, payload: Any) -> None:
-        """コンテナ自身を含めて上限件数を一件超える入力はログ全体を置換する。"""
+    def test_container_above_item_budget_replaces_whole_log(self) -> None:
+        """リスト自身を含めて上限件数を一件超える入力はログ全体を置換する。"""
         output = LogPolicyProcessor(BASE_LOG_RULES)(
             None,
             "info",
-            {"event": payload},
+            {"event": ["safe"] * MAX_ITEMS_PER_LOG_EVENT},
         )
         assert output == {
             "event": "log_policy_replaced",
             "_policy_replaced_reason": "value_count_exceeded",
         }
-
-    def test_mapping_at_item_budget_preserves_log(self) -> None:
-        """辞書自身と項目の合計が上限件数ちょうどならログを保持する。"""
-        payload = {f"item_{i}": "safe" for i in range(MAX_ITEMS_PER_LOG_EVENT - 1)}
-        output = LogPolicyProcessor(BASE_LOG_RULES)(
-            None,
-            "info",
-            {"event": payload},
-        )
-        assert output == {"event": payload}
 
     def test_top_level_selection_and_nested_values_share_count_limit(self) -> None:
         """未登録項目の検査も値の走査と同じ件数の予算を消費する。"""
@@ -404,21 +169,6 @@ class TestWholeLogReplacementByItemBudget:
         assert output == {
             "event": "log_policy_replaced",
             "log_policy": "process_runtime",
-            "_policy_replaced_reason": "value_count_exceeded",
-        }
-
-    def test_budget_overflow_in_denied_key_diagnostics_replaces_whole_log(self) -> None:
-        """禁止キー名の準備で走査上限に達しても入力名を含む途中結果を残さない。"""
-        output = LogPolicyProcessor(BASE_LOG_RULES)(
-            None,
-            "info",
-            {
-                "password": "synthetic",
-                **{f"unknown_{i}": 1 for i in range(MAX_ITEMS_PER_LOG_EVENT - 1)},
-            },
-        )
-        assert output == {
-            "event": "log_policy_replaced",
             "_policy_replaced_reason": "value_count_exceeded",
         }
 
@@ -556,7 +306,7 @@ class TestExceptionBudget:
         ]
         for parent, cause in zip(chain, chain[1:]):
             parent.__cause__ = cause
-        exception_output = extraction.extract_exception_fields(chain[0])
+        exception_output = extraction.extract_exception_log(chain[0])
 
         output = LogPolicyProcessor(BASE_LOG_RULES)(
             None,

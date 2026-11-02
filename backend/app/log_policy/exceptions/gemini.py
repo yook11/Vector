@@ -56,7 +56,7 @@ def convert_gemini_exception(
     # 説明文に生の応答を含むため、固定の文だけにする。
     if isinstance(exc, genai_errors.UnknownApiResponseError):
         return ConvertedException(
-            message="Gemini API response could not be parsed as JSON"
+            error_message="Gemini API response could not be parsed as JSON"
         )
     try:
         details = extract_gemini_error_details(exc)
@@ -68,10 +68,10 @@ def convert_gemini_exception(
             if reason is not None:
                 message += f" / {reason}"
         return ConvertedException(
-            message=message, error_details=details if len(details) > 1 else None
+            error_message=message, error_details=details if len(details) > 1 else None
         )
     except Exception:
-        return ConvertedException(message="[exception message unavailable]")
+        return ConvertedException(error_message="[exception message unavailable]")
 
 
 def extract_gemini_error_details(exc: genai_errors.APIError) -> GeminiErrorDetails:

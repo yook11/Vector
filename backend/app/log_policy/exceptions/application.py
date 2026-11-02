@@ -7,6 +7,6 @@ from app.shared.errors import ApplicationError
 def convert_application_error(exc: ApplicationError) -> ConvertedException:
     """例外側で明示したメッセージと診断情報を共通形式へ写す。"""
     try:
-        return ConvertedException(message=str(exc), error_details=exc.details)
+        return ConvertedException(error_message=str(exc), error_details=exc.details)
     except Exception:
-        return ConvertedException(message="[exception message unavailable]")
+        return ConvertedException(error_message="[exception message unavailable]")

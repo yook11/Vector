@@ -37,7 +37,7 @@ def test_deny_precedes_allow() -> None:
         budget=LogEventBudget(),
     )
     assert selector.select_fields({"RestrictedSample": "value"}) == {}
-    assert diagnostics.as_fields() == {"_denied_keys": ["RestrictedSample"]}
+    assert diagnostics.as_fields() == {"_denied_keys": ["restricted_sample"]}
 
 
 def test_similar_field_name_is_not_denied_by_partial_match() -> None:
@@ -63,7 +63,7 @@ def test_deny_normalizes_field_name_aliases(field_name: str) -> None:
         frozenset(), BASE_DENY, diagnostics, budget=LogEventBudget()
     )
     assert selector.select_fields({field_name: "value"}) == {}
-    assert diagnostics.as_fields() == {"_denied_keys": [field_name]}
+    assert diagnostics.as_fields() == {"_denied_keys": ["api_key"]}
 
 
 def test_allow_normalizes_registered_field_names() -> None:
@@ -137,14 +137,14 @@ def test_field_name_at_length_limit_is_preserved() -> None:
 
 
 def test_long_field_name_is_not_normalized() -> None:
-    """長すぎる項目名は正規化へ渡さず上限診断だけを残す。"""
+    """長すぎる項目名は正規化へ渡さず未登録として数える。"""
     diagnostics = LogProcessingDiagnostics()
     selector = LogFieldSelector(
         frozenset(), BASE_DENY, diagnostics, budget=LogEventBudget()
     )
     with patch("app.log_policy.field_selection.normalize_key") as normalize:
         assert selector.select_fields({"a" * (TEXT_LIMIT + 1): "value"}) == {}
-    assert diagnostics.as_fields() == {"_policy_limited": True}
+    assert diagnostics.as_fields() == {"_unregistered_count": 1}
     normalize.assert_not_called()
 
 

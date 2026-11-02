@@ -22,9 +22,9 @@ def test_normal_exception_does_not_copy_extra_attributes() -> None:
     result = convert_exception(exc)
 
     assert asdict(result) == {
-        "message": "operation failed",
+        "error_message": "operation failed",
         "error_details": None,
-        "cause_is_aggregated": False,
+        "omit_inner_exceptions": False,
     }
 
 
@@ -40,7 +40,7 @@ def test_failed_string_conversion_uses_unavailable_message() -> None:
     result = convert_exception(exc)
 
     assert asdict(result) == {
-        "message": "[exception message unavailable]",
+        "error_message": "[exception message unavailable]",
         "error_details": None,
-        "cause_is_aggregated": False,
+        "omit_inner_exceptions": False,
     }

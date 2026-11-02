@@ -35,8 +35,8 @@ def convert_event_validation_exception(exc: EventInvalidError) -> ConvertedExcep
             "issues": issues,
         }
         return ConvertedException(
-            message=f"Validation failed: {invalid.reason.value}",
+            error_message=f"Validation failed: {invalid.reason.value}",
             error_details=details,
         )
     except Exception:
-        return ConvertedException(message="[exception message unavailable]")
+        return ConvertedException(error_message="[exception message unavailable]")

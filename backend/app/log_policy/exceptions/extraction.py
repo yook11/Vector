@@ -35,13 +35,15 @@ class ExceptionLogFrame(TypedDict):
     line: int
 
 
-class LoggedException(TypedDict):
-    """例外1件の型・原因文・発生位置と、変換担当が作った診断情報。"""
+class ExceptionLog(TypedDict):
+    """形と量をログに出せる状態にそろえた例外。"""
 
     error_class: str
     error_message: str
     frames: list[ExceptionLogFrame] | Literal["[limit]"]
-    error_details: NotRequired[ErrorDetails]
+    error_details: NotRequired[ErrorDetails | Literal["[limit]"]]
+    # ログに渡した例外だけが持ち、そこからたどった例外を入れ子にせずすべてここへ並べる。
+    related_exceptions: NotRequired[list[RelatedException]]
 
 
 type ExceptionRelation = Literal["cause", "context", "member"]
@@ -50,21 +52,15 @@ type ExceptionRelation = Literal["cause", "context", "member"]
 class RelatedException(TypedDict):
     """関連する例外1件と、関係元の位置と関係の種類。"""
 
-    # 関係元が外側の例外なら None、関連する例外なら並びの中の位置。
+    # 関係元がログに渡した例外なら None、たどった例外なら並びの中の位置。
     parent: int | None
     relation: ExceptionRelation
-    exception: LoggedException | Literal["[limit]", "[cycle]"]
-
-
-class ExceptionLogFields(LoggedException):
-    """例外から抽出し、共通の検査・サニタイズへ渡すフィールド。"""
-
-    related_exceptions: NotRequired[list[RelatedException]]
+    exception: ExceptionLog | Literal["[limit]", "[cycle]"]
 
 
 @dataclass
-class _ExceptionConversion:
-    """例外全体を共通の形式へ変換し、件数・frame・文字数・診断情報の残りを共有する。"""
+class _ExceptionExtraction:
+    """例外全体をたどってログの形式にそろえ、件数・frame・文字数・診断情報の残りを共有する。"""
 
     exception_converter: ExceptionConverter
     remaining_exceptions: int
@@ -75,19 +71,19 @@ class _ExceptionConversion:
 
     def describe(
         self, exc: BaseException, tb: TracebackType | None
-    ) -> tuple[LoggedException, bool]:
-        """例外1件を残りの量に収めて変換し、内部原因を集約済みかと合わせて返す。"""
+    ) -> tuple[ExceptionLog, bool]:
+        """例外1件を残りの量に収めて変換し、内側の例外を出さないかと合わせて返す。"""
         converted = self.exception_converter(exc)
-        logged: LoggedException = {
+        exception_log: ExceptionLog = {
             "error_class": self.take_text(
                 f"{type(exc).__module__}.{type(exc).__qualname__}"
             ),
-            "error_message": self.take_text(converted.message),
+            "error_message": self.take_text(converted.error_message),
             "frames": self.take_frames(tb),
         }
         if converted.error_details is not None:
-            logged["error_details"] = self.take_details(converted.error_details)
-        return logged, converted.cause_is_aggregated
+            exception_log["error_details"] = self.take_details(converted.error_details)
+        return exception_log, converted.omit_inner_exceptions
 
     def follow(
         self, exc: BaseException, *, position: int | None, ancestors: set[int]
@@ -131,12 +127,12 @@ class _ExceptionConversion:
             )
             return False
 
-        logged, cause_is_aggregated = self.describe(exc, exc.__traceback__)
+        exception_log, omit_inner_exceptions = self.describe(exc, exc.__traceback__)
         position = len(self.related)
         self.related.append(
-            {"parent": parent, "relation": relation, "exception": logged}
+            {"parent": parent, "relation": relation, "exception": exception_log}
         )
-        if not cause_is_aggregated:
+        if not omit_inner_exceptions:
             self.follow(exc, position=position, ancestors=ancestors | {id(exc)})
         return False
 
@@ -185,14 +181,18 @@ class _ExceptionConversion:
             return "[limit]"
         self.remaining_details_items -= item_count
         self.remaining_text -= key_length
-        return {key: self.take_detail_texts(value) for key, value in details.items()}
+        return {
+            str(key): self.take_detail_texts(value) for key, value in details.items()
+        }
 
     def take_detail_texts(self, value: object) -> object:
-        """診断情報の構造を保ったまま、文字列を残りの文字数に収め、JSONに出せない値を[unsupported]にする。"""
+        """診断情報の構造を保ったまま、キーを文字列に、文字列を残りの文字数に収め、JSONに出せない値を[unsupported]にする。"""
         if isinstance(value, str):
             return self.take_text(value)
         if isinstance(value, Mapping):
-            return {key: self.take_detail_texts(item) for key, item in value.items()}
+            return {
+                str(key): self.take_detail_texts(item) for key, item in value.items()
+            }
         if isinstance(value, list | tuple):
             return [self.take_detail_texts(item) for item in value]
         if value is None or isinstance(value, int):
@@ -203,12 +203,12 @@ class _ExceptionConversion:
         return "[unsupported]"
 
 
-def extract_exception_fields(
+def extract_exception_log(
     exc_info: object,
     *,
     exception_converter: ExceptionConverter = convert_exception,
-) -> ExceptionLogFields | None:
-    """ExcInfoInput に合う値だけを揃え、サニタイズ前の例外フィールドを返す。"""
+) -> ExceptionLog | None:
+    """ExcInfoInput に合う値だけを揃え、サニタイズ前の例外のログを返す。"""
     # 3形式を sys.exc_info() と同じ並びへ揃え、合わない値はフィールドを作らない。
     if exc_info is True:
         exc_info = sys.exc_info()
@@ -222,22 +222,21 @@ def extract_exception_fields(
     if tb is not None and not isinstance(tb, TracebackType):
         return None
 
-    conversion = _ExceptionConversion(
+    extraction = _ExceptionExtraction(
         exception_converter=exception_converter,
         remaining_exceptions=EXCEPTION_LIMIT - 1,
         remaining_frames=FRAME_TOTAL_LIMIT,
         remaining_text=TEXT_TOTAL_LIMIT,
         remaining_details_items=DETAILS_ITEM_LIMIT,
     )
-    logged, cause_is_aggregated = conversion.describe(exc, tb)
-    fields: ExceptionLogFields = {**logged}
-    if cause_is_aggregated:
-        return fields
+    exception_log, omit_inner_exceptions = extraction.describe(exc, tb)
+    if omit_inner_exceptions:
+        return exception_log
 
-    conversion.follow(exc, position=None, ancestors={id(exc)})
-    if conversion.related:
-        fields["related_exceptions"] = conversion.related
-    return fields
+    extraction.follow(exc, position=None, ancestors={id(exc)})
+    if extraction.related:
+        exception_log["related_exceptions"] = extraction.related
+    return exception_log
 
 
 def _inventory_details(

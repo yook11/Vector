@@ -1,9 +1,7 @@
 from __future__ import annotations
 
-import math
 from dataclasses import dataclass, field
-from enum import Enum
-from typing import Any
+from typing import Any, Literal
 
 from app.log_policy.base import BASE_MASK, normalize_key
 from app.log_policy.budget import TEXT_LIMIT, LogEventBudget
@@ -11,23 +9,17 @@ from app.log_policy.diagnostics import LogProcessingDiagnostics
 from app.log_policy.leak_prevention import prevent_leaks
 from app.log_policy.sanitize import sanitize_field_value
 
-DEPTH_LIMIT = 10
+type ValueRejectionReason = Literal["text_length_exceeded", "value_shape_invalid"]
+
+_MASKED = "***"
 
 
-class _ValueMarker(Enum):
-    """置換後の固定文字列は入力の文字列ではないため、サニタイズ・情報漏洩防止の対象にしない。"""
+class LogValueRejected(Exception):
+    """値の約束違反を通知し、ログ一件の処理を中止する。"""
 
-    MASKED = "***"
-    LIMIT = "[limit]"
-    UNSUPPORTED = "[unsupported]"
-    CYCLE = "[cycle]"
-    NON_FINITE = "[non-finite]"
-    NON_STRING_KEY = "[non-string-key]"
-
-
-def is_supported_value(value: Any) -> bool:
-    """独自の走査・文字列化を避けるため、出力対象の組み込み型だけを認める。"""
-    return type(value) in {type(None), bool, int, float, str, dict, list, tuple}
+    def __init__(self, reason: ValueRejectionReason) -> None:
+        super().__init__(reason)
+        self.reason: ValueRejectionReason = reason
 
 
 @dataclass
@@ -41,133 +33,61 @@ class LogValuePreparer:
     diagnostics: LogProcessingDiagnostics = field(
         default_factory=LogProcessingDiagnostics, kw_only=True
     )
-    active_container_ids: set[int] = field(default_factory=set)
 
-    def prepare_field_value(
+    def count_field_value(
         self, field_value: Any, *, field_name: str | None = None
     ) -> Any:
-        """値の準備の入口で、検査で形を確定させてから文字列を加工し、共有予算の超過は例外のまま呼び出し側へ伝える。"""
-        inspected_value = self.inspect_value(field_value, field_name=field_name)
-        return self.prepare_text_values(inspected_value, field_name=field_name)
-
-    def inspect_value(
-        self, value: Any, depth: int = 0, *, field_name: str | None = None
-    ) -> Any:
-        """値の木を再帰的にたどる中心で、位置ごとに打ち切るか子へ進むかを決める。"""
-        # マスク対象の項目を先に確認して、中身を見ずに丸ごと伏せる。
-        if field_name is not None:
-            normalized_field_name = normalize_key(field_name)
-            if normalized_field_name in self.mask:
-                return _ValueMarker.MASKED
-
-        # 深すぎる位置と扱えない型は、その位置だけ打ち切る。
-        if depth > DEPTH_LIMIT:
-            return _ValueMarker.LIMIT
-
-        if not is_supported_value(value):
-            return _ValueMarker.UNSUPPORTED
-
-        value_type = type(value)
-
-        # 子を持たない値は、木の末端としてここで検査を終える。
-        if value_type in {type(None), bool, int, float, str}:
-            return self.inspect_scalar(value)
-
-        # 辞書・配列は経路に載せて子へ進み、経路上に戻る参照だけを循環とする。
-        if id(value) in self.active_container_ids:
-            return _ValueMarker.CYCLE
-
-        self.active_container_ids.add(id(value))
-        try:
-            if value_type is dict:
-                return self.inspect_dictionary(value, depth)
-
-            return self.inspect_sequence(value, depth)
-        finally:
-            self.active_container_ids.remove(id(value))
-
-    def inspect_scalar(
-        self, value: None | bool | int | float | str
-    ) -> None | bool | int | float | str | _ValueMarker:
-        """木の末端の値が、ログに出せる大きさと種類かを確かめる。"""
-        value_type = type(value)
-
-        if value is None or value_type is bool:
-            return value
-
-        if value_type is int:
-            if value.bit_length() > 4096:
-                return _ValueMarker.LIMIT
-            return value
-
-        if value_type is float:
-            return value if math.isfinite(value) else _ValueMarker.NON_FINITE
-
-        text_length = len(value)
-        if text_length > TEXT_LIMIT:
-            return _ValueMarker.LIMIT
-        self.budget.check_and_count_text_chars(text_length)
-        return value
-
-    def inspect_dictionary(
-        self, dictionary: dict[Any, Any], depth: int
-    ) -> dict[str, Any] | _ValueMarker:
-        """辞書のキーごとに残すか落とすかを決め、残したキーの値だけを子として検査を続ける。"""
-        if any(type(key) is not str for key in dictionary):
-            return _ValueMarker.NON_STRING_KEY
-
-        inspected_dictionary: dict[str, Any] = {}
-
-        for key, child_value in dictionary.items():
+        """通常の項目の値をスカラーかスカラーのlistに限って予算に数えて加工に渡す値を返し、約束違反と共有予算の超過は例外のまま呼び出し側へ伝える。"""
+        # マスクする値は中身を出さないため、形を検査せずに数えない。
+        if field_name is not None and normalize_key(field_name) in self.mask:
+            return field_value
+        # 入れ子を数えるには深さと循環の扱いが要るため、辞書と入れ子は受けない。
+        if isinstance(field_value, dict):
+            raise LogValueRejected("value_shape_invalid")
+        if not isinstance(field_value, list | tuple):
+            self._count_scalar(field_value)
+            return field_value
+        # ポリシーによる加工は数えた要素だけにかけるため、
+        # 数えた要素を新しいlistに入れて渡す。
+        counted_items: list[Any] = []
+        for item in field_value:
             self.budget.check_and_count_log_items(1)
+            if isinstance(item, dict | list | tuple):
+                raise LogValueRejected("value_shape_invalid")
+            self._count_scalar(item)
+            counted_items.append(item)
+        return counted_items
 
-            # 長すぎるキーとdenyのキーは、値を見ずに落として診断に残す。
-            if len(key) > TEXT_LIMIT:
-                self.diagnostics.record_nested_key_limit_reached()
-                continue
+    def _count_scalar(self, value: Any) -> None:
+        """上限を超える文字列は数える前に止め、収まる文字列の文字数を数える。"""
+        if isinstance(value, str):
+            if len(value) > TEXT_LIMIT:
+                raise LogValueRejected("text_length_exceeded")
+            self.budget.check_and_count_text_chars(len(value))
 
-            if normalize_key(key) in self.deny:
-                self.diagnostics.record_nested_denied()
-                continue
-
-            self.budget.check_and_count_text_chars(len(key))
-
-            inspected_value = self.inspect_value(child_value, depth + 1, field_name=key)
-            inspected_dictionary[key] = inspected_value
-
-        return inspected_dictionary
-
-    def inspect_sequence(
-        self, sequence: list[Any] | tuple[Any, ...], depth: int
-    ) -> list[Any]:
-        """配列は要素を落とさず、各要素を子として同じ検査にかける。"""
-        inspected_items: list[Any] = []
-
-        for child_value in sequence:
-            self.budget.check_and_count_log_items(1)
-
-            inspected_value = self.inspect_value(child_value, depth + 1)
-            inspected_items.append(inspected_value)
-
-        return inspected_items
-
-    def prepare_text_values(self, value: Any, *, field_name: str | None = None) -> Any:
-        """形が確定した木をもう一度たどり、文字列だけを項目別サニタイズと情報漏洩防止で加工する。"""
-        if type(value) is _ValueMarker:
-            return value.value
+    def apply_policy(self, value: Any, *, field_name: str | None = None) -> Any:
+        """ログに出す形の木をたどり、deny・mask・項目別サニタイズ・情報漏洩防止をかける。"""
+        # 数える段はmaskの項目を飛ばすだけなので、伏せるのはここで行う。
+        if field_name is not None and normalize_key(field_name) in self.mask:
+            return _MASKED
         # 配列の要素は親の項目名を引き継ぎ、辞書に入ったら子のキーで選び直す。
-        if type(value) is dict:
+        if isinstance(value, dict):
             prepared_dictionary: dict[str, Any] = {}
             for key, child_value in value.items():
+                if normalize_key(key) in self.deny:
+                    self.diagnostics.record_nested_denied()
+                    continue
                 prepared_key = prevent_leaks(key)
-                prepared_dictionary[prepared_key] = self.prepare_text_values(
+                prepared_dictionary[prepared_key] = self.apply_policy(
                     child_value, field_name=key
                 )
             return prepared_dictionary
-        if type(value) is list:
-            return [
-                self.prepare_text_values(item, field_name=field_name) for item in value
-            ]
+        if isinstance(value, list):
+            return [self.apply_policy(item, field_name=field_name) for item in value]
+        return self._prepare_text(value, field_name=field_name)
+
+    def _prepare_text(self, value: Any, *, field_name: str | None) -> Any:
+        """子を持たない値に項目別サニタイズをかけ、文字列には情報漏洩防止もかける。"""
         if field_name is not None:
             normalized_field_name = normalize_key(field_name)
             if normalized_field_name in self.sanitize:
@@ -176,6 +96,6 @@ class LogValuePreparer:
                 if type(value) is not str:
                     return sanitized_value
                 value = sanitized_value
-        if type(value) is str:
+        if isinstance(value, str):
             return prevent_leaks(value)
         return value
