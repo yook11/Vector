@@ -8,7 +8,7 @@ from sqlalchemy.dialects.postgresql.asyncpg import AsyncAdapt_asyncpg_dbapi
 from sqlalchemy.exc import IntegrityError
 
 from app.db.translate import translate_database_error
-from app.log_policy.exceptions.extraction import extract_exception_fields
+from app.log_policy.exceptions.extraction import extract_exception_log
 from app.log_policy.exceptions.sql import SQL_EXCEPTION_LIMIT, extract_sql_error_details
 
 pytestmark = pytest.mark.unit
@@ -188,7 +188,7 @@ class TestSqlNodeAssembly:
         )
         outer = translate_database_error(sql_error)
         outer.__cause__ = sql_error
-        fields = extract_exception_fields(outer)
+        fields = extract_exception_log(outer)
         assert fields["error_class"] == "app.db.errors.DatabaseConstraintError"
         assert "error_details" not in fields
         assert (
@@ -216,7 +216,7 @@ class TestSqlNodeAssembly:
             "synthetic-private-query", ("synthetic-private-row",), adapter
         )
         sql_error.__cause__ = adapter
-        fields = extract_exception_fields(sql_error)
+        fields = extract_exception_log(sql_error)
         assert fields["error_details"]["constraint_name"] == "articles_key"
         assert "related_exceptions" not in fields
         assert "synthetic-private" not in json.dumps(fields)
@@ -226,6 +226,6 @@ class TestSqlNodeAssembly:
         driver = ValueError("synthetic-private-parameter")
         exc = IntegrityError("INSERT ...", ("synthetic-private-parameter",), driver)
         exc.__cause__ = driver
-        fields = extract_exception_fields(exc)
+        fields = extract_exception_log(exc)
         assert "related_exceptions" not in fields
         assert "synthetic-private-parameter" not in json.dumps(fields)

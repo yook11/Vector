@@ -725,7 +725,9 @@ class TestExceptionFields:
         # 型の上では許されない、文字列でないキーを変換担当から渡す。
         details: Any = {200: "synthetic", "nested": {300: "synthetic"}}
         converter = Mock(
-            return_value=ConvertedException(message="failed", error_details=details)
+            return_value=ConvertedException(
+                error_message="failed", error_details=details
+            )
         )
 
         output = LogPolicyProcessor(BASE_LOG_RULES, exception_converter=converter)(

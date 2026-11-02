@@ -150,8 +150,8 @@ SQLAlchemy例外の原因文からSQL実データを除き、診断属性は`err
 - `event_validation.py`の`convert_event_validation_exception`の対象は`AnalyzableEventInvalidError` / `IncompleteArticleEventInvalidError` / `CuratedEventInvalidError` / `AssessedEventInvalidError`の4種類。同名属性があるだけの未知例外は対象にしない。共通入口`convert_exception`がイベント検証・SQL・生のValidationError・ApplicationError・通常例外の順に各変換へ振り分ける。
 - `event_validation.py`の`EventValidationDetails`は`kind: "application_validation"`、既存Enumの値による`reason`、`issues: [{field, code}]`を持つ。項目の順序・重複は変更せず、任意属性・元の入力を転記しない。
 - 原因文は`Validation failed: {reason}`。属性取得・変換に失敗した場合は`[exception message unavailable]`とし、診断を省略する。元の例外の`str()`へ戻さない。
-- `cause_is_aggregated`は偽で、通常の原因探索を維持する。境界での分類・Enum・再送出方法は変更しない。
-- `build_processors` → `LogPolicyProcessor` → `extract_exception_fields`のキーワード専用引数`exception_converter`で変換担当を渡す。既定値は全種類を振り分ける共通入口`convert_exception`とし、アプリ用の別入口は設けない。引数による変換担当の差し替え口は維持する。種類固有の情報抽出は各変換に閉じ、共通結果型は`types.py`で定義する。
+- `omit_inner_exceptions`は偽で、通常の原因探索を維持する。境界での分類・Enum・再送出方法は変更しない。
+- `build_processors` → `LogPolicyProcessor` → `extract_exception_log`のキーワード専用引数`exception_converter`で変換担当を渡す。既定値は全種類を振り分ける共通入口`convert_exception`とし、アプリ用の別入口は設けない。引数による変換担当の差し替え口は維持する。種類固有の情報抽出は各変換に閉じ、共通結果型は`types.py`で定義する。
 - 実行環境のロガー設定・Logfireへの接続は対象外で、既定チェーンでの出力までを保証する。
 
 ```json
@@ -162,7 +162,7 @@ SQLAlchemy例外の原因文からSQL実データを除き、診断属性は`err
 
 DB層はアプリ用例外への変換と`raise ... from exc`による原因の保持を担う。ログ側はその業務分類を変更せず、通常の例外連鎖を辿る。
 
-- `causes`の各要素は外側と同じ`ExceptionLogFields`とし、各例外自身の型・原因文・frame・任意の`error_details`・子の`causes`・グループの`exceptions`を持つ。取得元を示す関係ラベルは付けず、内側の診断属性を親へ引き上げない。
+- `causes`の各要素は外側と同じ`ExceptionLog`とし、各例外自身の型・原因文・frame・任意の`error_details`・子の`causes`・グループの`exceptions`を持つ。取得元を示す関係ラベルは付けず、内側の診断属性を親へ引き上げない。
 - `__cause__`を優先し、明示causeがなく`__suppress_context__`が偽の場合だけ`__context__`を辿る。`raise ... from None`を尊重する。
 - 最大32例外・外側から最大8段の関係までとし、原因・グループのメンバーで総数と深さを共有する。外側を1件とし、子の型判定・属性取得の前に上限を確認する。同じ参照の再登場や循環確認も総数に含め、現在の経路に戻る参照だけを`[cycle]`とする。
 - `BaseExceptionGroup`のメンバーは`exceptions`に格納する。原因を先に辿り、メンバーは元の順序で各原因まで展開する。上限までの情報を残し、省略する原因は`causes: "[limit]"`、メンバーの残りは`exceptions`の末尾の`"[limit]"`で示し、その先の走査を止める。
@@ -238,7 +238,7 @@ DB層はアプリ用例外への変換と`raise ... from exc`による原因の�
 | `inspect_dictionary` | 非文字列キーがあれば辞書全体を `[non-string-key]` にし値は見ない。文字列キーだけのとき、一項目ごとに検査件数・キー長・deny・合計文字数を確認し、子の値を `inspect_value` で検査して新しい辞書へ格納する。 |
 | `inspect_sequence` | 配列をたどり、各要素の件数を確認・加算し、子の値を `inspect_value` で検査して順序を保った新しい配列へ格納する。 |
 | `prepare_text_values` | 検査済みの組み込み型の構造だけを辿り、文字列値とネストのキーへ `sanitize_text` → 同じ `mask` による `mask_assignments` を一度ずつ直接適用する。トップレベルの項目名は置換しない。 |
-| `extract_exception_fields` | 受けてよい `exc_info` は structlog と同じ3形式（`True` / 例外 / 3要素 tuple）とし、合ったものだけ `ExcInfo` に揃える。原因文は型を見て `extract_sql_error_message` / `extract_validation_message` / `str(exc)` のどれかから一度取り、型名とframeを合わせて `ExceptionLogFields` を作る。SQL例外では原因文と独立した `extract_sql_error_details` から `error_details` を追加し、通常例外のcause/contextを同じ構造の `causes` へ、グループのメンバーを `exceptions` へ展開する。直接のdriver例外は原文を省略する。合わない値はフィールドを作らない。伏せ字と上限は値準備が担当する。processorは通常入力の走査後に生成項目を抽出し、通常項目と同じ入口で各値を準備する。 |
+| `extract_exception_log` | 受けてよい `exc_info` は structlog と同じ3形式（`True` / 例外 / 3要素 tuple）とし、合ったものだけ `ExcInfo` に揃える。原因文は型を見て `extract_sql_error_message` / `extract_validation_message` / `str(exc)` のどれかから一度取り、型名とframeを合わせて `ExceptionLog` を作る。SQL例外では原因文と独立した `extract_sql_error_details` から `error_details` を追加し、通常例外のcause/contextを同じ構造の `causes` へ、グループのメンバーを `exceptions` へ展開する。直接のdriver例外は原文を省略する。合わない値はフィールドを作らない。伏せ字と上限は値準備が担当する。processorは通常入力の走査後に生成項目を抽出し、通常項目と同じ入口で各値を準備する。 |
 
 検査で作る構造は入力と分離し、入力は変更しない。値の置換(`[limit]`・`[unsupported]`・`[cycle]`・`[non-finite]`・`[non-string-key]`)は内部マーカーで表し、サニタイズ・マスクを通さず固定文字列として出力する。`LogBudgetExceeded` は共有予算超過をprocessorへ通知する。単独の値準備・例外準備ではこの通知を呼び出し側へ伝播し、processorではログ全体を固定出力へ置換して業務側へ伝播させない。
 
@@ -296,7 +296,7 @@ processorは各 `preparer.prepare_field_value(...)` の結果を格納した辞�
 - [backend/app/log_policy/leak_prevention.py](../../backend/app/log_policy/leak_prevention.py): 情報漏洩防止（文字列に紛れた既知の種類の認証情報を種類付きの表記へ置き換える）。旧 `sanitize_text`・`mask_assignments` を置き換えた。長さ制限は出力側
 - [backend/app/log_policy/sanitize.py](../../backend/app/log_policy/sanitize.py): 項目別サニタイズの対応表と共通入口 `sanitize_field_value`
 - [backend/app/log_policy/exceptions/](../../backend/app/log_policy/exceptions/): 種類ごとの変換。`sql.py` は原因文の保護とSQL診断、`validation.py` はPydantic検証、`event_validation.py` はイベント検証、`application.py` は共通アプリケーション例外を担当し、すべて `ConvertedException` を返す
-- [backend/app/log_policy/exceptions/extraction.py](../../backend/app/log_policy/exceptions/extraction.py): `exc_info` の解決と `ExceptionLogFields` の組み立て。型は型名・原因文・frameと任意の `error_details` / `causes` / `exceptions` を持つ最終出力の契約とする。原因ノードにも同じ型を使う。伏せ字と上限は値準備が担当する
+- [backend/app/log_policy/exceptions/extraction.py](../../backend/app/log_policy/exceptions/extraction.py): `exc_info` の解決と `ExceptionLog` の組み立て。型は型名・原因文・frameと任意の `error_details` / `causes` / `exceptions` を持つ最終出力の契約とする。原因ノードにも同じ型を使う。伏せ字と上限は値準備が担当する
 - [backend/app/log_policy/exceptions/conversion.py](../../backend/app/log_policy/exceptions/conversion.py): 例外1件の種類別変換を担当し、原因文・診断属性・内部原因の集約状態を返す。SQL内部の診断抽出は `sql.py` に委譲し、通常の原因連鎖とグループの探索は `extraction.py` が担当する
 - [backend/app/log_policy/exceptions/application.py](../../backend/app/log_policy/exceptions/application.py): `ApplicationError`のメッセージと明示された`details`を共通形式へ写す。例外の任意属性を自動展開せず、共通入口から呼び出す
 - [backend/app/log_policy/policies/article_analysis.py](../../backend/app/log_policy/policies/article_analysis.py)、[article_fetch.py](../../backend/app/log_policy/policies/article_fetch.py): 目的別定義（記事分析はモデル・トークン数の完成済みルールも定義）

@@ -338,7 +338,7 @@ class TestExceptionBudget:
         ]
         for parent, cause in zip(chain, chain[1:]):
             parent.__cause__ = cause
-        exception_output = extraction.extract_exception_fields(chain[0])
+        exception_output = extraction.extract_exception_log(chain[0])
 
         output = LogPolicyProcessor(BASE_LOG_RULES)(
             None,

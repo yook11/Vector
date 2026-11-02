@@ -14,7 +14,7 @@ from app.log_policy.budget import (
 )
 from app.log_policy.diagnostics import LogProcessingDiagnostics
 from app.log_policy.exceptions.conversion import convert_exception
-from app.log_policy.exceptions.extraction import extract_exception_fields
+from app.log_policy.exceptions.extraction import extract_exception_log
 from app.log_policy.exceptions.types import ExceptionConverter
 from app.log_policy.field_selection import LogFieldSelector
 from app.log_policy.value_preparation import (
@@ -112,14 +112,14 @@ class LogPolicyProcessor:
             )
 
         # 同名の通常入力より、実際の例外から抽出した情報を優先する。
-        exception_fields = extract_exception_fields(
+        exception_log = extract_exception_log(
             event_dict.get("exc_info"),
             exception_converter=self.exception_converter,
         )
-        if exception_fields is not None:
+        if exception_log is not None:
             # 例外の出力は抽出が形と量を保証するため、検査も予算の計上もせず、
             # ポリシーと情報漏洩防止だけをかける。
-            for field_name, field_value in exception_fields.items():
+            for field_name, field_value in exception_log.items():
                 prepared_event[field_name] = preparer.apply_policy(
                     field_value, field_name=field_name
                 )

@@ -55,7 +55,7 @@ class TestExcInfo:
         try:
             raise ValueError("boom")
         except ValueError:
-            fields = extraction.extract_exception_fields(True)
+            fields = extraction.extract_exception_log(True)
         assert fields is not None
         assert fields["error_class"] == "builtins.ValueError"
         assert fields["error_message"] == "boom"
@@ -65,7 +65,7 @@ class TestExcInfo:
         try:
             raise RuntimeError("instance form")
         except RuntimeError as exc:
-            fields = extraction.extract_exception_fields(exc)
+            fields = extraction.extract_exception_log(exc)
         assert fields is not None
         assert fields["error_class"] == "builtins.RuntimeError"
         assert fields["error_message"] == "instance form"
@@ -74,7 +74,7 @@ class TestExcInfo:
     @pytest.mark.parametrize("value", [None, False], ids=["none", "false"])
     def test_exc_info_absent_yields_nothing(self, value) -> None:
         """exc_info が無い / False のログには例外フィールドを足さない。"""
-        assert extraction.extract_exception_fields(value) is None
+        assert extraction.extract_exception_log(value) is None
 
     @pytest.mark.parametrize(
         "value",
@@ -87,7 +87,7 @@ class TestExcInfo:
     )
     def test_invalid_exc_info_is_ignored(self, value) -> None:
         """型が合わない tuple は例外フィールドを作らない。"""
-        assert extraction.extract_exception_fields(value) is None
+        assert extraction.extract_exception_log(value) is None
 
 
 class TestSingleException:
@@ -95,7 +95,7 @@ class TestSingleException:
 
     def test_exception_without_chain_has_only_top_level_fields(self) -> None:
         """連鎖のない例外は、型・原因文・発生位置だけの形に変換する。"""
-        fields = extraction.extract_exception_fields(ValueError("invalid value"))
+        fields = extraction.extract_exception_log(ValueError("invalid value"))
 
         assert fields == {
             "error_class": "builtins.ValueError",
@@ -114,7 +114,7 @@ class TestRelations:
         outer.__cause__ = middle
         middle.__cause__ = OSError("connection refused")
 
-        fields = extraction.extract_exception_fields(outer)
+        fields = extraction.extract_exception_log(outer)
 
         assert fields == {
             "error_class": "builtins.RuntimeError",
@@ -147,7 +147,7 @@ class TestRelations:
         outer = RuntimeError("cleanup failed")
         outer.__context__ = KeyError("missing")
 
-        fields = extraction.extract_exception_fields(outer)
+        fields = extraction.extract_exception_log(outer)
 
         assert fields == {
             "error_class": "builtins.RuntimeError",
@@ -172,7 +172,7 @@ class TestRelations:
         outer.__context__ = ValueError("synthetic-private-context")
         outer.__cause__ = ValueError("cause")
 
-        fields = extraction.extract_exception_fields(outer)
+        fields = extraction.extract_exception_log(outer)
 
         assert fields == {
             "error_class": "builtins.RuntimeError",
@@ -199,7 +199,7 @@ class TestRelations:
             except ValueError:
                 raise RuntimeError("outer") from None
         except RuntimeError as exc:
-            fields = extraction.extract_exception_fields(exc)
+            fields = extraction.extract_exception_log(exc)
 
         assert "related_exceptions" not in fields
         assert "synthetic-private-context" not in json.dumps(fields)
@@ -214,7 +214,7 @@ class TestGroupMembers:
         member_a.__cause__ = OSError("timeout")
         group = ExceptionGroup("batch failed", [member_a, TypeError("task B failed")])
 
-        fields = extraction.extract_exception_fields(group)
+        fields = extraction.extract_exception_log(group)
 
         assert fields == {
             "error_class": "builtins.ExceptionGroup",
@@ -258,7 +258,7 @@ class TestGroupMembers:
         )
         group.__cause__ = OSError("connection refused")
 
-        fields = extraction.extract_exception_fields(group)
+        fields = extraction.extract_exception_log(group)
 
         assert fields == {
             "error_class": "builtins.ExceptionGroup",
@@ -306,7 +306,7 @@ class TestCycles:
         outer.__cause__ = inner
         inner.__cause__ = outer
 
-        fields = extraction.extract_exception_fields(outer)
+        fields = extraction.extract_exception_log(outer)
 
         assert fields == {
             "error_class": "builtins.RuntimeError",
@@ -335,7 +335,7 @@ class TestCycles:
         member_b.__cause__ = shared_cause
         group = ExceptionGroup("parallel failures", [member_a, member_b])
 
-        fields = extraction.extract_exception_fields(group)
+        fields = extraction.extract_exception_log(group)
 
         assert fields == {
             "error_class": "builtins.ExceptionGroup",
@@ -392,7 +392,7 @@ class TestTotalLimit:
         members = [ValueError(f"failure {index}") for index in range(member_count)]
         group = ExceptionGroup("parallel failures", members)
 
-        fields = extraction.extract_exception_fields(group)
+        fields = extraction.extract_exception_log(group)
 
         assert fields["related_exceptions"] == [
             {
@@ -414,7 +414,7 @@ class TestTotalLimit:
         members = [ValueError(f"failure {index}") for index in range(member_count)]
         group = ExceptionGroup("parallel failures", [*members, _UntouchableError()])
 
-        fields = extraction.extract_exception_fields(group)
+        fields = extraction.extract_exception_log(group)
 
         assert fields["related_exceptions"] == [
             *[
@@ -442,7 +442,7 @@ class TestTotalLimit:
         inner = ExceptionGroup("inner failures", [*members, _UntouchableError()])
         outer = ExceptionGroup("outer failures", [inner, _UntouchableError()])
 
-        fields = extraction.extract_exception_fields(outer)
+        fields = extraction.extract_exception_log(outer)
 
         assert fields["related_exceptions"] == [
             {
@@ -486,7 +486,7 @@ class TestTotalLimit:
             [included_member, omitted_member],
         )
         converter = Mock(wraps=extraction.convert_exception)
-        extraction.extract_exception_fields(group, exception_converter=converter)
+        extraction.extract_exception_log(group, exception_converter=converter)
 
         converted_exceptions = [call.args[0] for call in converter.call_args_list]
         assert included_member in converted_exceptions
@@ -503,7 +503,7 @@ class TestTotalLimit:
             [_failure_with_cause("A"), _failure_with_cause("B")],
         )
 
-        fields = extraction.extract_exception_fields(group)
+        fields = extraction.extract_exception_log(group)
 
         assert fields == {
             "error_class": "builtins.ExceptionGroup",
@@ -560,7 +560,7 @@ class TestTotalLimit:
             [_failure_with_cause("A"), _failure_with_cause("B"), _UntouchableError()],
         )
 
-        fields = extraction.extract_exception_fields(group)
+        fields = extraction.extract_exception_log(group)
 
         assert fields == {
             "error_class": "builtins.ExceptionGroup",
@@ -609,7 +609,7 @@ class TestTotalLimit:
 
 
 class TestConversionBoundary:
-    """変換担当の結果を組み立て、原因の集約と失敗を扱う。"""
+    """変換担当の結果を組み立て、内側の例外を出さない指定と失敗を扱う。"""
 
     def test_exception_extraction_leaves_leak_prevention_to_common_preparation(
         self,
@@ -618,7 +618,7 @@ class TestConversionBoundary:
         # 合成値を分割し、秘密検出ツールの規則に一致させない。
         gemini_key = "AIza" + "SyA1B2C3D4E5F6G7H8I9J0K1L2M3N4O5P6Q"
         message = f"request with {gemini_key} failed"
-        fields = extraction.extract_exception_fields(ValueError(message))
+        fields = extraction.extract_exception_log(ValueError(message))
         assert fields == {
             "error_class": "builtins.ValueError",
             "error_message": message,
@@ -635,7 +635,7 @@ class TestConversionBoundary:
         try:
             raise BrokenError()
         except BrokenError as exc:
-            fields = extraction.extract_exception_fields(exc)
+            fields = extraction.extract_exception_log(exc)
         assert fields is not None
         assert fields["error_class"].endswith("BrokenError")
         assert fields["error_message"] == "[exception message unavailable]"
@@ -654,23 +654,21 @@ class TestConversionBoundary:
 
         outer = BrokenError()
         outer.__cause__ = ValueError("inner")
-        fields = extraction.extract_exception_fields(outer)
+        fields = extraction.extract_exception_log(outer)
         assert fields["error_message"] == "[exception message unavailable]"
         assert fields["related_exceptions"][0]["exception"]["error_message"] == "inner"
 
-    def test_aggregated_cause_is_not_followed(self) -> None:
-        """変換担当が内部原因を集約済みとした場合、その原因へ進まない。"""
+    def test_omitted_inner_exceptions_are_not_followed(self) -> None:
+        """変換担当が内側の例外を出さないとした場合、その原因へ進まない。"""
         outer = RuntimeError("original message")
         outer.__cause__ = _UntouchableError()
         converter = Mock(
             return_value=ConvertedException(
-                message="converted message",
-                cause_is_aggregated=True,
+                error_message="converted message",
+                omit_inner_exceptions=True,
             )
         )
-        fields = extraction.extract_exception_fields(
-            outer, exception_converter=converter
-        )
+        fields = extraction.extract_exception_log(outer, exception_converter=converter)
 
         assert fields == {
             "error_class": "builtins.RuntimeError",
@@ -686,7 +684,7 @@ class TestConversionBoundary:
             "fetch failed", details={"reason": "network"}
         )
 
-        fields = extraction.extract_exception_fields(outer)
+        fields = extraction.extract_exception_log(outer)
 
         assert fields == {
             "error_class": "builtins.RuntimeError",
@@ -706,8 +704,8 @@ class TestConversionBoundary:
             ],
         }
 
-    def test_aggregated_related_exception_is_the_last_one_listed(self) -> None:
-        """関連する例外が内部原因を集約済みとした場合、その例外までを並べ、内部原因は読み取らない。"""
+    def test_related_exception_omitting_inner_is_the_last_one_listed(self) -> None:
+        """関連する例外が内側の例外を出さないとした場合、その例外までを並べ、内側の例外は読み取らない。"""
         outer = RuntimeError("operation failed")
         database_error = RuntimeError("database failed")
         outer.__cause__ = database_error
@@ -716,11 +714,11 @@ class TestConversionBoundary:
         def convert(exc: BaseException) -> ConvertedException:
             if exc is database_error:
                 return ConvertedException(
-                    message="database failed", cause_is_aggregated=True
+                    error_message="database failed", omit_inner_exceptions=True
                 )
-            return ConvertedException(message=str(exc))
+            return ConvertedException(error_message=str(exc))
 
-        fields = extraction.extract_exception_fields(outer, exception_converter=convert)
+        fields = extraction.extract_exception_log(outer, exception_converter=convert)
 
         assert fields == {
             "error_class": "builtins.RuntimeError",
@@ -752,11 +750,9 @@ class TestConfiguredConverter:
         group = ExceptionGroup("failures", [member, sibling])
         outer = RuntimeError("outer")
         outer.__cause__ = group
-        converter = Mock(return_value=ConvertedException(message="converted"))
+        converter = Mock(return_value=ConvertedException(error_message="converted"))
 
-        fields = extraction.extract_exception_fields(
-            outer, exception_converter=converter
-        )
+        fields = extraction.extract_exception_log(outer, exception_converter=converter)
 
         assert [call.args[0] for call in converter.call_args_list] == [
             outer,
@@ -777,11 +773,9 @@ class TestConfiguredConverter:
         inner = ValueError("inner")
         outer.__cause__ = inner
         inner.__cause__ = outer
-        converter = Mock(return_value=ConvertedException(message="converted"))
+        converter = Mock(return_value=ConvertedException(error_message="converted"))
 
-        fields = extraction.extract_exception_fields(
-            outer, exception_converter=converter
-        )
+        fields = extraction.extract_exception_log(outer, exception_converter=converter)
 
         assert [call.args[0] for call in converter.call_args_list] == [outer, inner]
         assert fields["related_exceptions"][1] == {
@@ -803,7 +797,7 @@ class TestFrames:
         try:
             _raise()
         except ValueError:
-            fields = extraction.extract_exception_fields(sys.exc_info())
+            fields = extraction.extract_exception_log(sys.exc_info())
         assert fields is not None
         innermost = fields["frames"][-1]
         assert set(innermost) == {"file", "function", "line"}
@@ -814,7 +808,7 @@ class TestFrames:
         """1件の例外でも、frame数の合計の上限までは全件を残す。"""
         exc = _failure_with_frames(extraction.FRAME_TOTAL_LIMIT, "failed")
 
-        fields = extraction.extract_exception_fields(exc)
+        fields = extraction.extract_exception_log(exc)
 
         assert len(fields["frames"]) == extraction.FRAME_TOTAL_LIMIT
 
@@ -826,7 +820,7 @@ class TestFrames:
         outer = _failure_with_frames(outer_frames, "outer")
         outer.__cause__ = _failure_with_frames(cause_frames, "cause")
 
-        fields = extraction.extract_exception_fields(outer)
+        fields = extraction.extract_exception_log(outer)
 
         assert len(fields["frames"]) == outer_frames
         assert fields["related_exceptions"][0]["exception"]["frames"] == "[limit]"
@@ -841,7 +835,7 @@ class TestFrames:
         outer.__cause__ = middle
         middle.__cause__ = _failure_with_frames(remaining_frames, "inner")
 
-        related = extraction.extract_exception_fields(outer)["related_exceptions"]
+        related = extraction.extract_exception_log(outer)["related_exceptions"]
 
         assert related[0]["exception"]["frames"] == "[limit]"
         assert len(related[1]["exception"]["frames"]) == remaining_frames
@@ -854,7 +848,7 @@ class TestTextLimits:
         """単一文字列の上限ちょうどの原因文は、そのまま残す。"""
         message = "m" * extraction.TEXT_LENGTH_LIMIT
 
-        fields = extraction.extract_exception_fields(ValueError(message))
+        fields = extraction.extract_exception_log(ValueError(message))
 
         assert fields["error_message"] == message
 
@@ -862,7 +856,7 @@ class TestTextLimits:
         """単一文字列の上限を超える原因文は、切り詰めずに全体を[limit]にする。"""
         message = "m" * (extraction.TEXT_LENGTH_LIMIT + 1)
 
-        fields = extraction.extract_exception_fields(ValueError(message))
+        fields = extraction.extract_exception_log(ValueError(message))
 
         assert fields["error_message"] == "[limit]"
 
@@ -872,7 +866,7 @@ class TestTextLimits:
             "E" * (extraction.TEXT_LENGTH_LIMIT + 1), (Exception,), {}
         )
 
-        fields = extraction.extract_exception_fields(long_named_error("failed"))
+        fields = extraction.extract_exception_log(long_named_error("failed"))
 
         assert fields["error_class"] == "[limit]"
 
@@ -881,7 +875,7 @@ class TestTextLimits:
         long_value = "r" * (extraction.TEXT_LENGTH_LIMIT + 1)
         exc = ApplicationError("failed", details={"reason": long_value, "code": "c"})
 
-        fields = extraction.extract_exception_fields(exc)
+        fields = extraction.extract_exception_log(exc)
 
         assert fields["error_details"] == {"reason": "[limit]", "code": "c"}
 
@@ -890,7 +884,7 @@ class TestTextLimits:
         long_key = "k" * (extraction.TEXT_LENGTH_LIMIT + 1)
         exc = ApplicationError("failed", details={long_key: "value"})
 
-        fields = extraction.extract_exception_fields(exc)
+        fields = extraction.extract_exception_log(exc)
 
         assert fields["error_details"] == "[limit]"
 
@@ -904,7 +898,7 @@ class TestTextLimits:
         for parent, cause in zip(chain, chain[1:]):
             parent.__cause__ = cause
 
-        fields = extraction.extract_exception_fields(chain[0])
+        fields = extraction.extract_exception_log(chain[0])
 
         assert fields["error_message"] == message
         assert [
@@ -927,7 +921,7 @@ class TestTextLimits:
         for parent, cause in zip(chain, chain[1:]):
             parent.__cause__ = cause
 
-        related = extraction.extract_exception_fields(chain[0])["related_exceptions"]
+        related = extraction.extract_exception_log(chain[0])["related_exceptions"]
 
         assert related[count - 2]["exception"]["error_message"] == "[limit]"
         assert related[count - 1]["exception"] == {
@@ -950,7 +944,7 @@ class TestDetailsLimit:
         outer = ApplicationError("outer", details=outer_details)
         outer.__cause__ = ApplicationError("cause", details=cause_details)
 
-        fields = extraction.extract_exception_fields(outer)
+        fields = extraction.extract_exception_log(outer)
 
         assert fields["error_details"] == outer_details
         assert fields["related_exceptions"][0]["exception"]["error_details"] == (
@@ -975,7 +969,7 @@ class TestDetailsLimit:
         outer.__cause__ = middle
         middle.__cause__ = ApplicationError("inner", details=inner_details)
 
-        related = extraction.extract_exception_fields(outer)["related_exceptions"]
+        related = extraction.extract_exception_log(outer)["related_exceptions"]
 
         assert related[0]["exception"]["error_details"] == "[limit]"
         assert related[1]["exception"]["error_details"] == inner_details
@@ -995,10 +989,12 @@ class TestDetailsLimit:
             ],
         }
         converter = Mock(
-            return_value=ConvertedException(message="failed", error_details=details)
+            return_value=ConvertedException(
+                error_message="failed", error_details=details
+            )
         )
 
-        fields = extraction.extract_exception_fields(
+        fields = extraction.extract_exception_log(
             ValueError("failed"), exception_converter=converter
         )
 
@@ -1012,10 +1008,12 @@ class TestDetailsValues:
         """変換担当がbytesとNaNを返しても、抽出の出力は厳しいJSONに変換でき、bytesの中身を含まない。"""
         details = {"payload": _SECRET.encode(), "ratio": float("nan")}
         converter = Mock(
-            return_value=ConvertedException(message="failed", error_details=details)
+            return_value=ConvertedException(
+                error_message="failed", error_details=details
+            )
         )
 
-        fields = extraction.extract_exception_fields(
+        fields = extraction.extract_exception_log(
             ValueError("failed"), exception_converter=converter
         )
 

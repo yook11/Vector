@@ -19,7 +19,7 @@ class TestSqlConversion:
     """SQL本文やパラメータを出さず、ログ用の原因情報へ変換する。"""
 
     def test_sql_and_parameters_segments_are_removed(self) -> None:
-        """SQL本文とパラメータを除いた原因文を返し、内部原因は集約済みとする。"""
+        """SQL本文とパラメータを除いた原因文を返し、内側の例外は出さないとする。"""
         exc = IntegrityError(
             "INSERT INTO t (a) VALUES (%s)",
             (_SECRET,),
@@ -34,12 +34,12 @@ class TestSqlConversion:
         result = convert_exception(exc)
 
         assert asdict(result) == {
-            "message": (
+            "error_message": (
                 "(builtins.Exception) duplicate key value violates "
                 'unique constraint "t_a_key"'
             ),
             "error_details": None,
-            "cause_is_aggregated": True,
+            "omit_inner_exceptions": True,
         }
 
     @pytest.mark.parametrize(
@@ -63,7 +63,7 @@ class TestSqlConversion:
         exc = IntegrityError("INSERT ...", (_SECRET,), orig)
         assert _SECRET in exc.args[0]
         result = convert_exception(exc)
-        assert result.message == (
+        assert result.error_message == (
             '(builtins.Exception) duplicate key violates unique constraint "t_key"'
         )
         assert _SECRET not in json.dumps(asdict(result))
@@ -77,7 +77,7 @@ class TestSqlConversion:
         )
         assert _SECRET in exc.args[0]
         result = convert_exception(exc)
-        assert result.message == (
+        assert result.error_message == (
             '(builtins.Exception) invalid input syntax for type integer: "***"'
         )
 
@@ -88,7 +88,7 @@ class TestSqlConversion:
         exc = IntegrityError("INSERT ...", (_SECRET,), driver)
         result = convert_exception(exc)
         assert result.error_details == {"kind": "postgresql", "sqlstate": "23505"}
-        assert "duplicate key" in result.message
+        assert "duplicate key" in result.error_message
         assert _SECRET not in json.dumps(asdict(result))
 
     def test_sqlstate_extraction_failure_preserves_message(self) -> None:
@@ -101,7 +101,7 @@ class TestSqlConversion:
 
         exc = IntegrityError("INSERT ...", (), DriverError("duplicate key"))
         result = convert_exception(exc)
-        assert result.message.endswith("duplicate key")
+        assert result.error_message.endswith("duplicate key")
         assert result.error_details is None
         assert _SECRET not in json.dumps(asdict(result))
 
@@ -112,7 +112,9 @@ class TestSqlConversion:
         exc = IntegrityError("INSERT ...", params, Exception(_SECRET))
         assert _SECRET in exc.args[0]
         result = convert_exception(exc)
-        assert result.message == ("SQL error (parameters exceeded inspection limit)")
+        assert result.error_message == (
+            "SQL error (parameters exceeded inspection limit)"
+        )
         assert _SECRET not in json.dumps(asdict(result))
 
 
@@ -124,13 +126,13 @@ class TestSqlMessageIndependence:
         )
         result = convert_exception(IntegrityError("INSERT ...", ("a",), driver))
         assert result.error_details["constraint_name"] == "articles_key"
-        assert '"***rticles_key"' in result.message
+        assert '"***rticles_key"' in result.error_message
 
     def test_uuid_parameter_does_not_discard_diagnostics(self) -> None:
         """原因文を保護できないUUIDパラメータがあっても診断属性は残る。"""
         driver = PostgresError.new({"C": "23502", "M": "null value", "c": "title"})
         result = convert_exception(IntegrityError("INSERT ...", (UUID(int=1),), driver))
-        assert result.message == "SQL error (unsupported parameter type)"
+        assert result.error_message == "SQL error (unsupported parameter type)"
         assert result.error_details == {
             "kind": "postgresql",
             "sqlstate": "23502",
@@ -143,9 +145,9 @@ class TestSqlMessageIndependence:
             PostgresError.new({"C": "22P02", "M": "synthetic-private-value"})
         )
         assert asdict(result) == {
-            "message": "[exception message omitted]",
+            "error_message": "[exception message omitted]",
             "error_details": {"kind": "postgresql", "sqlstate": "22P02"},
-            "cause_is_aggregated": True,
+            "omit_inner_exceptions": True,
         }
 
     def test_message_failure_does_not_discard_diagnostics(self) -> None:
@@ -162,5 +164,5 @@ class TestSqlMessageIndependence:
                 "INSERT ...", (), PostgresError.new({"C": "23505", "M": "duplicate"})
             )
         )
-        assert result.message == "[exception message unavailable]"
+        assert result.error_message == "[exception message unavailable]"
         assert result.error_details == {"kind": "postgresql", "sqlstate": "23505"}
