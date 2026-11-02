@@ -25,7 +25,7 @@ def test_batch_error_preserves_reason_field_and_record_position(
     converted_error = convert_exception(error)
 
     assert (
-        converted_error.message
+        converted_error.error_message
         == "Received message batch validation failed: missing_required_field"
     )
     assert converted_error.error_details == {
@@ -45,7 +45,7 @@ def test_batch_error_omits_unspecified_record_position() -> None:
     converted_error = convert_exception(error)
 
     assert (
-        converted_error.message
+        converted_error.error_message
         == "Received message batch validation failed: invalid_type"
     )
     assert converted_error.error_details == {
