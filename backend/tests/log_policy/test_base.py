@@ -5,7 +5,7 @@ from __future__ import annotations
 import pytest
 
 from app.log_policy import LogPolicy, LogPolicyRules
-from app.log_policy.base import BASE_ALLOW, BASE_DENY, BASE_LOG_RULES, BASE_MASK
+from app.log_policy.base import BASE_ALLOW, BASE_DENY, BASE_LOG_RULES
 
 pytestmark = pytest.mark.unit
 
@@ -18,11 +18,6 @@ class TestDefinition:
         assert BASE_LOG_RULES.policy is None
         assert BASE_LOG_RULES.allow == BASE_ALLOW
         assert BASE_LOG_RULES.deny == BASE_DENY
-        assert BASE_LOG_RULES.mask == BASE_MASK
-
-    def test_base_mask_is_empty(self) -> None:
-        """認証キーはdenyで項目ごと除外するため、基底のmaskには入れない。"""
-        assert BASE_MASK == frozenset()
 
     def test_allow_is_normalized_and_stored_with_base_fields(self) -> None:
         """allowは生成時に正規化と基底の追加を完了し、取得時に再生成しない。"""
@@ -47,22 +42,18 @@ class TestDefinition:
 
     def test_input_changes_do_not_change_constructed_rules(self) -> None:
         """作成に渡した変更可能な入力を書き換えても、確定した各規則は変わらない。"""
-        sanitize_fields = {"canonical_url"}
+        allow_fields = {"canonical_url"}
         rules = LogPolicyRules(
             policy=LogPolicy.PROCESS_RUNTIME,
-            allow=frozenset({"canonical_url"}),
+            allow=allow_fields,
             deny=frozenset({"hidden_field"}),
-            mask=frozenset({"private_text"}),
-            sanitize=sanitize_fields,
         )
 
-        sanitize_fields.clear()
-        sanitize_fields.add("source_url")
+        allow_fields.clear()
+        allow_fields.add("source_url")
 
         assert rules.allow == BASE_ALLOW | {"canonical_url"}
         assert rules.deny == BASE_DENY | {"hidden_field"}
-        assert rules.mask == BASE_MASK | {"private_text"}
-        assert rules.sanitize == BASE_LOG_RULES.sanitize | {"canonical_url"}
 
 
 class TestExtension:
@@ -114,102 +105,3 @@ class TestExtension:
         parent = LogPolicyRules(LogPolicy.PROCESS_RUNTIME, frozenset({"parent_count"}))
         child = parent.extend(allow=frozenset())
         assert child.allow == BASE_ALLOW
-
-
-class TestMask:
-    """mask は allow / deny と独立した集合で、継承しても正規化して保持する。"""
-
-    def test_mask_is_normalized_and_stored_with_base_keys(self) -> None:
-        """maskは基底と正規化済みの追加キーを生成時に確定する。"""
-        rules = LogPolicyRules(
-            LogPolicy.PROCESS_RUNTIME, frozenset(), mask=frozenset({"PrivateText"})
-        )
-        mask = rules.mask
-        assert mask == BASE_MASK | {"private_text"}
-        assert rules.mask is mask
-
-    def test_deny_and_mask_are_independent_sets(self) -> None:
-        """追加denyと追加maskを互いの集合へ暗黙に混ぜない。"""
-        rules = LogPolicyRules(
-            LogPolicy.PROCESS_RUNTIME,
-            frozenset(),
-            deny=frozenset({"hidden_field"}),
-            mask=frozenset({"private_text"}),
-        )
-        assert rules.deny == BASE_DENY | {"hidden_field"}
-        assert rules.mask == BASE_MASK | {"private_text"}
-
-    def test_mask_can_overlap_allow_and_deny(self) -> None:
-        """maskは構造化項目の選別とは別なのでallow・denyとの重複を許可する。"""
-        rules = LogPolicyRules(
-            LogPolicy.PROCESS_RUNTIME,
-            frozenset({"visible_field"}),
-            deny=frozenset({"hidden_field"}),
-            mask=frozenset({"visible_field", "hidden_field"}),
-        )
-        assert rules.mask & rules.allow == {"visible_field"}
-        assert "hidden_field" in rules.mask & rules.deny
-
-    def test_repeated_extension_keeps_normalized_ancestor_masks(self) -> None:
-        """継承を重ねても基底・親・子のmaskを正規化して保持する。"""
-        parent = LogPolicyRules(
-            LogPolicy.PROCESS_RUNTIME, frozenset(), mask=frozenset({"ParentPrivate"})
-        )
-        child = parent.extend(allow=frozenset(), mask=frozenset({"Child-Private"}))
-        descendant = child.extend(allow=frozenset())
-        assert descendant.mask == BASE_MASK | {"parent_private", "child_private"}
-
-    def test_extension_does_not_change_parent_mask(self) -> None:
-        """子へmaskを追加しても親のmaskを変更しない。"""
-        parent = LogPolicyRules(
-            LogPolicy.PROCESS_RUNTIME, frozenset(), mask=frozenset({"parent_private"})
-        )
-        parent.extend(allow=frozenset(), mask=frozenset({"child_private"}))
-        assert parent.mask == BASE_MASK | {"parent_private"}
-
-
-class TestSanitize:
-    """サニタイズ対象の項目名を正規化し、親子の対象項目を合わせる。"""
-
-    def test_sanitize_normalizes_field_name(self) -> None:
-        """正規化後のサニタイズ対象のキー集合が期待値と一致する。"""
-        rules = LogPolicyRules(
-            policy=LogPolicy.PROCESS_RUNTIME,
-            allow=frozenset(),
-            sanitize=frozenset({"CanonicalUrl"}),
-        )
-
-        assert rules.sanitize == BASE_LOG_RULES.sanitize | {"canonical_url"}
-
-    def test_extension_merges_different_sanitize_fields(self) -> None:
-        """子に別の項目を追加すると、親と子の両方がサニタイズ対象になる。"""
-        parent = LogPolicyRules(
-            policy=LogPolicy.PROCESS_RUNTIME,
-            allow=frozenset(),
-            sanitize=frozenset({"canonical_url"}),
-        )
-
-        child = parent.extend(
-            allow=frozenset(),
-            sanitize=frozenset({"source_url"}),
-        )
-
-        assert child.sanitize == BASE_LOG_RULES.sanitize | {
-            "canonical_url",
-            "source_url",
-        }
-
-    def test_extension_does_not_duplicate_same_sanitize_field(self) -> None:
-        """親と子で同じ項目を指定しても、サニタイズ対象は重複しない。"""
-        parent = LogPolicyRules(
-            policy=LogPolicy.PROCESS_RUNTIME,
-            allow=frozenset(),
-            sanitize=frozenset({"canonical_url"}),
-        )
-
-        child = parent.extend(
-            allow=frozenset(),
-            sanitize=frozenset({"canonical_url"}),
-        )
-
-        assert child.sanitize == BASE_LOG_RULES.sanitize | {"canonical_url"}

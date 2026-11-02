@@ -17,11 +17,9 @@ from app.log_policy.value_preparation import LogValuePreparer, LogValueRejected
 pytestmark = pytest.mark.unit
 
 
-def _prepare(preparer: LogValuePreparer, field_value: object, **kwargs) -> object:
+def _prepare(preparer: LogValuePreparer, field_value: object) -> object:
     """processorと同じく、値を数えてからポリシーをかける。"""
-    return preparer.apply_policy(
-        preparer.count_field_value(field_value, **kwargs), **kwargs
-    )
+    return preparer.apply_policy(preparer.count_field_value(field_value))
 
 
 class TestTypeConversion:
@@ -89,31 +87,7 @@ class TestNestedDeny:
 
 
 class TestInspectionOrder:
-    """マスクを形の検査より先に行い、上限を超えた要素は検査せず後続も取り出さない。"""
-
-    def test_masked_field_skips_value_inspection_and_text_preparation(self) -> None:
-        """マスク対象の値は型・内部構造を検査せず、置換後のマーカーにサニタイズも情報漏洩防止も適用しない。"""
-        preparer = LogValuePreparer(
-            BASE_DENY,
-            mask=frozenset({"private_text"}),
-            sanitize=frozenset({"private_text"}),
-        )
-
-        with (
-            patch(
-                "app.log_policy.value_preparation.sanitize_field_value",
-                side_effect=AssertionError("must not sanitize a masked field"),
-            ),
-            patch(
-                "app.log_policy.value_preparation.prevent_leaks",
-                side_effect=AssertionError("must not redact a mask marker"),
-            ),
-        ):
-            output = _prepare(
-                preparer, {"message": "synthetic"}, field_name="private_text"
-            )
-
-        assert output == "***"
+    """上限を超えた要素は検査せず、後続も取り出さない。"""
 
     def test_sequence_stops_before_inspecting_item_over_limit(self) -> None:
         """上限を超えた配列要素を検査せず、後続要素も取り出さない。"""

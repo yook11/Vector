@@ -97,42 +97,15 @@ class TestPurposeRuleConstants:
         assert rules.allow & rules.deny == frozenset()
 
 
-class TestDenyAndMaskSeparation:
-    """deny と mask は項目名で働き、文字列の中に書かれた値は変えない。"""
+class TestDenyScope:
+    """deny は項目名で働き、文字列の中に書かれた値は変えない。"""
 
-    def test_inherited_deny_and_mask_apply_to_their_respective_targets(self) -> None:
-        """継承済みのdenyで項目を除外し、継承済みのmaskで項目の値を置き換える。"""
-        purpose = LogPolicyRules(
-            LogPolicy.PROCESS_RUNTIME, frozenset(), mask=frozenset({"MaskedSample"})
-        )
-        purpose = purpose.extend(
-            allow=frozenset(), deny=frozenset({"RestrictedSample"})
-        )
-        rules = purpose.extend(allow=frozenset({"MaskedSample"}))
-        output = LogPolicyProcessor(rules)(
-            None,
-            "info",
-            {"RestrictedSample": "synthetic field", "MaskedSample": "synthetic field"},
-        )
-        assert output == {
-            "MaskedSample": "***",
-            "log_policy": "process_runtime",
-            "_denied_keys": ["restricted_sample"],
-        }
-
-    @pytest.mark.parametrize(
-        "protection_rules",
-        [
-            pytest.param({"deny": frozenset({"restricted_sample"})}, id="deny"),
-            pytest.param({"mask": frozenset({"restricted_sample"})}, id="mask"),
-        ],
-    )
-    def test_protection_rules_do_not_change_text_content(
-        self, protection_rules
-    ) -> None:
-        """deny・maskに登録したキー名が文字列の中に書かれていても、その値は変えない。"""
+    def test_deny_does_not_change_text_content(self) -> None:
+        """denyに登録したキー名が文字列の中に書かれていても、その値は変えない。"""
         rules = LogPolicyRules(
-            LogPolicy.PROCESS_RUNTIME, frozenset({"payload"}), **protection_rules
+            LogPolicy.PROCESS_RUNTIME,
+            frozenset({"payload"}),
+            deny=frozenset({"restricted_sample"}),
         )
         output = LogPolicyProcessor(rules)(
             None,
@@ -144,35 +117,3 @@ class TestDenyAndMaskSeparation:
         )
         assert output["event"] == "restricted_sample=synthetic"
         assert output["payload"] == "restricted_sample=synthetic"
-
-
-class TestTopLevelAllow:
-    """保護規則の登録はトップレベル項目の出力許可を与えない。"""
-
-    @pytest.mark.parametrize(
-        "protection_rules",
-        [
-            pytest.param(
-                {"mask": frozenset({"canonical_url"})},
-                id="mask_without_allow",
-            ),
-            pytest.param(
-                {"sanitize": frozenset({"canonical_url"})},
-                id="sanitize_without_allow",
-            ),
-        ],
-    )
-    def test_protection_rules_do_not_grant_top_level_allow(
-        self, protection_rules
-    ) -> None:
-        """保護規則へ登録してもallowにないトップレベル項目は未登録として落とす。"""
-        rules = LogPolicyRules(
-            LogPolicy.PROCESS_RUNTIME, frozenset(), **protection_rules
-        )
-        output = LogPolicyProcessor(rules)(
-            None,
-            "info",
-            {"canonical_url": "synthetic"},
-        )
-        assert "canonical_url" not in output
-        assert output["_unregistered_count"] == 1
