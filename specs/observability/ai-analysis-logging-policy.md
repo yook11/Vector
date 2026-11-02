@@ -9,7 +9,7 @@ Implementation: Partially implemented。Assessmentの入口・終端、初期化
 基底の正本: [アプリケーションログの共通基底ポリシー](./logging-base-policy.md)
 関連: [#317 記録方針の共通化](https://github.com/yook11/Vector/issues/317)、[#328 エラーの情報保持と安全な記録の分離](https://github.com/yook11/Vector/issues/328)
 
-変更状況: mask・sanitize と文字列内の認証情報の置換は[ログの情報漏洩防止と項目別サニタイズの責務分離](./logging-leak-prevention-policy.md)を優先する。本書で sanitize を既知形式の秘密の検出とする記述は旧契約。
+変更状況: 文字列内の認証情報の置換は[ログの情報漏洩防止](./logging-leak-prevention-policy.md)を優先する。本書で sanitize を既知形式の秘密の検出とする記述は旧契約。項目単位の mask と項目別サニタイズは撤去した（2026-11-02）。
 
 原因チェーンの形式と例外の上限・予算は[例外の変換と値の検査の責任分担](./logging-exception-conversion-policy.md)を優先する。SDK固有の原因構造もその形式に合わせる。Gemini SDK例外の原因文と診断項目は[Gemini SDK例外のログ変換](./gemini-sdk-exception-log-conversion.md)を優先する。
 

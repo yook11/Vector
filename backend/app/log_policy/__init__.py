@@ -7,7 +7,6 @@ from app.log_policy.base import (
     BASE_ALLOW,
     BASE_DENY,
     BASE_LOG_RULES,
-    BASE_MASK,
     LogPolicy,
     LogPolicyRules,
 )
@@ -18,7 +17,6 @@ __all__ = [
     "BASE_ALLOW",
     "BASE_DENY",
     "BASE_LOG_RULES",
-    "BASE_MASK",
     "LogPolicy",
     "LogPolicyProcessor",
     "LogPolicyRules",

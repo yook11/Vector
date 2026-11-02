@@ -38,25 +38,6 @@ _RUNTIME_RULES = LogPolicyRules(
 )
 
 
-@pytest.fixture
-def masking_processor() -> LogPolicyProcessor:
-    rules = BASE_LOG_RULES.extend(
-        allow=frozenset({"private_text", "private_text_suffix"}),
-        mask=frozenset({"private_text"}),
-    )
-    return LogPolicyProcessor(rules)
-
-
-@pytest.fixture
-def sanitizing_processor() -> LogPolicyProcessor:
-    rules = LogPolicyRules(
-        policy=LogPolicy.PROCESS_RUNTIME,
-        allow=frozenset({"payload", "canonical_url"}),
-        sanitize=frozenset({"canonical_url"}),
-    )
-    return LogPolicyProcessor(rules)
-
-
 class TestLoggingInputSources:
     """ログ引数・bind・contextvarsのどの入力経路にも禁止項目の除外を適用する。"""
 
@@ -224,109 +205,6 @@ class TestValueShape:
         assert "payload" not in output
 
 
-class TestMask:
-    """対象項目の値全体を、型によらず固定マーカーへ置き換える。"""
-
-    def test_string_field_is_masked(
-        self, masking_processor: LogPolicyProcessor
-    ) -> None:
-        """対象項目の値が文字列なら、その文字列全体をマスクする。"""
-        fields = {"private_text": "synthetic private text"}
-
-        output = masking_processor(None, "info", fields)
-
-        assert output == {"private_text": "***"}
-
-    def test_numeric_field_is_masked(
-        self, masking_processor: LogPolicyProcessor
-    ) -> None:
-        """対象項目の値が数値でも、固定マーカーに置き換える。"""
-        fields = {"private_text": 123}
-
-        output = masking_processor(None, "info", fields)
-
-        assert output == {"private_text": "***"}
-
-    def test_dictionary_field_is_masked_as_a_whole(
-        self, masking_processor: LogPolicyProcessor
-    ) -> None:
-        """対象項目の値が辞書なら、辞書全体を一つの固定マーカーに置き換える。"""
-        fields = {"private_text": {"message": "synthetic"}}
-
-        output = masking_processor(None, "info", fields)
-
-        assert output == {"private_text": "***"}
-
-    def test_list_field_is_masked_as_a_whole(
-        self, masking_processor: LogPolicyProcessor
-    ) -> None:
-        """対象項目の値が配列なら、配列全体を一つの固定マーカーに置き換える。"""
-        fields = {"private_text": ["first", "second"]}
-
-        output = masking_processor(None, "info", fields)
-
-        assert output == {"private_text": "***"}
-
-    def test_field_outside_mask_is_preserved(
-        self, masking_processor: LogPolicyProcessor
-    ) -> None:
-        """対象名を含む別の項目名はマスクせず、値をそのまま残す。"""
-        fields = {"private_text_suffix": "synthetic"}
-
-        output = masking_processor(None, "info", fields)
-
-        assert output == {"private_text_suffix": "synthetic"}
-
-    def test_normalized_field_name_is_matched_for_masking(
-        self, masking_processor: LogPolicyProcessor
-    ) -> None:
-        """項目名を正規化して対象と一致すれば、元の項目名を残して値をマスクする。"""
-        fields = {"PrivateText": "synthetic"}
-
-        output = masking_processor(None, "info", fields)
-
-        assert output == {"PrivateText": "***"}
-
-
-class TestSanitize:
-    """登録した項目にだけ、listの要素も含めてサニタイズを適用する。"""
-
-    def test_registered_field_with_list_is_sanitized(
-        self, sanitizing_processor: LogPolicyProcessor
-    ) -> None:
-        """登録項目の値がlistなら、各要素の文字列をサニタイズする。"""
-        fields = {"canonical_url": ["https://example.com/a/1?p=123#top"]}
-
-        output = sanitizing_processor(None, "info", fields)
-
-        assert output["canonical_url"] == ["https://example.com/a/1?p=123"]
-
-    def test_unregistered_field_is_not_sanitized(
-        self, sanitizing_processor: LogPolicyProcessor
-    ) -> None:
-        """未登録の項目は同じ値でもサニタイズしない。"""
-        fields = {"payload": "https://example.com/a/1?p=123#top"}
-
-        output = sanitizing_processor(None, "info", fields)
-
-        assert output["payload"] == "https://example.com/a/1?p=123#top"
-
-    def test_registered_top_level_field_is_matched_by_normalized_name(self) -> None:
-        """トップレベルの項目名を正規化して照合し、登録項目の型不一致を置換する。"""
-        rules = BASE_LOG_RULES.extend(
-            allow=frozenset({"canonical_url"}),
-            sanitize=frozenset({"canonical_url"}),
-        )
-
-        output = LogPolicyProcessor(rules)(
-            None,
-            "info",
-            {"CanonicalUrl": 123},
-        )
-
-        assert output == {"CanonicalUrl": "[unsupported]"}
-
-
 class TestLeakPrevention:
     """採用した値・ネストのキー・例外の文字列に、最後に情報漏洩防止を適用する。"""
 
@@ -401,18 +279,6 @@ class TestLeakPrevention:
         logger.info(f"failed with Authorization: Bearer {_SECRET}abcdef0123456789")
         assert capture.entries[0]["event"] == (
             "failed with Authorization: [redacted:credential]"
-        )
-
-    def test_leak_prevention_runs_after_sanitize(
-        self, sanitizing_processor: LogPolicyProcessor
-    ) -> None:
-        """サニタイズで残した部分にも、情報漏洩防止を適用する。"""
-        fields = {"canonical_url": f"https://example.com/a/1?key={_GEMINI_KEY}#top"}
-
-        output = sanitizing_processor(None, "info", fields)
-
-        assert output["canonical_url"] == (
-            "https://example.com/a/1?key=[redacted:gemini_api_key]"
         )
 
     def test_exception_message_is_redacted_in_output(self) -> None:
@@ -805,20 +671,21 @@ class TestProcessingOrder:
         """値の走査で予算を超えたら、後続項目の値は準備しない。"""
         from app.log_policy.value_preparation import LogValuePreparer
 
-        prepared_field_names = []
+        counted_values = []
         original = LogValuePreparer.count_field_value
 
-        def prepare_value(self, field_value, **kwargs):
-            prepared_field_names.append(kwargs["field_name"])
-            return original(self, field_value, **kwargs)
+        def count_value(self, field_value):
+            counted_values.append(field_value)
+            return original(self, field_value)
 
-        monkeypatch.setattr(LogValuePreparer, "count_field_value", prepare_value)
+        monkeypatch.setattr(LogValuePreparer, "count_field_value", count_value)
+        payload = [1] * MAX_ITEMS_PER_LOG_EVENT
         prepared_event = LogPolicyProcessor(_TEST_RULES)(
             None,
             "info",
-            {"payload": [1] * MAX_ITEMS_PER_LOG_EVENT, "event": "completed"},
+            {"payload": payload, "event": "completed"},
         )
-        assert prepared_field_names == ["payload"]
+        assert counted_values == [payload]
         assert prepared_event == {
             "event": "log_policy_replaced",
             "log_policy": "pipeline_control",

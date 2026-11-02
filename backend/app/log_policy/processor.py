@@ -93,8 +93,6 @@ class LogPolicyProcessor:
         selector = LogFieldSelector(rules.allow, rules.deny, diagnostics, budget=budget)
         preparer = LogValuePreparer(
             deny=rules.deny,
-            mask=rules.mask,
-            sanitize=rules.sanitize,
             budget=budget,
             diagnostics=diagnostics,
         )
@@ -103,13 +101,11 @@ class LogPolicyProcessor:
         selected_fields = selector.select_fields(event_dict)
         # 情報漏洩防止は重いため、全項目を数え終えてから加工する。
         counted_fields = {
-            field_name: preparer.count_field_value(field_value, field_name=field_name)
+            field_name: preparer.count_field_value(field_value)
             for field_name, field_value in selected_fields.items()
         }
         for field_name, field_value in counted_fields.items():
-            prepared_event[field_name] = preparer.apply_policy(
-                field_value, field_name=field_name
-            )
+            prepared_event[field_name] = preparer.apply_policy(field_value)
 
         # 同名の通常入力より、実際の例外から抽出した情報を優先する。
         exception_log = extract_exception_log(
@@ -120,9 +116,7 @@ class LogPolicyProcessor:
             # 例外の出力は抽出が形と量を保証するため、検査も予算の計上もせず、
             # ポリシーと情報漏洩防止だけをかける。
             for field_name, field_value in exception_log.items():
-                prepared_event[field_name] = preparer.apply_policy(
-                    field_value, field_name=field_name
-                )
+                prepared_event[field_name] = preparer.apply_policy(field_value)
         # どのポリシーで処理したログかを、出力に残す。
         if rules.policy is not None:
             prepared_event["log_policy"] = rules.policy.value
