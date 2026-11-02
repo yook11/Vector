@@ -2,13 +2,13 @@
 
 作成: 2026-09-17
 Status: Partially implemented
-Implementation: 基底規則・processor・例外構造化・チェーン構成を `backend/app/log_policy/` に実装済み。本文の目的別 deny・mask を定義済み。記事分析のモデル・トークン数allowとロガー属性での完成済みルール保持を実装済み。目的別allowは各目的の規則に定義した。既存structlogチェーンは置き換えず、各ロガーが全体設定から独立して組み立てる形にし、全体設定を撤去した（2026-10-28）。
+Implementation: 基底規則・processor・例外構造化・チェーン構成を `backend/app/log_policy/` に実装済み。本文の目的別 deny を定義済み。記事分析のモデル・トークン数allowとロガー属性での完成済みルール保持を実装済み。目的別allowは各目的の規則に定義した。既存structlogチェーンは置き換えず、各ロガーが全体設定から独立して組み立てる形にし、全体設定を撤去した（2026-10-28）。
 
 関連: [アプリケーションログの概念別ポリシーとCloudWatch集約](./application-logging-policy.md)、[デプロイ診断ログの共通秘匿ポリシー](../platform/deployment-log-policy.md)
 
-変更状況: [項目別サニタイズのログポリシー](./logging-sanitization-policy.md)を優先する。対象項目の値全体を、検査・再帰の前に `***` へ置き換えるマスクは実装済み。以下の文字列内部の置換をmaskと呼ぶ記述は旧契約であり、その処理は情報漏洩防止としてポリシーから切り離した。項目別サニタイズは `canonical_url`・`source_url` の対応まで実装済みで、実際の共通・目的別項目の選定は未実施。
+変更状況: 項目単位の `mask` と項目別サニタイズは、どの実ポリシーにも登録されていなかったため撤去した（2026-11-02）。本書に残る、文字列内部の置換を mask・sanitize と呼ぶ記述は旧契約であり、その処理は情報漏洩防止としてポリシーから切り離した。
 
-文字列内部の処理 (内容検出・キー付き値の置換・置換表記・`BASE_MASK`)、記事本文の文字列内保護、`redact` の語の扱い、それらのテストの配置は[ログの情報漏洩防止と項目別サニタイズの責務分離](./logging-leak-prevention-policy.md)を優先する。
+文字列内部の処理 (内容検出・キー付き値の置換・置換表記)、記事本文の文字列内保護、`redact` の語の扱い、それらのテストの配置は[ログの情報漏洩防止](./logging-leak-prevention-policy.md)を優先する。
 
 例外の抽出・原因チェーンの形式・例外側の上限・例外の出力の予算・深さ上限は[例外の変換と値の検査の責任分担](./logging-exception-conversion-policy.md)を優先する。本書の `causes` / `exceptions`、例外用の上限、深さ19、例外項目の共有予算の記述は旧契約。
 
@@ -16,7 +16,7 @@ Implementation: 基底規則・processor・例外構造化・チェーン構成�
 
 structlog の処理チェーンに共通の禁止規則がなく、秘匿は呼び出し側の規律 (`redact_secrets` の手巻き、`logger.exception()` の回避) に依存している。結果として、例外文を丸ごと捨てる箇所と生で出す箇所が混在する。
 
-ログポリシーは「処理の目的」ごとに定義し、同じ目的の処理は bounded context が違っても同じポリシーを使う。本書はその土台として、**目的に依存しない基本ログ項目のallowと認証情報のdeny・mask**を基底として定める。迷うものは基底に入れず、実装中に必要性が見えた時点で追加する。
+ログポリシーは「処理の目的」ごとに定義し、同じ目的の処理は bounded context が違っても同じポリシーを使う。本書はその土台として、**目的に依存しない基本ログ項目のallowと認証情報のdeny**を基底として定める。迷うものは基底に入れず、実装中に必要性が見えた時点で追加する。
 
 ## Evidence
 
@@ -32,27 +32,25 @@ structlog の処理チェーンに共通の禁止規則がなく、秘匿は呼�
 ## 構成
 
 ```text
-共通基底 (本書)          基本項目のallowと認証情報のdeny・mask
-  └─ 目的ポリシー (別途)  基底allow・deny・maskを含め、目的別allowを明示する
+共通基底 (本書)          基本項目のallowと認証情報のdeny
+  └─ 目的ポリシー (別途)  基底allow・denyを含め、目的別allowを明示する
        記事取得 / 記事分析 / AIプロバイダー呼び出し / キャッシュ更新通知 / リサーチ / 週次ブリーフィング
        トレンド発見 / パイプライン制御 / プロセスの稼働 / 秘密情報取得 / 認証カウンター掃除
 ```
 
-`deny`・`allow` は構造化項目の選別、`mask` は文字列内のキー付き値の置換を指定する。認証情報のdeny・maskと基本項目のallowは基底、本文などの業務データのdeny・maskと追加allowは目的別ポリシーが所有する。
+`deny`・`allow` は構造化項目の選別を指定する。認証情報のdenyと基本項目のallowは基底、本文などの業務データのdenyと追加allowは目的別ポリシーが所有する。
 
 | 指定 | 動作 | 記録 |
 | --- | --- | --- |
 | `deny` | キーごと落とす。allow に入っていても効く | `_denied_keys` に deny の語の名前 |
-| `allow` | 値を出す。文字列は呼び出し側で sanitize → mask を適用する | — |
-| `mask` | 文字列内の指定キーに対応する値を内容によらず `***` に置換する。辞書の値全体は置換しない | — |
-| 未登録 | トップレベルでdeny・allowに該当しない。maskの有無に関係なくキーごと落とす | `_unregistered_count` に件数 |
+| `allow` | 値を出す。文字列には情報漏洩防止を適用する | — |
+| 未登録 | トップレベルでdeny・allowに該当しない。キーごと落とす | `_unregistered_count` に件数 |
 
-- 継承はクラス継承ではなく、`LogPolicyRules.extend(*, allow, deny=frozenset(), mask=frozenset())` で新しい規則を作る操作で表す。直接生成時は基底allow・deny・maskを必ず含め、継承時は親のdeny・maskへそれぞれ追加分を足す。親の識別子を維持し、親の規則は変更しない。
+- 継承はクラス継承ではなく、`LogPolicyRules.extend(*, allow, deny=frozenset())` で新しい規則を作る操作で表す。直接生成時は基底allow・denyを必ず含め、継承時は親のdenyへ追加分を足す。親の識別子を維持し、親の規則は変更しない。
 - `allow` は継承時に必ず明示し、親の目的別allowは自動追加しない。基底allowは常に自動追加する。`allow` と `deny` が重なっても構築時には拒否せず、実行時に `deny` を優先して、共通・親・子の禁止をallowで解除させない。実際のポリシーで重ならないことはテストで確認する。
-- `mask` は `allow`・`deny` と重複できるが、項目の採用・除外には影響しない。`deny` と重なる項目は先に除外されるため、`mask` の指定は働かない。
-- `LogPolicyRules.allow`・`deny`・`mask` は基底・継承分を含む正規化済みの確定集合として構築時に保持する。processorは登録表を持たず、生成時に受け取った完成済みルールを直接適用する。同じ識別子のlogger同士でも規則を上書きし合わない。
-- processorは確定したdenyをフィールド選別・例外の出力の中の除外へ、確定したmaskを通常値・例外の準備へ渡し、下流で再合成しない。`LogPolicyProcessor` は指定値が厳密に `LogPolicyRules` 型でなければ生成時に拒否する。アプリは全体設定を持たず、通常の `structlog.get_logger()` はlint（TID251）で禁止する。processorはログごとの型確認や基本ルールへの差し戻しを行わず、処理失敗ではログ全体を置き換える。
-- deny・allow・mask はいずれもキー名の正規化後 (小文字・camelCase / PascalCase / 略語境界 / ハイフン → snake_case) の**完全一致**で判定する。部分一致や正規表現を使うと `completion_tokens` `rds_iam_auth_token_port` 等を巻き込み、例外リストが必要になる。基底に例外 (逃げ道) を置かないための条件である。
+- `LogPolicyRules.allow`・`deny` は基底・継承分を含む正規化済みの確定集合として構築時に保持する。processorは登録表を持たず、生成時に受け取った完成済みルールを直接適用する。同じ識別子のlogger同士でも規則を上書きし合わない。
+- processorは確定したdenyをフィールド選別・例外の出力の中の除外へ渡し、下流で再合成しない。`LogPolicyProcessor` は指定値が厳密に `LogPolicyRules` 型でなければ生成時に拒否する。アプリは全体設定を持たず、通常の `structlog.get_logger()` はlint（TID251）で禁止する。processorはログごとの型確認や基本ルールへの差し戻しを行わず、処理失敗ではログ全体を置き換える。
+- deny・allow はいずれもキー名の正規化後 (小文字・camelCase / PascalCase / 略語境界 / ハイフン → snake_case) の**完全一致**で判定する。部分一致や正規表現を使うと `completion_tokens` `rds_iam_auth_token_port` 等を巻き込み、例外リストが必要になる。基底に例外 (逃げ道) を置かないための条件である。
 - アプリのロガーは [runtime.py](../../backend/app/log_policy/runtime.py) の `create_policy_json_logger(name, rules)` で作り、`build_processors`・`ApplicationBoundLogger`・`render_policy_json`・`PrintLogger` を明示して、ルールを生成時に受け取ったprocessorをチェーンに置く。ルールは `event_dict` に入らず、ログ引数・bind・contextvarsから変更できない。processorはルールの再代入を禁止する。基底ルールの `policy` は `None` とし、目的別の場合だけ `log_policy` に識別子を出力する。
 - 明示禁止は IAM と同じ `deny` と呼ぶ (explicit deny は allow に常に優先する)。OpenTelemetry Collector の redaction processor は allow-list 非該当の削除を "redacted"、値の置換を "masked" と呼ぶため `redact` は使わない。Pydantic の `extra="forbid"` (未登録拒否に近い別概念) と混同しないよう `forbid` も使わない。
 - アプリログは Logfire から切り離す。Logfire は trace / span 専用とし、structlog のチェーンは本ポリシーが独自に構成して stdout JSON → CloudWatch へ出す。
@@ -62,7 +60,7 @@ structlog の処理チェーンに共通の禁止規則がなく、秘匿は呼�
 
 - 共通の認証情報禁止・例外保護・未登録除外は、どの目的の処理からも、bind / contextvars / ログ引数のどこから来た値にも同じく適用される。
 - 基底のキー deny は認証情報だけを定める。基本5項目のallowは `BASE_ALLOW` に定義し、本文の禁止と追加allowは目的別に持つ。
-- 目的ポリシーは基底の deny・mask を独立して継承し、それぞれ足すことしかできない。allow に基底の deny を入れても deny が優先されるため、基底より緩い出力にはならない。
+- 目的ポリシーは基底の deny を継承し、足すことしかできない。allow に基底の deny を入れても deny が優先されるため、基底より緩い出力にはならない。
 - 適用は structlog processor で行い、呼び出し側の手巻きに依存しない。renderer や Logfire 転送より前に確定させる。
 - 秘匿処理の失敗で業務結果・例外伝播・再試行を変えない。原文 fallback はしない。
 
@@ -106,7 +104,7 @@ PEM秘密鍵はキー付き値の処理より先に保護する。`private_key=-
 
 URLは `://` を起点に左側のschemeを確認し、隣接する数字・記号の後ろのURLも保護する。JWTはbase64url区画を一度ずつ走査し、不成立の接頭辞ごとに長い接尾部を再走査しない。検出結果の比較と実測は[性能測定記録](./log-sanitization-benchmark-2026-09-18.md)を参照。その後の入力上限と項目単位の置換は、以下の「入力上限と置換単位」に定める。
 
-### 2. 目的別 deny・mask との境界（記事本文）
+### 2. 目的別 deny との境界（記事本文）
 
 `BASE_DENY = CREDENTIAL_KEYS` とし、本文・派生テキストは含めない。`policies/article_text.py` の禁止項目を、本文を扱う目的のモジュール（`policies/article_fetch.py`・`policies/article_analysis.py` など）がそれぞれdenyへ明示的に採用し、共通denyを継承した規則として定義する。目的別モジュール内の `extend(allow=..., deny=...)` で利用する規則を完成させ、loggerへ渡す。識別子から規則を検索しない。
 
@@ -124,7 +122,7 @@ logger = create_policy_json_logger(__name__, ARTICLE_FETCH_LOG_RULES)
 - 上記2目的での対象は取得 HTML、抽出本文、整形本文、翻訳、要点、引用抜粋、AI 生成文。先頭 N 文字や debug レベルを例外にしない。
 - 代替は `body_length` `has_body` 等の計量値と記事 ID・URL。
 - `title` は v1 では対象にしない。
-- dict / list / tuple 内でも禁止キーを再帰的に除外する。選択した目的の確定済みmaskを文字列・例外文のマスク処理へ渡し、`content='...'` 等のキー付きの表現を伏せる。本文用maskを指定していない目的へ暗黙適用しない。自由文として埋め込まれた記事本文の完全検出は保証しない。
+- dict / list / tuple 内でも禁止キーを再帰的に除外する。自由文として埋め込まれた記事本文の完全検出は保証しない。
 - 入力値を漏らさない例外保護は引き続き共通とする。生のPydantic `ValidationError` は `str(exc)` を使わず、件数と標準エラー分類だけを抽出する。`input` / `ctx` のほか、入力を含み得る `msg` / `loc` / `title` / カスタム分類文字列も出さない。アプリの検証境界が分類済みの理由・項目・コードは、後述のアプリ用変換で取り出す。
 
 ### 3. SQL診断とパラメータ
@@ -135,13 +133,13 @@ SQLAlchemy例外の原因文からSQL実データを除き、診断属性は`err
 - SQLAlchemyの`orig`から最大8例外を、循環検出とcontextの表示抑制を守って探索する。asyncpgの`PostgresError`を取得元とし、元例外を取得できない場合だけ既知のSQLAlchemy asyncpg adapterの診断を使う。同名属性があるだけの未知例外をPostgreSQLと判定せず、異なる例外から診断属性を寄せ集めない。
 - `sqlstate` / `pgcode`は順に検査し、英大文字・数字5文字の最初の有効値を`error_details.sqlstate`へ入れる。対象名は空でない組み込み文字列のみを採用する。欠落・不正値・取得に失敗した属性は省略し、他の正常な属性を残す。
 - `hide_parameters=True`を維持する。原因文は`str(exc)`を使わず`args[0]`から取得し、`DETAIL` / `HINT` / `CONTEXT` / `QUERY` / `STATEMENT` / `LINE N`以降を除く。原因文に含まれるbind値と既知のエスケープ表現を置換する。
-- パラメータとの部分一致置換は原因文だけに適用し、診断属性へ適用しない。診断属性にも共通sanitize・目的別mask・文字数上限を適用する。SQL本文・パラメータ・行データ・補足文や任意属性は転記しない。
+- パラメータとの部分一致置換は原因文だけに適用し、診断属性へ適用しない。診断属性にも共通sanitize・文字数上限を適用する。SQL本文・パラメータ・行データ・補足文や任意属性は転記しない。
 - パラメータが循環・深さ超過・件数超過・独自型の場合は原因文を固定文にするが、診断属性は維持する。原因文抽出の失敗も`[exception message unavailable]`に局所化する。
 - パラメータの保護文脈がないasyncpg例外・adapter例外を直接受け取った場合は、診断属性を取得し、原因文を`[exception message omitted]`にする。未知のdriver独自表現に含まれる値の完全検出は保証しない。
 
 ### 共通アプリケーション例外の診断
 
-`app/shared/errors.py`の`ApplicationError`はログに依存せず、メッセージと任意の診断用辞書`details`を保持する。値の型注釈はJSONで表せる値を対象とする。`convert_application_error`は`str(exc)`と`details`を`ConvertedException`へ写し、診断情報が`None`なら最終出力の`error_details`を省略する。取得に失敗した場合は`[exception message unavailable]`を返し、任意属性へのfallbackは行わない。後段の共通sanitize・mask・出力制限を適用する。`SqsLambdaInputInvalidError`と`SqsMessageInvalidError`へ適用し、Assessmentの入口・終端のログ経路へ接続済み。`AIProviderError`と`AssessmentError`も同じ基底を継承し、例外側で定義した説明と`code` / `reason`を取得する。AI呼び出し・クライアント内部のロガー接続は後続とする。Assessmentの未定義categoryは、検証境界で元のValueErrorの原因表示を抑制し、アプリケーション例外の診断で完結させる。通常のValueErrorの共通変換は変更しない。外側の説明を固定文にしても原因連鎖全体の入力値対策が完了するわけではなく、SDK例外の説明に残る値の保護は別途対応する。
+`app/shared/errors.py`の`ApplicationError`はログに依存せず、メッセージと任意の診断用辞書`details`を保持する。値の型注釈はJSONで表せる値を対象とする。`convert_application_error`は`str(exc)`と`details`を`ConvertedException`へ写し、診断情報が`None`なら最終出力の`error_details`を省略する。取得に失敗した場合は`[exception message unavailable]`を返し、任意属性へのfallbackは行わない。後段の共通sanitize・出力制限を適用する。`SqsLambdaInputInvalidError`と`SqsMessageInvalidError`へ適用し、Assessmentの入口・終端のログ経路へ接続済み。`AIProviderError`と`AssessmentError`も同じ基底を継承し、例外側で定義した説明と`code` / `reason`を取得する。AI呼び出し・クライアント内部のロガー接続は後続とする。Assessmentの未定義categoryは、検証境界で元のValueErrorの原因表示を抑制し、アプリケーション例外の診断で完結させる。通常のValueErrorの共通変換は変更しない。外側の説明を固定文にしても原因連鎖全体の入力値対策が完了するわけではなく、SDK例外の説明に残る値の保護は別途対応する。
 
 ### アプリの検証診断
 
@@ -174,7 +172,7 @@ DB層はアプリ用例外への変換と`raise ... from exc`による原因の�
 
 ### 4. 未登録キー
 
-宣言されたポリシーのallowにもdenyにも該当しないトップレベルのキーは、maskの指定に関係なくキーごと落とす。
+宣言されたポリシーのallowにもdenyにも該当しないトップレベルのキーは、キーごと落とす。
 
 - 未登録キーは名前・値とも出さず、`_unregistered_count` に件数だけを記録する。top-level でも kwargs 展開によって入力由来の名前が入り得るため、コード由来と仮定しない。
 - deny に該当した場合は `_denied_keys` に記録し、未登録と区別する。前者は bug、後者は宣言漏れ。
@@ -185,7 +183,7 @@ DB層はアプリ用例外への変換と`raise ... from exc`による原因の�
 - `event` / `level` / `timestamp` / `logger` / `logger_name` は `BASE_ALLOW` に含め、allow選別で特別扱いしない。基本項目も通常の値と同じ構造検査・deny除外・サニタイズを通し、キー名を理由とする文字列型の強制は行わない。`level` と `timestamp` はチェーン前段で生成する。ConsoleRendererが要求するlevelの文字列型はこのチェーンで保証し、processor単体から直接接続する場合にはこの保証はない。
 - `stack` / `stack_info` / `exception` / `_record` / `_from_structlog` / `_log_policy_rules` / `exc_info` は renderer へ転送しない。スタック調査には `exc_info` から抽出した frame metadata を使う。
 - 通常の項目の値は、スカラー（文字列・整数・小数・真偽値・None）か、スカラーの list・tuple に限る。辞書と入れ子は、数えるのに深さと循環の扱いが要るため、ログ全体を置き換える（理由 `value_shape_invalid`）。JSON にできない値（bytes・set・独自オブジェクト・非有限の小数・4300桁を超える整数）は、本番の renderer `render_policy_json` がログ全体を置き換え（理由 `json_serialization_failed`）、`repr` / `__structlog__` 等を呼ばない。組み込み型の派生型はその型として扱い、list は数えた要素で作り直して加工に渡す。
-- 単一文字列4000文字、イベント内合計16000文字、走査256件までとする。抽出した例外の項目は、例外の変換の上限で形と量が決まるため、deny・mask・サニタイズ・情報漏洩防止だけをかけ、値の検査と予算の計上をしない。
+- 単一文字列4000文字、イベント内合計16000文字、走査256件までとする。抽出した例外の項目は、例外の変換の上限で形と量が決まるため、denyと情報漏洩防止だけをかけ、値の検査と予算の計上をしない。
 - 例外の `__str__` が失敗しても型と frame を残し、message は固定文にする。processor 自体の失敗（理由 `processing_failed`）と、renderer が厳しい JSON にできないログ（理由 `json_serialization_failed`）は、ログ全体を `log_policy_replaced` に置き換え、業務側へ例外を伝播させない。置き換えには、チェーンの前段が入れる `level`・`timestamp` と、`log_policy`、理由の `_policy_replaced_reason` だけを残す。原文 fallback や保護処理からの再帰ログはしない。
 - ネスト内の未登録キーの allow 制御、自由文中の未知の秘密・本文の判別は別の保証であり、共通 deny の完全一致検査だけでは保証しない。
 
@@ -202,7 +200,7 @@ DB層はアプリ用例外への変換と`raise ... from exc`による原因の�
 
 - processorは1つの `LogValuePreparer` で、通常の項目は全項目を `count_field_value` で数えてから `apply_policy` で加工し、抽出した例外の項目は数えずに `apply_policy` で加工する。文字数・走査数の予算と診断情報はログ全体で共有する。
 - すべて上限ちょうどは保持し、超えた場合だけ置換する。文字数はPythonの文字列長で数え、UTF-8やJSONのバイト数ではない。
-- 上限を超える文字列は、サニタイズも文字数の計上もせずにログ全体を置き換え、秘密の断片を残さない。通常の項目はすべて数え終えてから加工するため、共有予算の超過や値の約束違反では、どの項目にもサニタイズと情報漏洩防止をかけずにログ全体を置き換える。
+- 上限を超える文字列は、情報漏洩防止も文字数の計上もせずにログ全体を置き換え、秘密の断片を残さない。通常の項目はすべて数え終えてから加工するため、共有予算の超過や値の約束違反では、どの項目にも情報漏洩防止をかけずにログ全体を置き換える。
 - 共有予算の上限ちょうどで完了した場合は正常とし、追加の文字数・走査が必要なときに超過として処理を中止する。
 - 合計文字数には、採用されたトップレベルの名前と文字列値を含める。例外の項目と診断は数えない。同名項目は、SQLの実データや検証入力を除いた例外由来の値で上書きして優先する。固定のポリシー識別子・件数・マーカーはサニタイズ対象の文字数に加算しない。
 - denyや未登録で除外した値は文字数検査もサニタイズもしない。キー正規化の前にはキー自体の長さを検査する。
@@ -217,23 +215,23 @@ DB層はアプリ用例外への変換と`raise ... from exc`による原因の�
 
 `LogFieldSelector` は項目を列挙しながら計上し、型・内部項目・長さ・deny・allowを順に判定して、受け付けた項目を返す。トップレベルではallowが除外を保証し、定義時にallowと重ならないdenyは、除外の理由を名前付きで診断へ残すために判定する。例外の項目の辞書では `apply_policy` がdenyのみを判定し、トップレベルのallowを持ち込まない。どちらも共通の `normalize_key` と確定済みdenyを使い、禁止項目の値へ触れず除外する。選別側・値の準備側がそれぞれ同じ `LogProcessingDiagnostics` へ直接記録する。
 
-例外の生成項目は通常入力の走査後に抽出し、一つずつ値を準備して格納する。生成項目は入力allowによる選別に混ぜず、確定済みの同じdeny・mask・サニタイズと情報漏洩防止で保護し、共有予算では数えない。
+例外の生成項目は通常入力の走査後に抽出し、一つずつ値を準備して格納する。生成項目は入力allowによる選別に混ぜず、確定済みの同じdenyと情報漏洩防止で保護し、共有予算では数えない。
 
-`LogEventBudget` はログ一件ごとにprocessorが作り、selector・値準備と最初から共有する。入力のトップレベル項目数と採用した項目名の文字数はselectorが計上し、値準備は値の内部の検査と計上を担当する。`count_field_value` と `apply_policy` は項目名をmaskと項目別サニタイズの判定だけに使い、その項目を二重に数えない。単独利用の呼び出し側は外側の項目を先に計上する。
+`LogEventBudget` はログ一件ごとにprocessorが作り、selector・値準備と最初から共有する。入力のトップレベル項目数と採用した項目名の文字数はselectorが計上し、値準備は値の内部の検査と計上を担当する。`count_field_value` と `apply_policy` は項目名を受け取らず、その項目を二重に数えない。単独利用の呼び出し側は外側の項目を先に計上する。
 
 | 処理 | 責務 |
 | --- | --- |
 | `LogFieldSelector.select_fields` | 入力ログのトップレベルの項目を一つずつ計上し、項目名だけで判定して、受け付けた項目を値の参照のまま入力順に返す。denyをallowより先に判定し、未登録は名前を残さず件数だけ記録する。受け付けた項目名の文字数も計上する。 |
 | `LogPolicyProcessor` | selectorから受け付けた項目をすべて数えてから加工して格納する。例外の生成項目を準備し、診断と合わせてログを組み立てる。 |
 | `LogProcessingDiagnostics` | 各工程の診断を集約し、`as_fields()` で記録内容の独立したスナップショットを出力用の診断として返す。`_denied_keys` は deny の語の名前で入力に由来しないため、予算と情報漏洩防止を通さない。 |
-| `LogValuePreparer.count_field_value` | 通常の項目の値を、マスクの判定のあと、スカラーかスカラーの list に限って要素数と文字数を共有予算に数え、加工に渡す値（list は作り直したもの）を返す。約束を外れた値は `LogValueRejected` で知らせる。サニタイズ・情報漏洩防止・出力辞書への格納は担当しない。 |
+| `LogValuePreparer.count_field_value` | 通常の項目の値を、スカラーかスカラーの list に限って要素数と文字数を共有予算に数え、加工に渡す値（list は作り直したもの）を返す。約束を外れた値は `LogValueRejected` で知らせる。情報漏洩防止・出力辞書への格納は担当しない。 |
 | `LogEventBudget.check_and_count_log_items` | 追加件数がログ一件の共有上限に収まることを確認してから `log_item_count` へ加算する。超過時は部分加算せず中断する。 |
 | `LogEventBudget.check_and_count_text_chars` | 保護対象の文字数を共有カウンターへ加算し、合計文字数の超過時は中断する。 |
 | 項目の計上位置 | 通常入力はselectorが各項目の判定前、配列の要素は各要素の検査前に計上する。値準備ではトップレベル項目を再加算せず、例外の生成項目は数えない。 |
-| `LogValuePreparer.apply_policy` | 数えたあとの通常の項目と、抽出した例外の項目に、deny・mask・サニタイズ・情報漏洩防止をかける。検査も予算の計上もしない。 |
+| `LogValuePreparer.apply_policy` | 数えたあとの通常の項目と、抽出した例外の項目に、入れ子のキーのdenyと情報漏洩防止をかける。検査も予算の計上もしない。 |
 | `extract_exception_log` | 受けてよい `exc_info` は structlog と同じ3形式（`True` / 例外 / 3要素 tuple）とし、合ったものだけ `ExcInfo` に揃える。原因文は型を見て `extract_sql_error_message` / `extract_validation_message` / `str(exc)` のどれかから一度取り、型名とframeを合わせて `ExceptionLog` を作る。SQL例外では原因文と独立した `extract_sql_error_details` から `error_details` を追加し、通常例外のcause/contextを同じ構造の `causes` へ、グループのメンバーを `exceptions` へ展開する。直接のdriver例外は原文を省略する。合わない値はフィールドを作らない。上限は例外の変換が、伏せ字は値準備が担当する。processorは通常入力の走査後に生成項目を抽出し、`apply_policy` で各値を準備する。 |
 
-準備で作る構造は入力と分離し、入力は変更しない。マスクの `***` はサニタイズ・情報漏洩防止を通さず固定文字列として出力する。`LogBudgetExceeded` は共有予算超過を、`LogValueRejected` は値の約束違反をprocessorへ通知する。単独の値準備ではこれらの通知を呼び出し側へ伝播し、processorではログ全体を固定出力へ置換して業務側へ伝播させない。
+準備で作る構造は入力と分離し、入力は変更しない。`LogBudgetExceeded` は共有予算超過を、`LogValueRejected` は値の約束違反をprocessorへ通知する。単独の値準備ではこれらの通知を呼び出し側へ伝播し、processorではログ全体を固定出力へ置換して業務側へ伝播させない。
 
 processorは各値の準備結果を格納した辞書へ `diagnostics.as_fields()` の結果を結合し、診断のフィールド名や構造には立ち入らない。
 
@@ -242,9 +240,9 @@ processorは各値の準備結果を格納した辞書へ `diagnostics.as_fields
 ## 適用位置
 
 - API / worker / Lambda のロガーは本パッケージの `build_processors` を構築口から使い、processor を renderer の直前に置く。全体設定（`setup_logfire` の structlog 設定と `logfire.StructlogProcessor`）は、全ロガーを移した後に撤去した（2026-10-28）。
-- 順序: deny除外 → 未登録除外 → mask → 全項目の形と上限の検査 → 文字列値のsanitize → 情報漏洩防止。値の約束違反と共有予算超過は、どの工程でもログ全体の固定出力へ切り替える。切り詰めは行わない。
+- 順序: deny除外 → 未登録除外 → 全項目の形と上限の検査 → 情報漏洩防止。値の約束違反と共有予算超過は、どの工程でもログ全体の固定出力へ切り替える。切り詰めは行わない。
 - 例外は `format_exc_info` の代わりに基底が構造化する。processor が `exc_info` を消費し、型 FQN、規則 3 を通した message、frame metadata (file / function / line。locals・ソース行は含めない) に置き換える。renderer には `exc_info` が届かないため、dev console も traceback 文字列を出さない。通常のcause/contextは基底で構造化し、SDK固有の原因構造は目的ポリシー実装時に対応する。
-- 例外文・型FQN・frameのファイル名と関数名には、選択したポリシーの同じ `mask` と内容検出を適用する。型名とframeに共通maskのみを暗黙適用しない。
+- 例外文・型FQN・frameのファイル名と関数名には、情報漏洩防止を適用する。
 - 配置は `backend/app/log_policy/`。
 
 ## Non-goals
@@ -264,7 +262,7 @@ processorは各値の準備結果を格納した辞書へ `diagnostics.as_fields
 | B01 | 禁止キーを bind / contextvars / 引数から渡す | 3 経路すべてでキーが出ず `_denied_keys` に名前だけ残る。 |
 | B02 | 許可値の文中に AWS secret key / DSN userinfo / Bearer token | 値全体が置換され、他の文は残る。 |
 | B03 | AWS ARN / RDS endpoint を許可キーで渡す | 基底では置換しない (識別情報は目的ポリシーの判断)。 |
-| B04 | 仮の deny・mask を明示し、list・既知キー付き例外文・例外の診断情報を渡す | 指定した禁止値を除外し、許可した計量値は残る。実際のAI・記事取得の禁止項目の妥当性は別途検証する。 |
+| B04 | 仮の deny を明示し、list・既知キー付き例外文・例外の診断情報を渡す | 指定した禁止値を除外し、許可した計量値は残る。実際のAI・記事取得の禁止項目の妥当性は別途検証する。 |
 | B05 | SQL / parameters 連結、DETAIL、primary message 内の bind 値 | 対象値を除外し、型・SQLSTATE・保護後の primary message・frame が残る。 |
 | B06 | ポリシー未宣言 logger に任意キー | 業務キー除外、`_unregistered_count` に件数のみ。 |
 | B06a | 目的ポリシーの allow に基底 deny のキーを含めて定義 | 定義時に失敗し、processor に到達しない。 |
@@ -285,9 +283,8 @@ processorは各値の準備結果を格納した辞書へ `diagnostics.as_fields
 
 ## Implementation
 
-- [backend/app/log_policy/base.py](../../backend/app/log_policy/base.py): `LogPolicy`、基底allow・deny・mask、`BASE_LOG_RULES`、`normalize_key`、`LogPolicyRules` (生成時のallow・deny・mask確定と継承)
+- [backend/app/log_policy/base.py](../../backend/app/log_policy/base.py): `LogPolicy`、基底allow・deny、`BASE_LOG_RULES`、`normalize_key`、`LogPolicyRules` (生成時のallow・deny確定と継承)
 - [backend/app/log_policy/leak_prevention.py](../../backend/app/log_policy/leak_prevention.py): 情報漏洩防止（文字列に紛れた既知の種類の認証情報を種類付きの表記へ置き換える）。旧 `sanitize_text`・`mask_assignments` を置き換えた。長さ制限は出力側
-- [backend/app/log_policy/sanitize.py](../../backend/app/log_policy/sanitize.py): 項目別サニタイズの対応表と共通入口 `sanitize_field_value`
 - [backend/app/log_policy/exceptions/](../../backend/app/log_policy/exceptions/): 種類ごとの変換。`sql.py` は原因文の保護とSQL診断、`validation.py` はPydantic検証、`event_validation.py` はイベント検証、`application.py` は共通アプリケーション例外を担当し、すべて `ConvertedException` を返す
 - [backend/app/log_policy/exceptions/extraction.py](../../backend/app/log_policy/exceptions/extraction.py): `exc_info` の解決と `ExceptionLog` の組み立て。型は型名・原因文・frameと任意の `error_details` / `causes` / `exceptions` を持つ最終出力の契約とする。原因ノードにも同じ型を使う。伏せ字と上限は値準備が担当する
 - [backend/app/log_policy/exceptions/conversion.py](../../backend/app/log_policy/exceptions/conversion.py): 例外1件の種類別変換を担当し、原因文・診断属性・内部原因の集約状態を返す。SQL内部の診断抽出は `sql.py` に委譲し、通常の原因連鎖とグループの探索は `extraction.py` が担当する
@@ -295,18 +292,18 @@ processorは各値の準備結果を格納した辞書へ `diagnostics.as_fields
 - [backend/app/log_policy/policies/article_analysis.py](../../backend/app/log_policy/policies/article_analysis.py)、[article_fetch.py](../../backend/app/log_policy/policies/article_fetch.py): 目的別定義（記事分析はモデル・トークン数の完成済みルールも定義）
 - [backend/app/log_policy/diagnostics.py](../../backend/app/log_policy/diagnostics.py): ログ一件の診断の記録・集計・出力形式への変換
 - [backend/app/log_policy/field_selection.py](../../backend/app/log_policy/field_selection.py): トップレベルの項目の計上と項目名によるdeny・allow判定、受け付けた項目の返却
-- [backend/app/log_policy/value_preparation.py](../../backend/app/log_policy/value_preparation.py): 選別済みの値をログに使える状態へ準備する処理、構造検査とサニタイズ、共有予算
+- [backend/app/log_policy/value_preparation.py](../../backend/app/log_policy/value_preparation.py): 選別済みの値をログに使える状態へ準備する処理、構造検査と情報漏洩防止、共有予算
 - [backend/app/log_policy/bound_logger.py](../../backend/app/log_policy/bound_logger.py): `wrapper_class`に指定するINFO以上の共通ラッパー。通常のログメソッドからprocessor・整形・出力までの例外を捕捉し、再記録しない。`bind()`後も同じ保護を維持し、プロセス中断は抑止しない。位置引数の文字列展開は保護範囲外。検証は`test_bound_logger.py`に集約する
 - [backend/app/log_policy/processor.py](../../backend/app/log_policy/processor.py): 完成済みルールの受け取り、選別結果の値準備・格納、例外と診断の接続、固定の失敗イベント
 - [backend/app/log_policy/chain.py](../../backend/app/log_policy/chain.py): `build_processors`。各ロガーは [runtime.py](../../backend/app/log_policy/runtime.py) の `create_policy_json_logger` からこのチェーンを使う
 
 ## Done
 
-- [x] 共通の認証情報deny・maskと目的別の本文deny・maskを定義時に確定し、processorが完成済みの規則を適用できる。
+- [x] 共通の認証情報denyと目的別の本文denyを定義時に確定し、processorが完成済みの規則を適用できる。
 - [x] API / worker / Lambda のロガーを `build_processors` を使う目的別ロガーへ移し、全体設定を撤去する（2026-10-28）。
 - [x] B01〜B09 の上記限定された保証範囲が合成値で通る。
 - [ ] Evidence の生 `str(exc)` 箇所が基底を通した出力になっている。
-- [x] 目的ポリシーの追加が、基底の変更なしに allow の明示・deny / mask の追加で可能である。
+- [x] 目的ポリシーの追加が、基底の変更なしに allow の明示・deny の追加で可能である。
 
 以下の日付付き節は当時の実装・検証の記録であり、現在の構成と契約は上記を正とする。
 
