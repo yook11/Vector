@@ -152,22 +152,32 @@ class LogValuePreparer:
         return inspected_items
 
     def prepare_text_values(self, value: Any, *, field_name: str | None = None) -> Any:
-        """形が確定した木をもう一度たどり、文字列だけを項目別サニタイズと情報漏洩防止で加工する。"""
+        """ログに出す形の木をたどり、deny・mask・項目別サニタイズ・情報漏洩防止をかける。"""
         if type(value) is _ValueMarker:
             return value.value
+        # 例外の出力は検査を通らないため、ここでもdenyとmaskを判定する。
+        if field_name is not None and normalize_key(field_name) in self.mask:
+            return _ValueMarker.MASKED.value
         # 配列の要素は親の項目名を引き継ぎ、辞書に入ったら子のキーで選び直す。
-        if type(value) is dict:
+        if isinstance(value, dict):
             prepared_dictionary: dict[str, Any] = {}
             for key, child_value in value.items():
+                if normalize_key(key) in self.deny:
+                    self.diagnostics.record_nested_denied()
+                    continue
                 prepared_key = prevent_leaks(key)
                 prepared_dictionary[prepared_key] = self.prepare_text_values(
                     child_value, field_name=key
                 )
             return prepared_dictionary
-        if type(value) is list:
+        if isinstance(value, list):
             return [
                 self.prepare_text_values(item, field_name=field_name) for item in value
             ]
+        return self._prepare_text(value, field_name=field_name)
+
+    def _prepare_text(self, value: Any, *, field_name: str | None) -> Any:
+        """子を持たない値に項目別サニタイズをかけ、文字列には情報漏洩防止もかける。"""
         if field_name is not None:
             normalized_field_name = normalize_key(field_name)
             if normalized_field_name in self.sanitize:
@@ -176,6 +186,6 @@ class LogValuePreparer:
                 if type(value) is not str:
                     return sanitized_value
                 value = sanitized_value
-        if type(value) is str:
+        if isinstance(value, str):
             return prevent_leaks(value)
         return value

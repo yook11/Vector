@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 from datetime import datetime
 from typing import Any
+from unittest.mock import Mock
 
 import pytest
 import structlog
@@ -16,8 +17,10 @@ from app.log_policy import (
     LogPolicyRules,
 )
 from app.log_policy.budget import MAX_ITEMS_PER_LOG_EVENT, TEXT_LIMIT
+from app.log_policy.exceptions.types import ConvertedException
 from app.log_policy.processor import LogPolicyProcessor
 from app.log_policy.value_preparation import DEPTH_LIMIT
+from app.shared.errors import ApplicationError
 
 pytestmark = pytest.mark.unit
 
@@ -657,7 +660,7 @@ class TestDiagnostics:
     """除外の診断を安全に出力し、ログごとに独立して保持する。"""
 
     def test_top_level_and_nested_diagnostics_are_combined(self) -> None:
-        """トップレベルとネストで起きた除外を同じログへ集約する。"""
+        """トップレベルと例外の診断情報の中で起きた除外を同じログへ集約する。"""
         output = LogPolicyProcessor(_TEST_RULES)(
             None,
             "info",
@@ -665,12 +668,17 @@ class TestDiagnostics:
                 "event": "completed",
                 "password": _SECRET,
                 "unknown": 1,
-                "payload": {"token": _SECRET, "count": 2},
+                "exc_info": ApplicationError(
+                    "failed", details={"token": _SECRET, "count": 2}
+                ),
             },
         )
         assert output == {
             "event": "completed",
-            "payload": {"count": 2},
+            "error_class": "app.shared.errors.ApplicationError",
+            "error_message": "failed",
+            "frames": [],
+            "error_details": {"count": 2},
             "log_policy": _TEST_RULES.policy.value,
             "_denied_keys": ["password"],
             "_unregistered_count": 1,
@@ -832,6 +840,22 @@ class TestExceptionFields:
         assert "exc_info" not in output
         assert "error_class" not in output
         assert "synthetic-row-value" not in json.dumps(output)
+
+    def test_details_with_non_string_keys_keep_exception_fields(self) -> None:
+        """変換担当が文字列でないキーの診断情報を返しても、processorは例外の情報を失わずに出力する。"""
+        # 型の上では許されない、文字列でないキーを変換担当から渡す。
+        details: Any = {200: "synthetic", "nested": {300: "synthetic"}}
+        converter = Mock(
+            return_value=ConvertedException(message="failed", error_details=details)
+        )
+
+        output = LogPolicyProcessor(BASE_LOG_RULES, exception_converter=converter)(
+            None,
+            "error",
+            {"event": "failed", "exc_info": ValueError("failed")},
+        )
+
+        assert output["error_class"] == "builtins.ValueError"
 
 
 def _nested_value(*, depth: int, leaf: Any) -> Any:

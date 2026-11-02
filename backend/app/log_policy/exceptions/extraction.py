@@ -185,14 +185,18 @@ class _ExceptionConversion:
             return "[limit]"
         self.remaining_details_items -= item_count
         self.remaining_text -= key_length
-        return {key: self.take_detail_texts(value) for key, value in details.items()}
+        return {
+            str(key): self.take_detail_texts(value) for key, value in details.items()
+        }
 
     def take_detail_texts(self, value: object) -> object:
-        """診断情報の構造を保ったまま、文字列を残りの文字数に収め、JSONに出せない値を[unsupported]にする。"""
+        """診断情報の構造を保ったまま、キーを文字列に、文字列を残りの文字数に収め、JSONに出せない値を[unsupported]にする。"""
         if isinstance(value, str):
             return self.take_text(value)
         if isinstance(value, Mapping):
-            return {key: self.take_detail_texts(item) for key, item in value.items()}
+            return {
+                str(key): self.take_detail_texts(item) for key, item in value.items()
+            }
         if isinstance(value, list | tuple):
             return [self.take_detail_texts(item) for item in value]
         if value is None or isinstance(value, int):

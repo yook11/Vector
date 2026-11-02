@@ -169,11 +169,9 @@ class TestNestedDeny:
 
     @pytest.mark.parametrize("key", ["apiKey", "API_KEY", "api-key"])
     def test_nested_deny_normalizes_key_aliases(self, key: str) -> None:
-        """ネストの直接判定でも表記揺れを正規化してdenyに照合する。"""
+        """ログに出す形を整える段でも、ネストのキーの表記揺れを正規化してdenyに照合する。"""
         preparer = LogValuePreparer(BASE_DENY)
-        field_value = {key: "synthetic", "count": 1}
-        preparer.budget.check_and_count_log_items(1)
-        prepared_value = preparer.prepare_field_value(field_value)
+        prepared_value = preparer.prepare_text_values({key: "synthetic", "count": 1})
         assert prepared_value == {"count": 1}
         assert preparer.diagnostics.as_fields() == {"_denied_nested_count": 1}
 
@@ -508,7 +506,5 @@ class TestIsolation:
         """単独生成した値の準備処理は診断状態を共有しない。"""
         first = LogValuePreparer(BASE_DENY)
         second = LogValuePreparer(BASE_DENY)
-        field_value = {"password": "synthetic"}
-        first.budget.check_and_count_log_items(1)
-        first.prepare_field_value(field_value)
+        first.prepare_text_values({"password": "synthetic"})
         assert second.diagnostics.as_fields() == {}

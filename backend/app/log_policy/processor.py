@@ -11,7 +11,6 @@ from app.log_policy.budget import (
     BudgetLimitReason,
     LogBudgetExceeded,
     LogEventBudget,
-    UncountedBudget,
 )
 from app.log_policy.diagnostics import LogProcessingDiagnostics
 from app.log_policy.exceptions.conversion import convert_exception
@@ -108,16 +107,10 @@ class LogPolicyProcessor:
             exception_converter=self.exception_converter,
         )
         if exception_fields is not None:
-            # 例外の出力の量は例外の変換の上限で決まるため、予算では数えない。
-            exception_preparer = LogValuePreparer(
-                deny=rules.deny,
-                mask=rules.mask,
-                sanitize=rules.sanitize,
-                budget=UncountedBudget(),
-                diagnostics=diagnostics,
-            )
+            # 例外の出力は抽出が形と量を保証するため、検査も予算の計上もせず、
+            # ポリシーと情報漏洩防止だけをかける。
             for field_name, field_value in exception_fields.items():
-                prepared_event[field_name] = exception_preparer.prepare_field_value(
+                prepared_event[field_name] = preparer.prepare_text_values(
                     field_value, field_name=field_name
                 )
         # どのポリシーで処理したログかを、出力に残す。
