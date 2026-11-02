@@ -35,34 +35,34 @@ class TestPurposeRuleConstants:
     """実際のポリシー定数が認証情報と本文を禁止し、allow と deny を重ねない。"""
 
     @pytest.mark.parametrize(
-        "key",
+        ("key", "denied_name"),
         [
-            "gemini_api_key",
-            "GEMINI_API_KEY",
-            "logfire_token",
-            "bff_jwt_signing_secret",
-            "revalidate_bearer_secret",
-            "postgres_auth_password",
-            "postgres_app_password",
-            "postgres_collect_password",
-            "aws_secret_access_key",
-            "AWSAccessKeyId",
-            "session_token",
-            "refresh_token",
-            "APIKey",
-            "privateKey",
-            "Proxy-Authorization",
-            "Set-Cookie",
+            ("gemini_api_key", "gemini_api_key"),
+            ("GEMINI_API_KEY", "gemini_api_key"),
+            ("logfire_token", "logfire_token"),
+            ("bff_jwt_signing_secret", "bff_jwt_signing_secret"),
+            ("revalidate_bearer_secret", "revalidate_bearer_secret"),
+            ("postgres_auth_password", "postgres_auth_password"),
+            ("postgres_app_password", "postgres_app_password"),
+            ("postgres_collect_password", "postgres_collect_password"),
+            ("aws_secret_access_key", "aws_secret_access_key"),
+            ("AWSAccessKeyId", "aws_access_key_id"),
+            ("session_token", "session_token"),
+            ("refresh_token", "refresh_token"),
+            ("APIKey", "api_key"),
+            ("privateKey", "private_key"),
+            ("Proxy-Authorization", "proxy_authorization"),
+            ("Set-Cookie", "set_cookie"),
         ],
     )
-    def test_credential_field_is_denied(self, key) -> None:
+    def test_credential_field_is_denied(self, key, denied_name) -> None:
         """認証情報の項目は、設定名や表記揺れを含めて基底のdenyで除外する。"""
         output = LogPolicyProcessor(BASE_LOG_RULES)(
             None,
             "info",
             {"event": "failed", key: "synthetic"},
         )
-        assert output["_denied_keys"] == [key]
+        assert output["_denied_keys"] == [denied_name]
         assert "synthetic" not in json.dumps(output)
 
     # 保護対象が設定から消えても検出できるよう、仕様の本文10項目を明示する。
@@ -117,7 +117,7 @@ class TestDenyAndMaskSeparation:
         assert output == {
             "MaskedSample": "***",
             "log_policy": "process_runtime",
-            "_denied_keys": ["RestrictedSample"],
+            "_denied_keys": ["restricted_sample"],
         }
 
     @pytest.mark.parametrize(

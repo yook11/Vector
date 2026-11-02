@@ -328,7 +328,7 @@ class TestSanitize:
 
 
 class TestLeakPrevention:
-    """採用した値・ネストのキー・例外・診断の文字列に、最後に情報漏洩防止を適用する。"""
+    """採用した値・ネストのキー・例外の文字列に、最後に情報漏洩防止を適用する。"""
 
     def test_credential_inside_allowed_text_is_redacted(self, chain_logger) -> None:
         """許可した自由文に混入した credential だけを置き換え、原因文は残す。"""
@@ -520,19 +520,6 @@ class TestLeakPrevention:
             "frames": [],
             "log_policy": _TEST_RULES.policy.value,
         }
-
-    def test_denied_key_names_are_redacted_before_output(self) -> None:
-        """診断に記録した入力由来の禁止キー名にも情報漏洩防止を適用して出力する。"""
-        key = "token=synthetic"
-        rules = LogPolicyRules(
-            LogPolicy.PIPELINE_CONTROL, allow=frozenset(), deny=frozenset({key})
-        )
-        output = LogPolicyProcessor(rules)(
-            None,
-            "info",
-            {"event": "completed", key: _SECRET},
-        )
-        assert output["_denied_keys"] == ["token=[redacted:credential]"]
 
 
 class TestDiagnostics:
@@ -777,7 +764,7 @@ class TestProcessingOrder:
         [
             ({"password": object()}, {"_denied_keys": ["password"]}),
             ({"unknown": object()}, {"_unregistered_count": 1}),
-            ({"x" * (TEXT_LIMIT + 1): object()}, {"_policy_limited": True}),
+            ({"x" * (TEXT_LIMIT + 1): object()}, {"_unregistered_count": 1}),
         ],
         ids=["denied", "unregistered", "long_name"],
     )
@@ -869,26 +856,6 @@ class TestProcessingOrder:
 
 class TestProcessingFailures:
     """処理に失敗した場合は原文を出力せず固定エラーを返す。"""
-
-    def test_diagnostic_leak_prevention_failure_does_not_restore_raw_key_names(
-        self,
-        monkeypatch,
-    ) -> None:
-        """診断の情報漏洩防止が失敗しても原文に戻らず固定エラーだけを返す。"""
-
-        def fail(text):
-            raise ValueError("synthetic-private-key")
-
-        monkeypatch.setattr("app.log_policy.diagnostics.prevent_leaks", fail)
-        prepared_event = LogPolicyProcessor(BASE_LOG_RULES)(
-            None,
-            "info",
-            {"event": "completed", "password": _SECRET},
-        )
-        assert prepared_event == {
-            "event": "log_policy_replaced",
-            "_policy_replaced_reason": "processing_failed",
-        }
 
     def test_value_leak_prevention_failure_returns_only_fixed_metadata(
         self, monkeypatch

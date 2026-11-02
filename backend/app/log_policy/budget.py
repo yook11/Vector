@@ -1,4 +1,4 @@
-"""ログ値と診断が共有するログ一件の件数・文字数の上限を管理する。"""
+"""ログ一件の件数・文字数の上限を管理する。"""
 
 from dataclasses import dataclass
 from typing import Literal
@@ -20,7 +20,7 @@ class LogBudgetExceeded(Exception):
 
 @dataclass
 class LogEventBudget:
-    """呼び出し側の通常項目と診断で使う予算を一か所に保持する。"""
+    """トップレベルの選別と通常の項目の値で使う予算を一か所に保持する。"""
 
     log_item_count: int = 0
     counted_text_chars: int = 0

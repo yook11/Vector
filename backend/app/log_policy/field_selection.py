@@ -47,17 +47,18 @@ class LogFieldSelector:
             if field_name in _EXCLUDED_FIELDS:
                 continue
 
+            # allow・denyの語に一致しえないため、正規化せずに未登録として数える。
             if len(field_name) > TEXT_LIMIT:
-                self.diagnostics.record_top_level_limit_reached()
+                self.diagnostics.record_unregistered()
                 continue
 
             normalized_name = normalize_key(field_name)
             if normalized_name in _EXCEPTION_OUTPUT_ONLY_FIELDS:
                 continue
 
-            # allowと重なってもdenyを優先し、除外の理由を名前付きで診断に残す。
+            # denyはallowより優先し、診断には漏洩防止の要らない規則の語を残す。
             if normalized_name in self.deny:
-                self.diagnostics.record_top_level_denied(field_name)
+                self.diagnostics.record_top_level_denied(normalized_name)
                 continue
 
             if normalized_name not in self.allow:

@@ -85,7 +85,7 @@ class TestLocalReplacement:
 
 
 class TestWholeLogReplacementByTextBudget:
-    """通常項目・ネスト・診断の文字数を合算し、上限を超えたらログ全体を置換する。"""
+    """通常項目の名前と値の文字数を合算し、上限を超えたらログ全体を置換する。"""
 
     def test_processor_text_at_budget_is_not_exceeded(self) -> None:
         """イベント合計16000文字ちょうどで完了すれば通常出力を保持する。"""
@@ -106,26 +106,9 @@ class TestWholeLogReplacementByTextBudget:
             "_policy_replaced_reason": "total_text_length_exceeded",
         }
 
-    def test_denied_names_share_event_text_budget(self) -> None:
-        """禁止キー名の診断出力もイベントの文字数予算を迂回しない。"""
-        rules = LogPolicyRules(LogPolicy.PROCESS_RUNTIME, frozenset("abcd"))
-        output = LogPolicyProcessor(rules)(
-            None,
-            "info",
-            {
-                **{key: "x" * (TEXT_LIMIT - 1) for key in "abcd"},
-                "password": "synthetic",
-            },
-        )
-        assert output == {
-            "event": "log_policy_replaced",
-            "log_policy": "process_runtime",
-            "_policy_replaced_reason": "total_text_length_exceeded",
-        }
-
 
 class TestWholeLogReplacementByItemBudget:
-    """除外項目・ネスト・診断も含めた走査件数が上限を超えたらログ全体を置換する。"""
+    """除外項目を含む項目と list の要素の件数が上限を超えたらログ全体を置換する。"""
 
     def test_top_level_count_at_limit_is_not_counted_twice(self) -> None:
         """選別で数えたトップレベル値を再加算せず上限件数ちょうどまで保持する。"""
@@ -186,21 +169,6 @@ class TestWholeLogReplacementByItemBudget:
         assert output == {
             "event": "log_policy_replaced",
             "log_policy": "process_runtime",
-            "_policy_replaced_reason": "value_count_exceeded",
-        }
-
-    def test_budget_overflow_in_denied_key_diagnostics_replaces_whole_log(self) -> None:
-        """禁止キー名の準備で走査上限に達しても入力名を含む途中結果を残さない。"""
-        output = LogPolicyProcessor(BASE_LOG_RULES)(
-            None,
-            "info",
-            {
-                "password": "synthetic",
-                **{f"unknown_{i}": 1 for i in range(MAX_ITEMS_PER_LOG_EVENT - 1)},
-            },
-        )
-        assert output == {
-            "event": "log_policy_replaced",
             "_policy_replaced_reason": "value_count_exceeded",
         }
 

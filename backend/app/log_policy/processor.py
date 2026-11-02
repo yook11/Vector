@@ -126,6 +126,5 @@ class LogPolicyProcessor:
         # どのポリシーで処理したログかを、出力に残す。
         if rules.policy is not None:
             prepared_event["log_policy"] = rules.policy.value
-        prepared_diagnostics = diagnostics.prepare_log_fields(budget=budget)
-        prepared_event.update(prepared_diagnostics)
+        prepared_event.update(diagnostics.as_fields())
         return prepared_event
