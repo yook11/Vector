@@ -47,7 +47,8 @@ class LogValuePreparer:
         if not isinstance(field_value, list | tuple):
             self._count_scalar(field_value)
             return field_value
-        # 加工でもう一度走査するため、listの派生型は数えた要素で新しいlistに作り直す。
+        # ポリシーによる加工は数えた要素だけにかけるため、
+        # 数えた要素を新しいlistに入れて渡す。
         counted_items: list[Any] = []
         for item in field_value:
             self.budget.check_and_count_log_items(1)
