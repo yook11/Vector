@@ -1,14 +1,12 @@
-"""独自型・循環参照では原文へ戻らない。"""
+"""独自型や list の派生型を受けても、本番の renderer で原文へ戻らない。"""
 
 from __future__ import annotations
 
-import json
-
 import pytest
-import structlog
 
 from app.log_policy import LogPolicy, LogPolicyRules
 from app.log_policy.processor import LogPolicyProcessor
+from app.log_policy.runtime import render_policy_json
 
 pytestmark = pytest.mark.unit
 
@@ -17,62 +15,37 @@ _RULES = LogPolicyRules(LogPolicy.PROCESS_RUNTIME, frozenset({"payload"}))
 
 
 class TestUnsupportedValues:
-    """独自オブジェクトの repr / __structlog__ は呼ばず、renderer に渡さない。"""
+    """本番のrendererは独自オブジェクトを文字列にせず、検査していない要素を出さない。"""
 
-    @pytest.mark.parametrize(
-        "renderer",
-        [
-            structlog.processors.JSONRenderer(),
-            structlog.dev.ConsoleRenderer(colors=False),
-        ],
-    )
-    def test_arbitrary_objects_never_reach_renderer(self, renderer) -> None:
-        """独自オブジェクトの repr や structlog フックを呼ばずに除外する。"""
+    def test_arbitrary_objects_are_not_stringified(self) -> None:
+        """独自オブジェクトとbytesを受けても、本番のrendererはreprやstructlogフックで文字列にせず原文を出さない。"""
 
         class Unsafe:
             def __repr__(self):
-                raise AssertionError("repr must not run")
+                return _SECRET
 
             def __structlog__(self):
-                raise AssertionError("serialization hook must not run")
+                return _SECRET
 
-        event = {
-            "event": "failed",
-            "payload": {"object": Unsafe(), "bytes": _SECRET.encode()},
-        }
+        event = {"event": "failed", "payload": [Unsafe(), _SECRET.encode()]}
         output = LogPolicyProcessor(_RULES)(None, "error", event)
-        rendered = renderer(None, "error", output)
+        rendered = render_policy_json(None, "error", output)
         assert _SECRET not in rendered
-        assert "[unsupported]" in rendered
 
+    def test_list_subclass_outputs_only_inspected_items(self) -> None:
+        """走査のたびに中身を変えるlistの派生型を受けても、検査した要素だけを出力する。"""
 
-class TestCyclicReferences:
-    """循環はその位置だけ置換し、循環していない共有参照は保護して出す。"""
+        class ChangingList(list):
+            iterations = 0
 
-    def test_cyclic_value_is_bounded_and_siblings_survive(self) -> None:
-        """循環は `[cycle]` にし、同じオブジェクトの安全な兄弟値は残す。"""
-        payload = {"password": _SECRET, "attempt": 2}
-        payload["cycle"] = payload
+            def __iter__(self):
+                self.iterations += 1
+                return iter(["safe"] if self.iterations == 1 else [_SECRET])
+
         output = LogPolicyProcessor(_RULES)(
             None,
             "info",
-            {
-                "event": "failed",
-                "payload": payload,
-            },
+            {"event": "failed", "payload": ChangingList()},
         )
-        assert output["payload"] == {"attempt": 2, "cycle": "[cycle]"}
-        assert _SECRET not in json.dumps(output)
-
-    def test_shared_value_is_not_mistaken_for_cycle(self) -> None:
-        """循環していない同一オブジェクトの参照はそれぞれ保護して出す。"""
-        shared = {"attempt": 2, "password": _SECRET}
-        output = LogPolicyProcessor(_RULES)(
-            None,
-            "info",
-            {
-                "event": "failed",
-                "payload": [shared, shared],
-            },
-        )
-        assert output["payload"] == [{"attempt": 2}, {"attempt": 2}]
+        rendered = render_policy_json(None, "info", output)
+        assert _SECRET not in rendered

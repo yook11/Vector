@@ -14,7 +14,7 @@ from app.log_policy import (
     LogPolicy,
     LogPolicyRules,
 )
-from app.log_policy.budget import MAX_ITEMS_PER_LOG_EVENT, TEXT_LIMIT
+from app.log_policy.budget import MAX_ITEMS_PER_LOG_EVENT
 from app.log_policy.runtime import create_policy_json_logger, render_policy_json
 
 pytestmark = pytest.mark.unit
@@ -24,7 +24,7 @@ _ARTICLE_BODY = "記事本文の合成テキスト"
 
 _RULES = LogPolicyRules(
     policy=LogPolicy.PIPELINE_CONTROL,
-    allow=frozenset({"source_id", "reason", "detail", "payload"}),
+    allow=frozenset({"source_id", "reason", "detail"}),
     deny=frozenset({"content"}),
 )
 # 合成値を分割し、秘密検出ツールの規則に一致させない。
@@ -59,7 +59,6 @@ def _emit_redacted_failure(chain_logger) -> dict:
             reason=f"token expired: Authorization: Bearer {_SECRET}abcdef0123456789",
             detail=_DETAIL_WITH_EVERY_CREDENTIAL_FORM,
             content=_ARTICLE_BODY,
-            payload={"wrapper": [{"content": [_ARTICLE_BODY], "status": "kept"}]},
             exc_info=True,
         )
     return dict(capture.entries[0])
@@ -70,8 +69,6 @@ def test_json_and_console_keep_the_same_redaction(chain_logger) -> None:
     entry = _emit_redacted_failure(chain_logger)
     assert entry["_denied_keys"] == ["content"]
     assert "content" not in entry
-    assert entry["payload"] == {"wrapper": [{"status": "kept"}]}
-    assert entry["_denied_nested_count"] == 1
     assert entry["source_id"] == 3
     assert entry["error_class"] == "builtins.RuntimeError"
     assert "exc_info" not in entry
@@ -113,28 +110,6 @@ def test_chain_generates_string_level_before_console_rendering() -> None:
     assert "invalid" not in rendered
 
 
-@pytest.mark.parametrize(
-    "renderer",
-    [structlog.processors.JSONRenderer(), structlog.dev.ConsoleRenderer(colors=False)],
-)
-def test_structured_event_is_prepared_before_rendering(renderer) -> None:
-    """辞書のeventも共通の秘匿処理を通してJSONとconsoleへ出せる。"""
-    from app.log_policy import build_processors
-
-    entry = {"event": {"password": _SECRET, "message": "token=synthetic", "count": 3}}
-    processors = build_processors(BASE_LOG_RULES, renderer)
-    for processor in processors[:-1]:
-        entry = processor(None, "info", entry)
-
-    assert entry["event"] == {
-        "message": "token=[redacted:credential]",
-        "count": 3,
-    }
-    rendered = processors[-1](None, "info", dict(entry))
-    assert _SECRET not in rendered
-    assert "synthetic" not in rendered
-
-
 def test_production_logger_outputs_redacted_json(capsys) -> None:
     """本番の組み立てで作ったロガーも、秘匿済みのログをJSONで標準出力へ出す。"""
     logger = create_policy_json_logger("test", _RULES)
@@ -172,29 +147,6 @@ def test_console_renderer_outputs_redacted_log(chain_logger) -> None:
     assert "completed" in rendered
     assert "token=[redacted:credential]" in rendered
     assert _SECRET not in rendered
-
-
-@pytest.mark.parametrize(
-    "renderer",
-    [
-        structlog.processors.JSONRenderer(),
-        structlog.dev.ConsoleRenderer(colors=False),
-    ],
-)
-def test_field_limit_marker_is_rendered_without_raw_content(
-    chain_logger, renderer
-) -> None:
-    """JSONとconsoleの実チェーンでも超過項目の原文を出さず正常なeventを残す。"""
-    rules = LogPolicyRules(LogPolicy.PROCESS_RUNTIME, frozenset({"payload"}))
-    capture = LogCapture()
-    chain_logger(rules, capture).info(
-        "failed", payload=["synthetic private" * TEXT_LIMIT]
-    )
-    assert capture.entries[0]["payload"] == ["[limit]"]
-    rendered = renderer(None, "info", dict(capture.entries[0]))
-    assert "synthetic private" not in rendered
-    assert "[limit]" in rendered
-    assert "failed" in rendered
 
 
 @pytest.mark.parametrize(

@@ -108,23 +108,17 @@ class TestDenyAndMaskSeparation:
         purpose = purpose.extend(
             allow=frozenset(), deny=frozenset({"RestrictedSample"})
         )
-        rules = purpose.extend(allow=frozenset({"payload"}))
+        rules = purpose.extend(allow=frozenset({"MaskedSample"}))
         output = LogPolicyProcessor(rules)(
             None,
             "info",
-            {
-                "RestrictedSample": "synthetic field",
-                "payload": {
-                    "RestrictedSample": "synthetic nested",
-                    "MaskedSample": "synthetic nested",
-                    "count": 1,
-                },
-            },
+            {"RestrictedSample": "synthetic field", "MaskedSample": "synthetic field"},
         )
-        assert "RestrictedSample" not in output
-        assert output["_denied_keys"] == ["RestrictedSample"]
-        assert output["payload"] == {"MaskedSample": "***", "count": 1}
-        assert output["_denied_nested_count"] == 1
+        assert output == {
+            "MaskedSample": "***",
+            "log_policy": "process_runtime",
+            "_denied_keys": ["RestrictedSample"],
+        }
 
     @pytest.mark.parametrize(
         "protection_rules",
@@ -145,11 +139,11 @@ class TestDenyAndMaskSeparation:
             "info",
             {
                 "event": "restricted_sample=synthetic",
-                "payload": {"note": "restricted_sample=synthetic"},
+                "payload": "restricted_sample=synthetic",
             },
         )
         assert output["event"] == "restricted_sample=synthetic"
-        assert output["payload"] == {"note": "restricted_sample=synthetic"}
+        assert output["payload"] == "restricted_sample=synthetic"
 
 
 class TestTopLevelAllow:

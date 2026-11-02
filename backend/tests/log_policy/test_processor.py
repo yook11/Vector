@@ -19,7 +19,6 @@ from app.log_policy import (
 from app.log_policy.budget import MAX_ITEMS_PER_LOG_EVENT, TEXT_LIMIT
 from app.log_policy.exceptions.types import ConvertedException
 from app.log_policy.processor import LogPolicyProcessor
-from app.log_policy.value_preparation import DEPTH_LIMIT
 from app.shared.errors import ApplicationError
 
 pytestmark = pytest.mark.unit
@@ -27,7 +26,6 @@ pytestmark = pytest.mark.unit
 _SECRET = "hunter2-synthetic-secret"
 # 合成値を分割し、秘密検出ツールの規則に一致させない。
 _GEMINI_KEY = "AIza" + "SyA1B2C3D4E5F6G7H8I9J0K1L2M3N4O5P6Q"
-_PRIVATE_SAMPLE = "保護対象の合成テキスト"
 
 _TEST_RULES = LogPolicyRules(
     policy=LogPolicy.PIPELINE_CONTROL,
@@ -43,7 +41,7 @@ _RUNTIME_RULES = LogPolicyRules(
 @pytest.fixture
 def masking_processor() -> LogPolicyProcessor:
     rules = BASE_LOG_RULES.extend(
-        allow=frozenset({"private_text", "payload"}),
+        allow=frozenset({"private_text", "private_text_suffix"}),
         mask=frozenset({"private_text"}),
     )
     return LogPolicyProcessor(rules)
@@ -53,7 +51,7 @@ def masking_processor() -> LogPolicyProcessor:
 def sanitizing_processor() -> LogPolicyProcessor:
     rules = LogPolicyRules(
         policy=LogPolicy.PROCESS_RUNTIME,
-        allow=frozenset({"payload"}),
+        allow=frozenset({"payload", "canonical_url"}),
         sanitize=frozenset({"canonical_url"}),
     )
     return LogPolicyProcessor(rules)
@@ -207,60 +205,27 @@ class TestRuleApplication:
         assert capture.entries[0]["log_policy"] == "pipeline_control"
 
 
-class TestFieldProtection:
-    """採用した値のネスト内の禁止項目・不正な構造を出力に残さない。"""
+class TestValueShape:
+    """約束を外れた通常の項目の値は、例外を投げずに出力から外す。"""
 
     @pytest.mark.parametrize(
-        "key", ["event", "level", "timestamp", "logger", "logger_name", "loggerName"]
+        "payload",
+        [{"message": "synthetic"}, [["synthetic"]], "x" * (TEXT_LIMIT + 1)],
+        ids=["dict", "nested_list", "long_text"],
     )
-    def test_base_fields_use_normal_value_preparation(self, key: str) -> None:
-        """基本項目も通常の構造検査・deny除外・情報漏洩防止を通す。"""
-        fields = {
-            key: {"password": "synthetic", "message": "token=synthetic", "count": 1}
-        }
-        output = LogPolicyProcessor(BASE_LOG_RULES)(None, "info", fields)
-        assert output == {
-            key: {"message": "token=[redacted:credential]", "count": 1},
-            "_denied_nested_count": 1,
-        }
-
-    def test_denied_key_nested_in_allowed_dict_is_dropped_and_counted(
-        self,
-        chain_logger,
-    ) -> None:
-        """許可した dict の中の禁止キーは落ち、名前ではなく件数だけ残る。"""
-        capture = LogCapture()
-        logger = chain_logger(_TEST_RULES, capture)
-        logger.info(
-            "article_converted",
-            sample_length=len(_PRIVATE_SAMPLE),
-            payload={
-                "id": 7,
-                "restricted_sample": _PRIVATE_SAMPLE,
-                "meta": {"restricted_nested": "<p>x</p>"},
-            },
+    def test_value_outside_contract_is_not_output(self, payload: object) -> None:
+        """約束を外れた値を受けても、processorは例外を投げず、その値を出力しない。"""
+        output = LogPolicyProcessor(_TEST_RULES)(
+            None,
+            "info",
+            {"event": "completed", "payload": payload},
         )
-        entry = capture.entries[0]
-        assert entry["payload"] == {"id": 7, "meta": {}}
-        assert entry["_denied_nested_count"] == 2
-        assert entry["sample_length"] == len(_PRIVATE_SAMPLE)
-        assert _PRIVATE_SAMPLE not in repr(entry)
 
-    def test_denied_key_nested_in_list_items_is_dropped(self, chain_logger) -> None:
-        """list 要素の dict にも、同じ禁止キーの除外が適用される。"""
-        capture = LogCapture()
-        logger = chain_logger(_TEST_RULES, capture)
-        logger.info(
-            "feed_parsed",
-            items=[{"id": 1, "restricted_sample": _PRIVATE_SAMPLE}, {"id": 2}],
-        )
-        entry = capture.entries[0]
-        assert entry["items"] == [{"id": 1}, {"id": 2}]
-        assert entry["_denied_nested_count"] == 1
+        assert "payload" not in output
 
 
 class TestMask:
-    """対象項目の値全体を、型やネスト先によらず固定マーカーへ置き換える。"""
+    """対象項目の値全体を、型によらず固定マーカーへ置き換える。"""
 
     def test_string_field_is_masked(
         self, masking_processor: LogPolicyProcessor
@@ -302,37 +267,15 @@ class TestMask:
 
         assert output == {"private_text": "***"}
 
-    def test_field_in_nested_dictionary_is_masked(
-        self, masking_processor: LogPolicyProcessor
-    ) -> None:
-        """辞書の中に辞書がある場合でも、対象項目の値全体をマスクする。"""
-        fields = {"payload": {"details": {"private_text": "synthetic"}}}
-
-        output = masking_processor(None, "info", fields)
-
-        assert output == {"payload": {"details": {"private_text": "***"}}}
-
-    def test_field_in_dictionary_inside_list_is_masked(
-        self, masking_processor: LogPolicyProcessor
-    ) -> None:
-        """配列内の辞書でも、対象項目の値全体をマスクして兄弟項目を残す。"""
-        fields = {
-            "payload": [{"private_text": {"message": "synthetic"}, "count": 1}],
-        }
-
-        output = masking_processor(None, "info", fields)
-
-        assert output == {"payload": [{"private_text": "***", "count": 1}]}
-
     def test_field_outside_mask_is_preserved(
         self, masking_processor: LogPolicyProcessor
     ) -> None:
         """対象名を含む別の項目名はマスクせず、値をそのまま残す。"""
-        fields = {"payload": {"private_text_suffix": "synthetic"}}
+        fields = {"private_text_suffix": "synthetic"}
 
         output = masking_processor(None, "info", fields)
 
-        assert output == {"payload": {"private_text_suffix": "synthetic"}}
+        assert output == {"private_text_suffix": "synthetic"}
 
     def test_normalized_field_name_is_matched_for_masking(
         self, masking_processor: LogPolicyProcessor
@@ -346,75 +289,27 @@ class TestMask:
 
 
 class TestSanitize:
-    """辞書や配列がネストしていても、登録した項目にだけサニタイズを適用する。"""
+    """登録した項目にだけ、listの要素も含めてサニタイズを適用する。"""
 
-    def test_registered_field_in_nested_dictionary_is_sanitized(
+    def test_registered_field_with_list_is_sanitized(
         self, sanitizing_processor: LogPolicyProcessor
     ) -> None:
-        """辞書の中に辞書がある場合でも、登録した項目をサニタイズする。"""
-        fields = {
-            "payload": {
-                "details": {"canonical_url": "https://example.com/a/1?p=123#top"},
-            },
-        }
+        """登録項目の値がlistなら、各要素の文字列をサニタイズする。"""
+        fields = {"canonical_url": ["https://example.com/a/1?p=123#top"]}
 
         output = sanitizing_processor(None, "info", fields)
 
-        assert output["payload"] == {
-            "details": {"canonical_url": "https://example.com/a/1?p=123"},
-        }
-
-    def test_registered_field_in_dictionary_inside_list_is_sanitized(
-        self, sanitizing_processor: LogPolicyProcessor
-    ) -> None:
-        """配列の中に辞書がある場合でも、登録した項目をサニタイズする。"""
-        fields = {"payload": [{"canonical_url": "https://example.com/a/1?p=123#top"}]}
-
-        output = sanitizing_processor(None, "info", fields)
-
-        assert output["payload"] == [{"canonical_url": "https://example.com/a/1?p=123"}]
-
-    def test_registered_field_with_nested_lists_is_sanitized(
-        self, sanitizing_processor: LogPolicyProcessor
-    ) -> None:
-        """登録項目の配列の中に配列がある場合でも、中の文字列をサニタイズする。"""
-        fields = {
-            "payload": {"canonical_url": [["https://example.com/a/1?p=123#top"]]},
-        }
-
-        output = sanitizing_processor(None, "info", fields)
-
-        assert output["payload"] == {
-            "canonical_url": [["https://example.com/a/1?p=123"]],
-        }
+        assert output["canonical_url"] == ["https://example.com/a/1?p=123"]
 
     def test_unregistered_field_is_not_sanitized(
         self, sanitizing_processor: LogPolicyProcessor
     ) -> None:
         """未登録の項目は同じ値でもサニタイズしない。"""
-        fields = {"payload": {"reference": "https://example.com/a/1?p=123#top"}}
+        fields = {"payload": "https://example.com/a/1?p=123#top"}
 
         output = sanitizing_processor(None, "info", fields)
 
-        assert output["payload"] == {
-            "reference": "https://example.com/a/1?p=123#top",
-        }
-
-    def test_unregistered_field_inside_registered_field_is_preserved(
-        self, sanitizing_processor: LogPolicyProcessor
-    ) -> None:
-        """登録項目の配下でも、辞書内の未登録項目はサニタイズしない。"""
-        fields = {
-            "payload": {
-                "canonical_url": [{"note": "https://example.com/a/1?p=123#top"}],
-            },
-        }
-
-        output = sanitizing_processor(None, "info", fields)
-
-        assert output["payload"] == {
-            "canonical_url": [{"note": "https://example.com/a/1?p=123#top"}],
-        }
+        assert output["payload"] == "https://example.com/a/1?p=123#top"
 
     def test_registered_top_level_field_is_matched_by_normalized_name(self) -> None:
         """トップレベルの項目名を正規化して照合し、登録項目の型不一致を置換する。"""
@@ -430,18 +325,6 @@ class TestSanitize:
         )
 
         assert output == {"CanonicalUrl": "[unsupported]"}
-
-    def test_registered_non_string_values_in_nested_containers_are_replaced(
-        self, sanitizing_processor: LogPolicyProcessor
-    ) -> None:
-        """辞書と配列が入れ子でも、登録項目の配列内にある型不一致の値を置換する。"""
-        fields = {"payload": {"details": [{"canonical_url": [[123]]}]}}
-
-        output = sanitizing_processor(None, "info", fields)
-
-        assert output["payload"] == {
-            "details": [{"canonical_url": [["[unsupported]"]]}],
-        }
 
 
 class TestLeakPrevention:
@@ -524,17 +407,13 @@ class TestLeakPrevention:
         self, sanitizing_processor: LogPolicyProcessor
     ) -> None:
         """サニタイズで残した部分にも、情報漏洩防止を適用する。"""
-        fields = {
-            "payload": {
-                "canonical_url": f"https://example.com/a/1?key={_GEMINI_KEY}#top",
-            },
-        }
+        fields = {"canonical_url": f"https://example.com/a/1?key={_GEMINI_KEY}#top"}
 
         output = sanitizing_processor(None, "info", fields)
 
-        assert output["payload"] == {
-            "canonical_url": "https://example.com/a/1?key=[redacted:gemini_api_key]",
-        }
+        assert output["canonical_url"] == (
+            "https://example.com/a/1?key=[redacted:gemini_api_key]"
+        )
 
     def test_exception_message_is_redacted_in_output(self) -> None:
         """例外メッセージ内のAPIキーを置き換え、周囲の原因文を残して出力する。"""
@@ -629,13 +508,13 @@ class TestLeakPrevention:
             "error",
             {
                 "event": "failed",
-                "payload": {"message": "password=normal-secret", "count": 3},
+                "payload": ["password=normal-secret", 3],
                 "exc_info": ValueError("token=exception-secret"),
             },
         )
         assert output == {
             "event": "failed",
-            "payload": {"message": "password=[redacted:credential]", "count": 3},
+            "payload": ["password=[redacted:credential]", 3],
             "error_class": "builtins.ValueError",
             "error_message": "token=[redacted:credential]",
             "frames": [],
@@ -706,8 +585,8 @@ class TestDiagnostics:
             {
                 "password": _SECRET,
                 "unknown": 1,
-                "payload": {"token": _SECRET},
                 "x" * 4001: 1,
+                "exc_info": ApplicationError("failed", details={"token": _SECRET}),
             },
         )
         assert processor(None, "info", {"event": "completed"}) == {
@@ -730,13 +609,13 @@ class TestDiagnostics:
         from app.log_policy.value_preparation import LogValuePreparer
 
         prepared_inputs = []
-        original = LogValuePreparer.prepare_field_value
+        original = LogValuePreparer.count_field_value
 
         def capture_value(self, field_value, **kwargs):
             prepared_inputs.append(field_value)
             return original(self, field_value, **kwargs)
 
-        monkeypatch.setattr(LogValuePreparer, "prepare_field_value", capture_value)
+        monkeypatch.setattr(LogValuePreparer, "count_field_value", capture_value)
         prepared_event = LogPolicyProcessor(BASE_LOG_RULES)(
             None,
             "info",
@@ -858,157 +737,8 @@ class TestExceptionFields:
         assert output["error_class"] == "builtins.ValueError"
 
 
-def _nested_value(*, depth: int, leaf: Any) -> Any:
-    value = leaf
-    for _ in range(depth):
-        value = [value]
-    return value
-
-
-class TestDepthLimit:
-    """深さ上限までは通常の規則を適用し、超えた部分だけを置換する。"""
-
-    def test_denied_field_at_depth_limit_is_removed(self) -> None:
-        """深さ上限ちょうどでも、禁止項目を除外して他の項目を残す。"""
-        rules = BASE_LOG_RULES.extend(
-            allow=frozenset({"payload"}),
-            deny=frozenset({"restricted_sample"}),
-        )
-        payload = _nested_value(
-            depth=DEPTH_LIMIT - 1,
-            leaf={"restricted_sample": "synthetic", "count": 1},
-        )
-
-        output = LogPolicyProcessor(rules)(
-            None,
-            "info",
-            {"event": "completed", "payload": payload},
-        )
-
-        assert output == {
-            "event": "completed",
-            "payload": _nested_value(
-                depth=DEPTH_LIMIT - 1,
-                leaf={"count": 1},
-            ),
-            "_denied_nested_count": 1,
-        }
-
-    def test_registered_field_at_depth_limit_is_sanitized(self) -> None:
-        """深さ上限ちょうどの登録項目にも、サニタイズを適用する。"""
-        rules = BASE_LOG_RULES.extend(
-            allow=frozenset({"payload"}),
-            sanitize=frozenset({"canonical_url"}),
-        )
-        payload = _nested_value(
-            depth=DEPTH_LIMIT - 1,
-            leaf={"canonical_url": "https://example.com/a/1?p=123#top"},
-        )
-
-        output = LogPolicyProcessor(rules)(
-            None,
-            "info",
-            {"event": "completed", "payload": payload},
-        )
-
-        assert output == {
-            "event": "completed",
-            "payload": _nested_value(
-                depth=DEPTH_LIMIT - 1,
-                leaf={"canonical_url": "https://example.com/a/1?p=123"},
-            ),
-        }
-
-    def test_text_at_depth_limit_is_redacted(self) -> None:
-        """深さ上限ちょうどの文字列にも、情報漏洩防止を適用する。"""
-        rules = BASE_LOG_RULES.extend(allow=frozenset({"payload"}))
-        payload = _nested_value(
-            depth=DEPTH_LIMIT - 1,
-            leaf={"message": "password=synthetic"},
-        )
-
-        output = LogPolicyProcessor(rules)(
-            None,
-            "info",
-            {"event": "completed", "payload": payload},
-        )
-
-        assert output == {
-            "event": "completed",
-            "payload": _nested_value(
-                depth=DEPTH_LIMIT - 1,
-                leaf={"message": "password=[redacted:credential]"},
-            ),
-        }
-
-    def test_dictionary_value_beyond_depth_limit_is_replaced(self) -> None:
-        """辞書内の値が深さ上限を超えたら、項目名を残して値を [limit] に置き換える。"""
-        rules = BASE_LOG_RULES.extend(allow=frozenset({"payload"}))
-        payload = _nested_value(depth=DEPTH_LIMIT, leaf={"value": 7})
-
-        output = LogPolicyProcessor(rules)(
-            None,
-            "info",
-            {"event": "completed", "payload": payload},
-        )
-
-        assert output == {
-            "event": "completed",
-            "payload": _nested_value(depth=DEPTH_LIMIT, leaf={"value": "[limit]"}),
-        }
-
-    def test_dictionary_inside_list_beyond_depth_limit_is_replaced(self) -> None:
-        """配列内の辞書が深さ上限を超えたら、辞書全体を [limit] に置き換える。"""
-        rules = BASE_LOG_RULES.extend(allow=frozenset({"payload"}))
-        payload = _nested_value(depth=DEPTH_LIMIT, leaf=[{"value": 7}])
-
-        output = LogPolicyProcessor(rules)(
-            None,
-            "info",
-            {"event": "completed", "payload": payload},
-        )
-
-        assert output == {
-            "event": "completed",
-            "payload": _nested_value(depth=DEPTH_LIMIT, leaf=["[limit]"]),
-        }
-
-    def test_list_inside_dictionary_beyond_depth_limit_is_replaced(self) -> None:
-        """辞書内の配列が深さ上限を超えたら、配列全体を [limit] に置き換える。"""
-        rules = BASE_LOG_RULES.extend(allow=frozenset({"payload"}))
-        payload = _nested_value(depth=DEPTH_LIMIT, leaf={"items": [7]})
-
-        output = LogPolicyProcessor(rules)(
-            None,
-            "info",
-            {"event": "completed", "payload": payload},
-        )
-
-        assert output == {
-            "event": "completed",
-            "payload": _nested_value(depth=DEPTH_LIMIT, leaf={"items": "[limit]"}),
-        }
-
-    def test_depth_over_limit_preserves_and_redacts_siblings(self) -> None:
-        """深さ上限を超えた部分だけを置換し、隣の正常な文字列には情報漏洩防止を適用する。"""
-        nested = _nested_value(depth=DEPTH_LIMIT + 1, leaf="synthetic")
-
-        output = LogPolicyProcessor(BASE_LOG_RULES)(
-            None,
-            "info",
-            {"event": {"first": "token=synthetic", "nested": nested}},
-        )
-
-        assert output == {
-            "event": {
-                "first": "token=[redacted:credential]",
-                "nested": _nested_value(depth=DEPTH_LIMIT, leaf="[limit]"),
-            },
-        }
-
-
 class TestProcessingOrder:
-    """トップレベルの選別を終えてから採用した値を準備し、不採用の値は準備処理へ渡さない。"""
+    """トップレベルの選別、採用した値を数える、加工の順に進め、不採用の値は準備処理へ渡さない。"""
 
     def test_all_fields_are_selected_before_values_are_prepared(
         self, monkeypatch
@@ -1017,12 +747,12 @@ class TestProcessingOrder:
         from app.log_policy.value_preparation import LogValuePreparer
 
         steps = []
-        original = LogValuePreparer.prepare_field_value
+        original = LogValuePreparer.apply_policy
 
         class EventFields(dict):
             def items(self):
                 steps.append("read_payload")
-                yield "payload", {"message": "token=synthetic"}
+                yield "payload", "token=synthetic"
                 steps.append("read_event")
                 yield "event", "completed"
 
@@ -1031,12 +761,12 @@ class TestProcessingOrder:
             steps.append(prepared_value)
             return prepared_value
 
-        monkeypatch.setattr(LogValuePreparer, "prepare_field_value", prepare_value)
+        monkeypatch.setattr(LogValuePreparer, "apply_policy", prepare_value)
         LogPolicyProcessor(_TEST_RULES)(None, "info", EventFields())
         assert steps == [
             "read_payload",
             "read_event",
-            {"message": "token=[redacted:credential]"},
+            "token=[redacted:credential]",
             "completed",
         ]
 
@@ -1058,9 +788,8 @@ class TestProcessingOrder:
         def unexpected_preparation(self, field_value, **kwargs):
             raise AssertionError("excluded value must not be prepared")
 
-        monkeypatch.setattr(
-            LogValuePreparer, "prepare_field_value", unexpected_preparation
-        )
+        for method_name in ("count_field_value", "apply_policy"):
+            monkeypatch.setattr(LogValuePreparer, method_name, unexpected_preparation)
         prepared_event = LogPolicyProcessor(BASE_LOG_RULES)(None, "info", fields)
         assert prepared_event == expected
 
@@ -1088,13 +817,13 @@ class TestProcessingOrder:
         from app.log_policy.value_preparation import LogValuePreparer
 
         prepared_field_names = []
-        original = LogValuePreparer.prepare_field_value
+        original = LogValuePreparer.count_field_value
 
         def prepare_value(self, field_value, **kwargs):
             prepared_field_names.append(kwargs["field_name"])
             return original(self, field_value, **kwargs)
 
-        monkeypatch.setattr(LogValuePreparer, "prepare_field_value", prepare_value)
+        monkeypatch.setattr(LogValuePreparer, "count_field_value", prepare_value)
         prepared_event = LogPolicyProcessor(_TEST_RULES)(
             None,
             "info",
@@ -1105,6 +834,34 @@ class TestProcessingOrder:
             "event": "log_policy_replaced",
             "log_policy": "pipeline_control",
             "_policy_replaced_reason": "value_count_exceeded",
+        }
+
+    @pytest.mark.parametrize(
+        ("payload", "reason"),
+        [
+            (["x" * TEXT_LIMIT] * 4, "total_text_length_exceeded"),
+            ([1] * MAX_ITEMS_PER_LOG_EVENT, "value_count_exceeded"),
+        ],
+        ids=["text", "items"],
+    )
+    def test_budget_overflow_in_later_field_skips_leak_prevention(
+        self, monkeypatch, payload: list, reason: str
+    ) -> None:
+        """後の項目で予算を超えるログは、前の項目にも情報漏洩防止をかけずに置き換える。"""
+        from app.log_policy.leak_prevention import prevent_leaks
+
+        redact = Mock(wraps=prevent_leaks)
+        monkeypatch.setattr("app.log_policy.value_preparation.prevent_leaks", redact)
+        prepared_event = LogPolicyProcessor(_TEST_RULES)(
+            None,
+            "info",
+            {"event": "token=synthetic", "payload": payload},
+        )
+        redact.assert_not_called()
+        assert prepared_event == {
+            "event": "log_policy_replaced",
+            "log_policy": "pipeline_control",
+            "_policy_replaced_reason": reason,
         }
 
 

@@ -17,10 +17,16 @@ from app.log_policy.exceptions.conversion import convert_exception
 from app.log_policy.exceptions.extraction import extract_exception_fields
 from app.log_policy.exceptions.types import ExceptionConverter
 from app.log_policy.field_selection import LogFieldSelector
-from app.log_policy.value_preparation import LogValuePreparer
+from app.log_policy.value_preparation import (
+    LogValuePreparer,
+    LogValueRejected,
+    ValueRejectionReason,
+)
 
 type ReplacementReason = (
-    BudgetLimitReason | Literal["json_serialization_failed", "processing_failed"]
+    BudgetLimitReason
+    | ValueRejectionReason
+    | Literal["json_serialization_failed", "processing_failed"]
 )
 
 
@@ -64,7 +70,7 @@ class LogPolicyProcessor:
     ) -> MutableMapping[str, Any]:
         try:
             return self._process(event_dict, rules=self.rules)
-        except LogBudgetExceeded as exc:
+        except (LogBudgetExceeded, LogValueRejected) as exc:
             reason: ReplacementReason = exc.reason
         except Exception:
             reason = "processing_failed"
@@ -81,7 +87,7 @@ class LogPolicyProcessor:
         *,
         rules: LogPolicyRules,
     ) -> dict[str, Any]:
-        """準備済みのログを返し、共有予算の超過は例外のまま呼び出し側へ伝える。"""
+        """準備済みのログを返し、共有予算の超過と値の約束違反は例外のまま呼び出し側へ伝える。"""
         diagnostics = LogProcessingDiagnostics()
         budget = LogEventBudget()
         selector = LogFieldSelector(rules.allow, rules.deny, diagnostics, budget=budget)
@@ -95,9 +101,13 @@ class LogPolicyProcessor:
         prepared_event: dict[str, Any] = {}
         # まずセレクターがトップレベルの項目を選別、denyを除いたログを返す。
         selected_fields = selector.select_fields(event_dict)
-        # 整理したログを検証していく。
-        for field_name, field_value in selected_fields.items():
-            prepared_event[field_name] = preparer.prepare_field_value(
+        # 情報漏洩防止は重いため、全項目を数え終えてから加工する。
+        counted_fields = {
+            field_name: preparer.count_field_value(field_value, field_name=field_name)
+            for field_name, field_value in selected_fields.items()
+        }
+        for field_name, field_value in counted_fields.items():
+            prepared_event[field_name] = preparer.apply_policy(
                 field_value, field_name=field_name
             )
 
@@ -110,7 +120,7 @@ class LogPolicyProcessor:
             # 例外の出力は抽出が形と量を保証するため、検査も予算の計上もせず、
             # ポリシーと情報漏洩防止だけをかける。
             for field_name, field_value in exception_fields.items():
-                prepared_event[field_name] = preparer.prepare_text_values(
+                prepared_event[field_name] = preparer.apply_policy(
                     field_value, field_name=field_name
                 )
         # どのポリシーで処理したログかを、出力に残す。
