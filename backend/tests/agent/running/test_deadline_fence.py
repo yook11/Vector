@@ -1,4 +1,4 @@
-"""Agent run deadline fenceの開始・完了契約。"""
+"""AgentRunStateRepository の開始・完了が期限で止まる契約を実DBで確かめる。"""
 
 from __future__ import annotations
 
@@ -17,13 +17,10 @@ from app.agent.contract import (
     AnswerQuestionResult,
     ExternalUrlSource,
 )
-from app.agent.running.attempt_start import AgentRunAttemptStartRepository
-from app.agent.running.completion import (
-    AgentRunCompletionRepository,
-    RunCompletionFailure,
-    RunCompletionFailureReason,
-    RunCompletionSuccess,
-)
+from app.agent.running.daily_quota.release import DailyQuotaReleaseOutcome
+from app.agent.running.state import RunFinished, RunRejected, RunRejectionReason
+from app.agent.running.state_repository import AgentRunStateRepository
+from app.agent.running.types import AgentRunStatus
 from app.models.agent_message import AgentMessage, AgentMessageSource
 from app.models.agent_run import AgentRun
 from app.models.agent_thread import AgentThread
@@ -218,11 +215,11 @@ async def test_start_run_starts_only_before_fixed_deadline(
 
     async with session_factory() as session:
         async with session.begin():
-            await AgentRunAttemptStartRepository(session).start_run(
+            await AgentRunStateRepository(session).start_attempt(
                 before.run_id,
                 now=_BEFORE_DEADLINE,
             )
-            await AgentRunAttemptStartRepository(session).start_run(
+            await AgentRunStateRepository(session).start_attempt(
                 at_deadline.run_id,
                 now=_DEADLINE_AT,
             )
@@ -270,36 +267,46 @@ async def test_complete_run_uses_answer_recovery_deadline(
 
     async with session_factory() as session:
         async with session.begin():
-            accepted_after_original_outcome = await AgentRunCompletionRepository(
-                session
-            ).complete_run(
-                run_id=accepted_after_original_deadline.run_id,
+            repository = AgentRunStateRepository(session)
+            accepted_after_original_outcome = await repository.complete(
+                accepted_after_original_deadline.run_id,
+                attempt_epoch=3,
                 result=_answer_result(),
-                expected_attempt_epoch=3,
                 research_handoff=_CANDIDATE_HANDOFF,
                 now=_CREATED_AT + timedelta(seconds=67),
             )
-            accepted_before_recovery_outcome = await AgentRunCompletionRepository(
-                session
-            ).complete_run(
-                run_id=accepted_before_recovery_deadline.run_id,
+            accepted_before_recovery_outcome = await repository.complete(
+                accepted_before_recovery_deadline.run_id,
+                attempt_epoch=3,
                 result=_answer_result(),
-                expected_attempt_epoch=3,
                 research_handoff=_CANDIDATE_HANDOFF,
                 now=_RECOVERY_DEADLINE - timedelta(microseconds=1),
             )
-            rejected_outcome = await AgentRunCompletionRepository(session).complete_run(
-                run_id=rejected.run_id,
+            rejected_outcome = await repository.complete(
+                rejected.run_id,
+                attempt_epoch=3,
                 result=_answer_result(),
-                expected_attempt_epoch=3,
                 research_handoff=_CANDIDATE_HANDOFF,
                 now=_RECOVERY_DEADLINE,
             )
 
-    assert accepted_after_original_outcome == RunCompletionSuccess()
-    assert accepted_before_recovery_outcome == RunCompletionSuccess()
-    assert rejected_outcome == RunCompletionFailure(
-        RunCompletionFailureReason.DEADLINE_EXCEEDED
+    assert accepted_after_original_outcome == RunFinished(
+        status=AgentRunStatus.COMPLETED,
+        error_code=None,
+        quota_release_outcome=DailyQuotaReleaseOutcome.NOT_ELIGIBLE,
+        running_attempt_epoch=3,
+    )
+    assert accepted_before_recovery_outcome == RunFinished(
+        status=AgentRunStatus.COMPLETED,
+        error_code=None,
+        quota_release_outcome=DailyQuotaReleaseOutcome.NOT_ELIGIBLE,
+        running_attempt_epoch=3,
+    )
+    assert rejected_outcome == RunFinished(
+        status=AgentRunStatus.DEADLINE_EXCEEDED,
+        error_code=None,
+        quota_release_outcome=DailyQuotaReleaseOutcome.NOT_ELIGIBLE,
+        running_attempt_epoch=3,
     )
 
     assert (
@@ -359,20 +366,22 @@ async def test_complete_run_uses_answer_recovery_deadline(
 async def test_complete_run_requires_answer_start_without_changing_run(
     session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
+    """回答を開始していないRunの完了は拒否し、Runと回答を変えない。"""
     seeded = await _seed_run(session_factory, status="running", attempt_epoch=3)
 
     async with session_factory() as session:
         async with session.begin():
-            outcome = await AgentRunCompletionRepository(session).complete_run(
-                run_id=seeded.run_id,
+            outcome = await AgentRunStateRepository(session).complete(
+                seeded.run_id,
+                attempt_epoch=3,
                 result=_answer_result(),
-                expected_attempt_epoch=3,
                 research_handoff=_CANDIDATE_HANDOFF,
                 now=_CREATED_AT + timedelta(seconds=10),
             )
 
-    assert outcome == RunCompletionFailure(
-        RunCompletionFailureReason.ANSWER_NOT_STARTED
+    assert outcome == RunRejected(
+        reason=RunRejectionReason.ANSWER_NOT_STARTED,
+        observed_status=AgentRunStatus.RUNNING,
     )
     assert await _load_complete_persisted(
         session_factory,
@@ -410,15 +419,18 @@ async def test_complete_run_does_not_change_persisted_result_for_old_epoch(
 
     async with session_factory() as session:
         async with session.begin():
-            outcome = await AgentRunCompletionRepository(session).complete_run(
-                run_id=seeded.run_id,
+            outcome = await AgentRunStateRepository(session).complete(
+                seeded.run_id,
+                attempt_epoch=3,
                 result=_answer_result(),
-                expected_attempt_epoch=3,
                 research_handoff=_CANDIDATE_HANDOFF,
                 now=_CREATED_AT + timedelta(seconds=67),
             )
 
-    assert outcome == RunCompletionFailure(RunCompletionFailureReason.ATTEMPT_MISMATCH)
+    assert outcome == RunRejected(
+        reason=RunRejectionReason.ATTEMPT_SUPERSEDED,
+        observed_status=AgentRunStatus.RUNNING,
+    )
     assert (
         await _load_complete_persisted(
             session_factory,
@@ -433,6 +445,7 @@ async def test_complete_run_does_not_change_persisted_result_for_old_epoch(
 async def test_complete_run_uses_database_time_after_waiting_for_run_lock(
     session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
+    """行ロックを待つ間に回収期限を越えた完了は、ロック後のDB時刻で期限切れとして終える。"""
     async with session_factory() as clock_session:
         database_time = await clock_session.scalar(select(func.clock_timestamp()))
     assert isinstance(database_time, datetime)
@@ -450,9 +463,7 @@ async def test_complete_run_uses_database_time_after_waiting_for_run_lock(
         session_factory() as saver,
         session_factory() as observer,
     ):
-        save_task: asyncio.Task[RunCompletionSuccess | RunCompletionFailure] | None = (
-            None
-        )
+        save_task: asyncio.Task[RunFinished | RunRejected] | None = None
         try:
             await blocker.begin()
             await blocker.execute(
@@ -463,10 +474,10 @@ async def test_complete_run_uses_database_time_after_waiting_for_run_lock(
             saver_pid = await saver.scalar(text("SELECT pg_backend_pid()"))
             assert isinstance(saver_pid, int)
             save_task = asyncio.create_task(
-                AgentRunCompletionRepository(saver).complete_run(
-                    run_id=seeded.run_id,
+                AgentRunStateRepository(saver).complete(
+                    seeded.run_id,
+                    attempt_epoch=3,
                     result=_answer_result(),
-                    expected_attempt_epoch=3,
                     research_handoff=_CANDIDATE_HANDOFF,
                 )
             )
@@ -492,7 +503,12 @@ async def test_complete_run_uses_database_time_after_waiting_for_run_lock(
                 if session.in_transaction():
                     await session.rollback()
 
-    assert outcome == RunCompletionFailure(RunCompletionFailureReason.DEADLINE_EXCEEDED)
+    assert outcome == RunFinished(
+        status=AgentRunStatus.DEADLINE_EXCEEDED,
+        error_code=None,
+        quota_release_outcome=DailyQuotaReleaseOutcome.NOT_ELIGIBLE,
+        running_attempt_epoch=3,
+    )
     persisted = await _load_complete_persisted(
         session_factory,
         run_id=seeded.run_id,

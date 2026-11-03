@@ -28,7 +28,10 @@ from app.agent.recording.evidence_answer import (
     EvidenceAnswerRecordingOutcome,
     EvidenceAnswerSucceeded,
 )
-from app.agent.running.stop import AnswerGenerationStopped, StopReason
+from app.agent.running.daily_quota.release import DailyQuotaReleaseOutcome
+from app.agent.running.state import RunFinished, RunRejected, RunRejectionReason
+from app.agent.running.stop import AnswerGenerationStopped
+from app.agent.running.types import AgentRunStatus
 from app.agent.threads.contracts import ThreadMessageSnapshot
 from app.ai_providers.errors import (
     AIProviderResultError,
@@ -888,7 +891,14 @@ async def test_provider_error_closes_stream_without_retry(
             generator,
             delta_reporter=reporter,
             answer_start=ScriptedAnswerGenerationRepository(
-                authorizes=[AnswerGenerationStopped(StopReason.NOT_CURRENT)]
+                authorizes=[
+                    AnswerGenerationStopped(
+                        RunRejected(
+                            reason=RunRejectionReason.ATTEMPT_SUPERSEDED,
+                            observed_status=AgentRunStatus.RUNNING,
+                        )
+                    )
+                ]
             ),
         )
 
@@ -1079,7 +1089,14 @@ async def test_generation_stop_records_stopped_without_outcome() -> None:
         await _answer(
             generator,
             answer_start=ScriptedAnswerGenerationRepository(
-                authorizes=[AnswerGenerationStopped(StopReason.NOT_CURRENT)]
+                authorizes=[
+                    AnswerGenerationStopped(
+                        RunRejected(
+                            reason=RunRejectionReason.ATTEMPT_SUPERSEDED,
+                            observed_status=AgentRunStatus.RUNNING,
+                        )
+                    )
+                ]
             ),
             recorder=recorder,
         )
@@ -1108,7 +1125,14 @@ async def test_provider_error_records_failure_without_fallback() -> None:
         await _answer(
             generator,
             answer_start=ScriptedAnswerGenerationRepository(
-                authorizes=[AnswerGenerationStopped(StopReason.NOT_CURRENT)]
+                authorizes=[
+                    AnswerGenerationStopped(
+                        RunRejected(
+                            reason=RunRejectionReason.ATTEMPT_SUPERSEDED,
+                            observed_status=AgentRunStatus.RUNNING,
+                        )
+                    )
+                ]
             ),
             recorder=recorder,
         )
@@ -1185,8 +1209,20 @@ async def test_start_continue_reports_answering_before_generation() -> None:
 @pytest.mark.parametrize(
     "outcome",
     [
-        AnswerGenerationStopped(StopReason.DEADLINE_EXCEEDED),
-        AnswerGenerationStopped(StopReason.NOT_CURRENT),
+        AnswerGenerationStopped(
+            RunFinished(
+                status=AgentRunStatus.DEADLINE_EXCEEDED,
+                error_code=None,
+                quota_release_outcome=DailyQuotaReleaseOutcome.NOT_ELIGIBLE,
+                running_attempt_epoch=1,
+            )
+        ),
+        AnswerGenerationStopped(
+            RunRejected(
+                reason=RunRejectionReason.ATTEMPT_SUPERSEDED,
+                observed_status=AgentRunStatus.RUNNING,
+            )
+        ),
         RuntimeError("answer start transaction failed"),
     ],
 )
@@ -1218,14 +1254,28 @@ async def test_start_rejection_does_not_generate_or_report_answering(
 async def test_regeneration_stop_does_not_start_second_generation() -> None:
     generator = FakeGenerator(["引用がありません。", "呼ばれない[[1]]"])
     repository = ScriptedAnswerGenerationRepository(
-        authorizes=[AnswerGenerationStopped(StopReason.DEADLINE_EXCEEDED)]
+        authorizes=[
+            AnswerGenerationStopped(
+                RunFinished(
+                    status=AgentRunStatus.DEADLINE_EXCEEDED,
+                    error_code=None,
+                    quota_release_outcome=DailyQuotaReleaseOutcome.NOT_ELIGIBLE,
+                    running_attempt_epoch=1,
+                )
+            )
+        ]
     )
     reporter = RecordingDeltaReporter()
 
     with pytest.raises(AnswerGenerationStopped) as raised:
         await _answer(generator, answer_start=repository, delta_reporter=reporter)
 
-    assert raised.value.reason is StopReason.DEADLINE_EXCEEDED
+    assert raised.value.outcome == RunFinished(
+        status=AgentRunStatus.DEADLINE_EXCEEDED,
+        error_code=None,
+        quota_release_outcome=DailyQuotaReleaseOutcome.NOT_ELIGIBLE,
+        running_attempt_epoch=1,
+    )
     assert [call["attempt_number"] for call in generator.calls] == [1]
     assert repository.authorize_calls == 1
     assert reporter.reset_generations == []

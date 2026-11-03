@@ -38,7 +38,8 @@ async def main():
     )
     from app.agent.evidence_collection.internal_search.ai import gemini
     from app.agent.running.answer_generation import AgentAnswerGenerationRepository
-    from app.agent.running.completion import AgentRunCompletionRepository
+    from app.agent.running.state import RunRejected
+    from app.agent.running.state_repository import AgentRunStateRepository
     from app.agent.running.stop import AnswerGenerationStopped
     from app.models.agent_run import AgentRun
     from app.queue.brokers import broker_agent
@@ -59,7 +60,7 @@ async def main():
         processed = asyncio.Event()
         finish = asyncio.Event()
         original_listen = broker_agent.listen
-        original_complete = AgentRunCompletionRepository.complete_run
+        original_complete = AgentRunStateRepository.complete
         original_answer_start = AgentAnswerGenerationRepository.start_answer_generation
         original_ack_generator = broker_agent._ack_generator
 
@@ -126,9 +127,9 @@ async def main():
                         await finish.wait()
                         return
 
-        async def observe_completion(repository, **kwargs):
+        async def observe_completion(repository, *args, **kwargs):
             nonlocal completion_returned
-            result = await original_complete(repository, **kwargs)
+            result = await original_complete(repository, *args, **kwargs)
             completion_returned = True
             return result
 
@@ -138,7 +139,12 @@ async def main():
             try:
                 return await original_answer_start(repository, **kwargs)
             except AnswerGenerationStopped as stopped:
-                answer_generation_stop_reason = stopped.reason.value
+                outcome = stopped.outcome
+                answer_generation_stop_reason = (
+                    outcome.reason.value
+                    if isinstance(outcome, RunRejected)
+                    else outcome.status.value
+                )
                 raise
 
         class DeliveryObserver(TaskiqMiddleware):
@@ -246,9 +252,7 @@ async def main():
                 patch.object(broker_agent, "listen", receive_deliveries)
             )
             patches.enter_context(
-                patch.object(
-                    AgentRunCompletionRepository, "complete_run", observe_completion
-                )
+                patch.object(AgentRunStateRepository, "complete", observe_completion)
             )
             patches.enter_context(
                 patch.object(

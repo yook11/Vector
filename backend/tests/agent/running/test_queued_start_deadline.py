@@ -1,4 +1,4 @@
-"""queued start deadline による実行禁止とquota返却の契約。"""
+"""queued Run の受理期限による開始の禁止と利用枠の返却を実DBで確かめる。"""
 
 from __future__ import annotations
 
@@ -19,23 +19,22 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 import app.agent.run_execution as run_execution
 import app.queue.tasks.agent_run as agent_run_tasks
-from app.agent.running.attempt_start import (
-    AgentRunAttemptStartRepository,
-    StartRunFailureReason,
-)
-from app.agent.running.cancellation import AgentRunCancellationRepository
 from app.agent.running.daily_quota.release import DailyQuotaReleaseOutcome
 from app.agent.running.deadline.policy import RUN_DEADLINE_SECONDS
+from app.agent.running.state import (
+    AttemptStarted,
+    RunFinished,
+    RunRejected,
+    RunRejectionReason,
+)
+from app.agent.running.state_repository import AgentRunStateRepository
 from app.agent.running.task_boundary import AgentRunTaskBoundaryError
+from app.agent.running.types import AgentRunErrorCode, AgentRunStatus
 from app.models.agent_message import AgentMessage
 from app.models.agent_run import AgentRun
 from app.models.agent_thread import AgentThread
 from app.models.agent_user_daily_quota import AgentUserDailyQuota
 from app.queue.messages.agent_run import AgentRunTrigger
-from tests.agent.running._start_run_outcomes import (
-    assert_start_failure,
-    started_attempt_epoch,
-)
 from tests.conftest import TEST_USER_ID
 from tests.logfire._metric_helpers import collected_metrics
 
@@ -237,6 +236,7 @@ async def _wait_until_blocked(observer: AsyncSession, backend_pid: int) -> None:
 async def test_expired_queued_run_terminalizes_and_releases_original_quota_atomically(
     session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
+    """期限を過ぎたqueuedのRunの開始は、期限切れで終えると同時に予約した利用枠を返す。"""
     deadline_seconds = _run_deadline_seconds()
     seeded = await _seed_queued_run(
         session_factory,
@@ -249,12 +249,17 @@ async def test_expired_queued_run_terminalizes_and_releases_original_quota_atomi
 
     async with session_factory() as session:
         async with session.begin():
-            result = await AgentRunAttemptStartRepository(session).start_run(
+            result = await AgentRunStateRepository(session).start_attempt(
                 seeded.run_id,
                 now=_DB_NOW,
             )
 
-    assert_start_failure(result, StartRunFailureReason.DEADLINE_EXCEEDED)
+    assert result == RunFinished(
+        status=AgentRunStatus.DEADLINE_EXCEEDED,
+        error_code=None,
+        quota_release_outcome=DailyQuotaReleaseOutcome.RELEASED,
+        running_attempt_epoch=None,
+    )
     run = await _read_run(session_factory, seeded.run_id)
     assert (run.status, run.error_code, run.attempt_epoch) == (
         "deadline_exceeded",
@@ -269,6 +274,7 @@ async def test_expired_queued_run_terminalizes_and_releases_original_quota_atomi
 async def test_queued_start_deadline_starts_just_before_and_expires_at_boundary(
     session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
+    """期限の直前は開始し、期限ちょうどは期限切れで終える。"""
     deadline_seconds = _run_deadline_seconds()
     just_before = await _seed_queued_run(
         session_factory,
@@ -284,17 +290,22 @@ async def test_queued_start_deadline_starts_just_before_and_expires_at_boundary(
 
     async with session_factory() as session:
         async with session.begin():
-            before_result = await AgentRunAttemptStartRepository(session).start_run(
+            before_result = await AgentRunStateRepository(session).start_attempt(
                 just_before.run_id,
                 now=_DB_NOW,
             )
-            exact_result = await AgentRunAttemptStartRepository(session).start_run(
+            exact_result = await AgentRunStateRepository(session).start_attempt(
                 exact.run_id,
                 now=_DB_NOW,
             )
 
-    assert started_attempt_epoch(before_result) == 1
-    assert_start_failure(exact_result, StartRunFailureReason.DEADLINE_EXCEEDED)
+    assert before_result == AttemptStarted(attempt_epoch=1)
+    assert exact_result == RunFinished(
+        status=AgentRunStatus.DEADLINE_EXCEEDED,
+        error_code=None,
+        quota_release_outcome=DailyQuotaReleaseOutcome.RELEASED,
+        running_attempt_epoch=None,
+    )
     before_run = await _read_run(session_factory, just_before.run_id)
     exact_run = await _read_run(session_factory, exact.run_id)
     assert (before_run.status, exact_run.status) == (
@@ -308,6 +319,7 @@ async def test_queued_start_deadline_starts_just_before_and_expires_at_boundary(
 async def test_expired_legacy_queued_run_terminalizes_without_quota_release(
     session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
+    """利用枠を予約していない旧来のqueuedのRunは、期限切れで終えても利用枠を返さない。"""
     seeded = await _seed_queued_run(
         session_factory,
         created_at=_DB_NOW - timedelta(seconds=RUN_DEADLINE_SECONDS + 1),
@@ -317,12 +329,17 @@ async def test_expired_legacy_queued_run_terminalizes_without_quota_release(
 
     async with session_factory() as session:
         async with session.begin():
-            result = await AgentRunAttemptStartRepository(session).start_run(
+            result = await AgentRunStateRepository(session).start_attempt(
                 seeded.run_id,
                 now=_DB_NOW,
             )
 
-    assert_start_failure(result, StartRunFailureReason.DEADLINE_EXCEEDED)
+    assert result == RunFinished(
+        status=AgentRunStatus.DEADLINE_EXCEEDED,
+        error_code=None,
+        quota_release_outcome=DailyQuotaReleaseOutcome.NOT_ELIGIBLE,
+        running_attempt_epoch=None,
+    )
     run = await _read_run(session_factory, seeded.run_id)
     assert (run.status, run.error_code) == ("deadline_exceeded", None)
 
@@ -334,6 +351,7 @@ async def test_expired_queued_run_with_missing_or_empty_counter_is_inconsistent(
     session_factory: async_sessionmaker[AsyncSession],
     counter_count: int | None,
 ) -> None:
+    """返す先の利用枠が無いか0なら、期限切れで終えて返却の不整合を返す。"""
     seeded = await _seed_queued_run(
         session_factory,
         created_at=_DB_NOW - timedelta(seconds=RUN_DEADLINE_SECONDS + 1),
@@ -342,12 +360,17 @@ async def test_expired_queued_run_with_missing_or_empty_counter_is_inconsistent(
 
     async with session_factory() as session:
         async with session.begin():
-            result = await AgentRunAttemptStartRepository(session).start_run(
+            result = await AgentRunStateRepository(session).start_attempt(
                 seeded.run_id,
                 now=_DB_NOW,
             )
 
-    assert_start_failure(result, StartRunFailureReason.DEADLINE_EXCEEDED)
+    assert result == RunFinished(
+        status=AgentRunStatus.DEADLINE_EXCEEDED,
+        error_code=None,
+        quota_release_outcome=DailyQuotaReleaseOutcome.INCONSISTENT,
+        running_attempt_epoch=None,
+    )
     run = await _read_run(session_factory, seeded.run_id)
     assert run.status == "deadline_exceeded"
     assert await _read_counter(session_factory, usage_date=_USAGE_DATE) == counter_count
@@ -358,6 +381,7 @@ async def test_expired_queued_run_with_missing_or_empty_counter_is_inconsistent(
 async def test_quota_query_failure_rolls_back_queued_expiry_without_a_committed_outcome(
     session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
+    """利用枠の返却が失敗すると、期限切れの確定ごと巻き戻る。"""
     seeded = await _seed_queued_run(
         session_factory,
         created_at=_DB_NOW - timedelta(seconds=RUN_DEADLINE_SECONDS + 1),
@@ -383,7 +407,7 @@ async def test_quota_query_failure_rolls_back_queued_expiry_without_a_committed_
     try:
         with pytest.raises(RuntimeError, match="queued expiry quota query failed"):
             async with session.begin():
-                await AgentRunAttemptStartRepository(session).start_run(
+                await AgentRunStateRepository(session).start_attempt(
                     seeded.run_id,
                     now=_DB_NOW,
                 )
@@ -405,31 +429,35 @@ async def test_quota_query_failure_rolls_back_queued_expiry_without_a_committed_
 async def test_cancel_winner_refunds_once_and_expired_start_reports_idempotent_skip(
     session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
+    """キャンセルが先に利用枠を返したRunを、期限後に届いた開始は終了済みとして拒否し、二重に返さない。"""
     seeded = await _seed_queued_run(
         session_factory,
         created_at=_DB_NOW - timedelta(seconds=RUN_DEADLINE_SECONDS + 1),
     )
+    # キャンセルも回収期限を見るため、期限より前に届いたキャンセルとして記録する。
+    cancelled_at = _DB_NOW - timedelta(seconds=2)
 
     async with (
         session_factory() as cancel_session,
         session_factory() as start_session,
         session_factory() as observer,
     ):
-        start_task: asyncio.Task[object] | None = None
+        start_task: asyncio.Task[AttemptStarted | RunFinished | RunRejected] | None = (
+            None
+        )
         try:
             await cancel_session.begin()
-            cancelled = await AgentRunCancellationRepository(
-                cancel_session
-            ).cancel_run_for_user(
-                run_id=seeded.run_id,
+            cancelled = await AgentRunStateRepository(cancel_session).cancel_for_user(
+                seeded.run_id,
                 user_id=seeded.user_id,
+                now=cancelled_at,
             )
 
             await start_session.begin()
             start_pid = await start_session.scalar(text("SELECT pg_backend_pid()"))
             assert isinstance(start_pid, int)
             start_task = asyncio.create_task(
-                AgentRunAttemptStartRepository(start_session).start_run(
+                AgentRunStateRepository(start_session).start_attempt(
                     seeded.run_id,
                     now=_DB_NOW,
                 )
@@ -448,11 +476,16 @@ async def test_cancel_winner_refunds_once_and_expired_start_reports_idempotent_s
                 if session.in_transaction():
                     await session.rollback()
 
-    assert (
-        getattr(cancelled, "quota_release_outcome", None)
-        is DailyQuotaReleaseOutcome.RELEASED
+    assert cancelled == RunFinished(
+        status=AgentRunStatus.FAILED,
+        error_code=AgentRunErrorCode.CANCELLED,
+        quota_release_outcome=DailyQuotaReleaseOutcome.RELEASED,
+        running_attempt_epoch=None,
     )
-    assert_start_failure(result, StartRunFailureReason.ALREADY_FINISHED)
+    assert result == RunRejected(
+        reason=RunRejectionReason.ALREADY_FINISHED,
+        observed_status=AgentRunStatus.FAILED,
+    )
     run = await _read_run(session_factory, seeded.run_id)
     assert (run.status, run.error_code) == ("failed", "cancelled")
     assert await _read_counter(session_factory, usage_date=_USAGE_DATE) == 0
@@ -463,6 +496,7 @@ async def test_cancel_winner_refunds_once_and_expired_start_reports_idempotent_s
 async def test_timely_start_and_running_redelivery_never_release_quota(
     session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
+    """期限内の開始とrunningの再配信は世代を進めるだけで、利用枠を返さない。"""
     seeded = await _seed_queued_run(
         session_factory,
         created_at=_DB_NOW - timedelta(seconds=RUN_DEADLINE_SECONDS - 2),
@@ -470,17 +504,17 @@ async def test_timely_start_and_running_redelivery_never_release_quota(
 
     async with session_factory() as session:
         async with session.begin():
-            started = await AgentRunAttemptStartRepository(session).start_run(
+            started = await AgentRunStateRepository(session).start_attempt(
                 seeded.run_id,
                 now=_DB_NOW,
             )
-            redelivered = await AgentRunAttemptStartRepository(session).start_run(
+            redelivered = await AgentRunStateRepository(session).start_attempt(
                 seeded.run_id,
                 now=_DB_NOW + timedelta(seconds=1),
             )
 
-    assert started_attempt_epoch(started) == 1
-    assert started_attempt_epoch(redelivered) == 2
+    assert started == AttemptStarted(attempt_epoch=1)
+    assert redelivered == AttemptStarted(attempt_epoch=2)
     run = await _read_run(session_factory, seeded.run_id)
     assert (run.status, run.attempt_epoch, run.error_code) == ("running", 2, None)
     assert await _read_counter(session_factory, usage_date=_USAGE_DATE) == 1

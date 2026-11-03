@@ -10,12 +10,10 @@ from app.agent.contract import (
     AnswerQuestionResult,
     ExternalUrlSource,
 )
-from app.agent.running.completion import (
-    AgentRunCompletionRepository,
-    RunCompletionFailure,
-    RunCompletionFailureReason,
-)
 from app.agent.running.creation import AgentRunCreationRepository
+from app.agent.running.state import RunRejected, RunRejectionReason
+from app.agent.running.state_repository import AgentRunStateRepository
+from app.agent.running.types import AgentRunStatus
 from app.queue.messages.agent_run import AgentRunTrigger
 from app.queue.tasks.agent_run import run_agent_answer
 from local_tests.agent.support import fetch_saved_run_result
@@ -101,20 +99,19 @@ async def test_reexecution_of_completed_run_preserves_saved_result(
     # 入口の再実行防止で止まらず、保存側の拒否を確認するため直接渡す。
     async with agent_context.state.session_factory() as session:
         async with session.begin():
-            completion = await AgentRunCompletionRepository(session).complete_run(
-                run_id=run_id,
+            completion = await AgentRunStateRepository(session).complete(
+                run_id,
+                attempt_epoch=result_after_initial_execution.run["attempt_epoch"],
                 result=reexecution_result,
-                expected_attempt_epoch=result_after_initial_execution.run[
-                    "attempt_epoch"
-                ],
             )
-            if isinstance(completion, RunCompletionFailure):
-                await session.rollback()
 
     result_after_save_attempt = await fetch_saved_run_result(
         system_database, run_id=run_id, thread_id=created.thread_id
     )
-    assert completion == RunCompletionFailure(RunCompletionFailureReason.NOT_RUNNING)
+    assert completion == RunRejected(
+        reason=RunRejectionReason.ALREADY_FINISHED,
+        observed_status=AgentRunStatus.COMPLETED,
+    )
     assert result_after_save_attempt.run["status"] == "completed"
     assert len(result_after_save_attempt.assistant_messages) == 1
     assert (

@@ -8,15 +8,12 @@ from app.agent.contract import (
     ExternalUrlSource,
 )
 from app.agent.running.answer_generation import AgentAnswerGenerationRepository
-from app.agent.running.attempt_start import AgentRunAttemptStartRepository
-from app.agent.running.completion import (
-    AgentRunCompletionRepository,
-    RunCompletionFailure,
-    RunCompletionFailureReason,
-    RunCompletionSuccess,
-)
 from app.agent.running.creation import AgentRunCreationRepository
-from local_tests.agent.support import fetch_saved_run_result
+from app.agent.running.daily_quota.release import DailyQuotaReleaseOutcome
+from app.agent.running.state import RunFinished, RunRejected, RunRejectionReason
+from app.agent.running.state_repository import AgentRunStateRepository
+from app.agent.running.types import AgentRunStatus
+from local_tests.agent.support import fetch_saved_run_result, start_run_attempt
 
 
 @pytest.mark.asyncio
@@ -37,17 +34,8 @@ async def test_only_latest_attempt_can_complete_run(
             )
     run_id = created.run_id
 
-    async with session_factory() as session:
-        async with session.begin():
-            older_attempt_epoch = await AgentRunAttemptStartRepository(
-                session
-            ).start_run(run_id)
-
-    async with session_factory() as session:
-        async with session.begin():
-            latest_attempt_epoch = await AgentRunAttemptStartRepository(
-                session
-            ).start_run(run_id)
+    older_attempt_epoch = await start_run_attempt(session_factory, run_id)
+    latest_attempt_epoch = await start_run_attempt(session_factory, run_id)
 
     await AgentAnswerGenerationRepository(
         session_factory, run_id, latest_attempt_epoch
@@ -87,36 +75,34 @@ async def test_only_latest_attempt_can_complete_run(
     # 完了済みの拒否ではなく世代の不一致を検証するため、古い世代から保存を試みる。
     async with session_factory() as session:
         async with session.begin():
-            older_attempt_completion = await AgentRunCompletionRepository(
-                session
-            ).complete_run(
-                run_id=run_id,
+            older_attempt_completion = await AgentRunStateRepository(session).complete(
+                run_id,
+                attempt_epoch=older_attempt_epoch,
                 result=older_attempt_result,
-                expected_attempt_epoch=older_attempt_epoch,
             )
-            if isinstance(older_attempt_completion, RunCompletionFailure):
-                await session.rollback()
 
     async with session_factory() as session:
         async with session.begin():
-            latest_attempt_completion = await AgentRunCompletionRepository(
-                session
-            ).complete_run(
-                run_id=run_id,
+            latest_attempt_completion = await AgentRunStateRepository(session).complete(
+                run_id,
+                attempt_epoch=latest_attempt_epoch,
                 result=latest_attempt_result,
-                expected_attempt_epoch=latest_attempt_epoch,
             )
-            if isinstance(latest_attempt_completion, RunCompletionFailure):
-                await session.rollback()
 
     saved_result = await fetch_saved_run_result(
         system_database, run_id=run_id, thread_id=created.thread_id
     )
     assert latest_attempt_epoch > older_attempt_epoch
-    assert older_attempt_completion == RunCompletionFailure(
-        RunCompletionFailureReason.ATTEMPT_MISMATCH
+    assert older_attempt_completion == RunRejected(
+        reason=RunRejectionReason.ATTEMPT_SUPERSEDED,
+        observed_status=AgentRunStatus.RUNNING,
     )
-    assert latest_attempt_completion == RunCompletionSuccess()
+    assert latest_attempt_completion == RunFinished(
+        status=AgentRunStatus.COMPLETED,
+        error_code=None,
+        quota_release_outcome=DailyQuotaReleaseOutcome.NOT_ELIGIBLE,
+        running_attempt_epoch=latest_attempt_epoch,
+    )
     assert saved_result.run["status"] == "completed"
     assert saved_result.run["attempt_epoch"] == latest_attempt_epoch
     assert len(saved_result.assistant_messages) == 1

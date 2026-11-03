@@ -37,18 +37,10 @@ from app.agent.live_updates.sse import (
     validate_redis_stream_id,
 )
 from app.agent.live_updates.sse_response import AgentRunSseStreamingResponse
-from app.agent.live_updates.stream import (
-    AGENT_RUN_LIVE_STREAM_TIMEOUT_SECONDS,
-    AgentRunLiveStreamTerminalEvent,
-)
+from app.agent.live_updates.stream import AGENT_RUN_LIVE_STREAM_TIMEOUT_SECONDS
 from app.agent.live_updates.transport import (
     AgentLiveTransport,
     get_agent_live_transport,
-)
-from app.agent.running.cancellation import (
-    AgentRunCancellationRepository,
-    RunCancellationFailure,
-    RunCancellationFailureReason,
 )
 from app.agent.running.creation import (
     ActiveRunConflictError,
@@ -63,8 +55,15 @@ from app.agent.running.deadline.scheduling import (
     get_agent_deadline_scheduler,
 )
 from app.agent.running.enqueuer import AgentRunEnqueuer, get_agent_run_enqueuer
-from app.agent.running.failure_recording import AgentRunFailureRepository
-from app.agent.running.types import AgentRunErrorCode, AgentRunStatus
+from app.agent.running.finish_notice import notify_run_finished
+from app.agent.running.state import (
+    RunRejected,
+    RunRejectionReason,
+    has_attempt_started,
+    is_finished,
+)
+from app.agent.running.state_repository import AgentRunStateRepository
+from app.agent.running.types import AgentRunStatus
 from app.agent.threads.detail import read_owned_thread_detail
 from app.agent.threads.repository import AgentThreadRepository
 from app.db.fastapi import get_caller_managed_session
@@ -156,6 +155,7 @@ async def create_research_response(
     # commit→kiq→failed の 2 tx を切るため、入口管理の UoW は使わない。
     session: Annotated[AsyncSession, Depends(get_caller_managed_session)],
     enqueuer: Annotated[AgentRunEnqueuer, Depends(get_agent_run_enqueuer)],
+    live: Annotated[AgentLiveTransport, Depends(get_agent_live_transport)],
 ) -> ResearchRunStartResponse | JSONResponse:
     repo = AgentRunCreationRepository(session)
     try:
@@ -217,14 +217,9 @@ async def create_research_response(
         )
         try:
             async with session.begin():
-                updated = await AgentRunFailureRepository(session).mark_enqueue_failed(
-                    created.run_id
-                )
-                if not updated:
-                    logger.info(
-                        "agent_run_enqueue_failed_mark_failed_skipped",
-                        run_id=str(created.run_id),
-                    )
+                recorded = await AgentRunStateRepository(
+                    session
+                ).record_enqueue_failure(created.run_id)
         except Exception as update_exc:
             logger.exception(
                 "agent_run_enqueue_failed_mark_failed_failed",
@@ -234,6 +229,20 @@ async def create_research_response(
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
                 detail="Failed to enqueue research run",
             ) from update_exc
+        if isinstance(recorded, RunRejected):
+            logger.info(
+                "agent_run_enqueue_failed_mark_failed_skipped",
+                run_id=str(created.run_id),
+                reason=recorded.reason.value,
+            )
+        else:
+            await notify_run_finished(
+                recorded,
+                run_id=created.run_id,
+                publisher_for=lambda attempt_epoch: live.publisher(
+                    created.run_id, attempt_epoch
+                ),
+            )
 
     background_tasks.add_task(
         deadline_scheduler.reserve, created.run_id, created.deadline_at
@@ -319,51 +328,25 @@ async def cancel_research_run(
     session: Annotated[AsyncSession, Depends(get_caller_managed_session)],
     live: Annotated[AgentLiveTransport, Depends(get_agent_live_transport)],
 ) -> Response:
-    repo = AgentRunCancellationRepository(session)
     async with session.begin():
-        outcome = await repo.cancel_run_for_user(run_id=run_id, user_id=user.id)
-    if isinstance(outcome, RunCancellationFailure):
-        if outcome.reason is RunCancellationFailureReason.RUN_NOT_FOUND:
+        outcome = await AgentRunStateRepository(session).cancel_for_user(
+            run_id, user_id=user.id
+        )
+    if isinstance(outcome, RunRejected):
+        if outcome.reason is RunRejectionReason.RUN_NOT_FOUND:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
-        if outcome.reason is RunCancellationFailureReason.ALREADY_COMPLETED:
+        if outcome.observed_status is AgentRunStatus.COMPLETED:
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
                 detail=_RUN_ALREADY_COMPLETED_DETAIL,
             )
         return Response(status_code=status.HTTP_204_NO_CONTENT)
-    with suppress(Exception):
-        daily_quota_observability.observe_release(
-            run_id=run_id,
-            outcome=outcome.quota_release_outcome,
-        )
-    running_attempt_epoch = outcome.running_attempt_epoch
-    if running_attempt_epoch is not None:
-        await _publish_cancel_terminal(
-            live=live,
-            run_id=run_id,
-            attempt_epoch=running_attempt_epoch,
-        )
+    await notify_run_finished(
+        outcome,
+        run_id=run_id,
+        publisher_for=lambda attempt_epoch: live.publisher(run_id, attempt_epoch),
+    )
     return Response(status_code=status.HTTP_204_NO_CONTENT)
-
-
-async def _publish_cancel_terminal(
-    *,
-    live: AgentLiveTransport,
-    run_id: UUID,
-    attempt_epoch: int,
-) -> None:
-    try:
-        await live.publisher(run_id, attempt_epoch).publish(
-            AgentRunLiveStreamTerminalEvent(
-                status="failed",
-                errorCode=AgentRunErrorCode.CANCELLED,
-            )
-        )
-    except Exception:
-        logger.warning(
-            "agent_run_cancel_terminal_publish_failed",
-            run_id=str(run_id),
-        )
 
 
 @router.get(
@@ -415,12 +398,7 @@ async def stream_research_run_events(
                 status_code=status.HTTP_404_NOT_FOUND,
                 headers={"Cache-Control": "no-store"},
             )
-        if context.status in (
-            AgentRunStatus.COMPLETED,
-            AgentRunStatus.POLICY_BLOCKED,
-            AgentRunStatus.DEADLINE_EXCEEDED,
-            AgentRunStatus.FAILED,
-        ):
+        if is_finished(context.status):
             await lease.release()
             return Response(
                 status_code=status.HTTP_204_NO_CONTENT,
@@ -433,7 +411,7 @@ async def stream_research_run_events(
         if rejection is not None:
             return _sse_error_response(status.HTTP_429_TOO_MANY_REQUESTS)
         reader = live.reader()
-        if context.status is AgentRunStatus.QUEUED and context.attempt_epoch == 0:
+        if not has_attempt_started(context.attempt_epoch):
             try:
                 await asyncio.wait_for(
                     live.exists(parsed_run_id),
@@ -463,9 +441,6 @@ async def stream_research_run_events(
                 is_disconnected=request.is_disconnected,
             )
         else:
-            if context.attempt_epoch < 1:
-                await lease.release()
-                return _sse_error_response(status.HTTP_503_SERVICE_UNAVAILABLE)
             prepared = await prepare_running_sse_connection(
                 run_id=parsed_run_id,
                 attempt_epoch=context.attempt_epoch,

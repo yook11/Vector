@@ -1,4 +1,4 @@
-"""policy_blocked run terminal のrepository契約。"""
+"""AgentRunStateRepository.record_policy_block の終了契約を実DBで確かめる。"""
 
 from __future__ import annotations
 
@@ -10,24 +10,15 @@ import pytest
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from app.agent.running.attempt_start import (
-    AgentRunAttemptStartRepository,
-    StartRunFailureReason,
-)
-from app.agent.running.cancellation import (
-    AgentRunCancellationRepository,
-    RunCancellationFailure,
-    RunCancellationFailureReason,
-)
-from app.agent.running.failure_recording import AgentRunFailureRepository
-from app.agent.running.policy_block_recording import AgentRunPolicyBlockRepository
-from app.agent.running.types import AgentRunErrorCode
+from app.agent.running.daily_quota.release import DailyQuotaReleaseOutcome
+from app.agent.running.state import RunFinished, RunRejected, RunRejectionReason
+from app.agent.running.state_repository import AgentRunStateRepository
+from app.agent.running.types import AgentRunErrorCode, AgentRunStatus
 from app.models.agent_message import AgentMessage, AgentMessageSource
 from app.models.agent_run import AgentRun
 from app.models.agent_thread import AgentThread
 from app.models.agent_user_daily_quota import AgentUserDailyQuota
 from tests.agent.run_deadline.clock import sweep_deadline_exceeded_runs_at
-from tests.agent.running._start_run_outcomes import assert_start_failure
 from tests.conftest import TEST_USER_ID
 
 pytestmark = pytest.mark.integration
@@ -128,16 +119,18 @@ async def _seed_running_run(
 
 
 @pytest.mark.asyncio
-async def test_mark_policy_blocked_updates_only_the_current_running_attempt(
+async def test_record_policy_block_updates_only_the_current_running_attempt(
     session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
+    """現在の世代のポリシー拒否はRunだけをpolicy_blockedで終え、threadと既存の会話を変えない。"""
     seeded = await _seed_running_run(session_factory)
 
     async with session_factory() as session:
         async with session.begin():
-            changed = await AgentRunPolicyBlockRepository(session).mark_policy_blocked(
+            recorded = await AgentRunStateRepository(session).record_policy_block(
                 seeded.run_id,
-                expected_attempt_epoch=seeded.attempt_epoch,
+                attempt_epoch=seeded.attempt_epoch,
+                now=_NOW,
             )
 
     async with session_factory() as session:
@@ -154,7 +147,12 @@ async def test_mark_policy_blocked_updates_only_the_current_running_attempt(
             select(func.count()).select_from(AgentMessageSource)
         )
 
-    assert changed is True
+    assert recorded == RunFinished(
+        status=AgentRunStatus.POLICY_BLOCKED,
+        error_code=None,
+        quota_release_outcome=DailyQuotaReleaseOutcome.NOT_ELIGIBLE,
+        running_attempt_epoch=seeded.attempt_epoch,
+    )
     assert run is not None
     assert run.status == "policy_blocked"
     assert run.assistant_message_id is None
@@ -165,82 +163,114 @@ async def test_mark_policy_blocked_updates_only_the_current_running_attempt(
 
 
 @pytest.mark.asyncio
-async def test_mark_policy_blocked_is_fenced_from_stale_and_terminal_attempts(
+async def test_record_policy_block_is_fenced_from_stale_and_terminal_attempts(
     session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
+    """古い世代と終了済みのRunへのポリシー拒否は拒否し、現在の世代だけを終える。"""
     seeded = await _seed_running_run(session_factory)
 
     async with session_factory() as session:
         async with session.begin():
-            repository = AgentRunPolicyBlockRepository(session)
-            stale_changed = await repository.mark_policy_blocked(
+            repository = AgentRunStateRepository(session)
+            stale = await repository.record_policy_block(
                 seeded.run_id,
-                expected_attempt_epoch=seeded.attempt_epoch - 1,
+                attempt_epoch=seeded.attempt_epoch - 1,
+                now=_NOW,
             )
-            current_changed = await repository.mark_policy_blocked(
+            current = await repository.record_policy_block(
                 seeded.run_id,
-                expected_attempt_epoch=seeded.attempt_epoch,
+                attempt_epoch=seeded.attempt_epoch,
+                now=_NOW,
             )
-            terminal_changed = await repository.mark_policy_blocked(
+            terminal = await repository.record_policy_block(
                 seeded.run_id,
-                expected_attempt_epoch=seeded.attempt_epoch,
+                attempt_epoch=seeded.attempt_epoch,
+                now=_NOW,
             )
 
-    assert (stale_changed, current_changed, terminal_changed) == (False, True, False)
+    assert (stale, current, terminal) == (
+        RunRejected(
+            reason=RunRejectionReason.ATTEMPT_SUPERSEDED,
+            observed_status=AgentRunStatus.RUNNING,
+        ),
+        RunFinished(
+            status=AgentRunStatus.POLICY_BLOCKED,
+            error_code=None,
+            quota_release_outcome=DailyQuotaReleaseOutcome.NOT_ELIGIBLE,
+            running_attempt_epoch=seeded.attempt_epoch,
+        ),
+        RunRejected(
+            reason=RunRejectionReason.ALREADY_FINISHED,
+            observed_status=AgentRunStatus.POLICY_BLOCKED,
+        ),
+    )
 
 
 @pytest.mark.asyncio
-async def test_mark_policy_blocked_does_not_overwrite_a_cancelled_attempt(
+async def test_record_policy_block_does_not_overwrite_a_cancelled_attempt(
     session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
+    """キャンセルで失敗済みのRunへのポリシー拒否は終了済みとして拒否する。"""
     seeded = await _seed_running_run(session_factory)
 
     async with session_factory() as session:
         async with session.begin():
-            repository = AgentRunPolicyBlockRepository(session)
-            assert (
-                await AgentRunFailureRepository(session).mark_failed(
-                    seeded.run_id,
-                    expected_attempt_epoch=seeded.attempt_epoch,
-                    error_code=AgentRunErrorCode.CANCELLED,
-                )
-                is True
-            )
-            changed = await repository.mark_policy_blocked(
+            repository = AgentRunStateRepository(session)
+            assert await repository.record_failure(
                 seeded.run_id,
-                expected_attempt_epoch=seeded.attempt_epoch,
+                attempt_epoch=seeded.attempt_epoch,
+                error_code=AgentRunErrorCode.CANCELLED,
+                now=_NOW,
+            ) == RunFinished(
+                status=AgentRunStatus.FAILED,
+                error_code=AgentRunErrorCode.CANCELLED,
+                quota_release_outcome=DailyQuotaReleaseOutcome.NOT_ELIGIBLE,
+                running_attempt_epoch=seeded.attempt_epoch,
+            )
+            recorded = await repository.record_policy_block(
+                seeded.run_id,
+                attempt_epoch=seeded.attempt_epoch,
+                now=_NOW,
             )
 
-    assert changed is False
+    assert recorded == RunRejected(
+        reason=RunRejectionReason.ALREADY_FINISHED,
+        observed_status=AgentRunStatus.FAILED,
+    )
 
 
 @pytest.mark.asyncio
 async def test_policy_blocked_is_excluded_from_restart_and_deadline_sweep(
     session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
+    """policy_blockedのRunは再配信で開始せず、期限回収の対象にもならない。"""
     seeded = await _seed_running_run(session_factory)
 
     async with session_factory() as session:
         async with session.begin():
-            repository = AgentRunPolicyBlockRepository(session)
-            assert (
-                await repository.mark_policy_blocked(
-                    seeded.run_id,
-                    expected_attempt_epoch=seeded.attempt_epoch,
-                )
-                is True
+            assert await AgentRunStateRepository(session).record_policy_block(
+                seeded.run_id,
+                attempt_epoch=seeded.attempt_epoch,
+                now=_NOW,
+            ) == RunFinished(
+                status=AgentRunStatus.POLICY_BLOCKED,
+                error_code=None,
+                quota_release_outcome=DailyQuotaReleaseOutcome.NOT_ELIGIBLE,
+                running_attempt_epoch=seeded.attempt_epoch,
             )
 
     async with session_factory() as session:
         async with session.begin():
-            repository = AgentRunAttemptStartRepository(session)
-            restart_result = await repository.start_run(
+            restart_result = await AgentRunStateRepository(session).start_attempt(
                 seeded.run_id,
                 now=_NOW,
             )
             swept = await sweep_deadline_exceeded_runs_at(session, at=_NOW)
 
-    assert_start_failure(restart_result, StartRunFailureReason.ALREADY_FINISHED)
+    assert restart_result == RunRejected(
+        reason=RunRejectionReason.ALREADY_FINISHED,
+        observed_status=AgentRunStatus.POLICY_BLOCKED,
+    )
     assert swept.queued_terminal_count == 0
     assert swept.queued_quota_released_count == 0
     assert swept.queued_quota_not_eligible_count == 0
@@ -253,6 +283,7 @@ async def test_policy_blocked_is_excluded_from_restart_and_deadline_sweep(
 async def test_policy_blocked_cancel_is_already_terminal_without_quota_release(
     session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
+    """policy_blockedのRunのキャンセルは終了済みとして拒否し、利用枠を返さない。"""
     seeded = await _seed_running_run(
         session_factory,
         quota_usage_date=_USAGE_DATE,
@@ -269,17 +300,21 @@ async def test_policy_blocked_cancel_is_already_terminal_without_quota_release(
 
     async with session_factory() as session:
         async with session.begin():
-            repository = AgentRunPolicyBlockRepository(session)
-            assert (
-                await repository.mark_policy_blocked(
-                    seeded.run_id,
-                    expected_attempt_epoch=seeded.attempt_epoch,
-                )
-                is True
+            repository = AgentRunStateRepository(session)
+            assert await repository.record_policy_block(
+                seeded.run_id,
+                attempt_epoch=seeded.attempt_epoch,
+                now=_NOW,
+            ) == RunFinished(
+                status=AgentRunStatus.POLICY_BLOCKED,
+                error_code=None,
+                quota_release_outcome=DailyQuotaReleaseOutcome.NOT_ELIGIBLE,
+                running_attempt_epoch=seeded.attempt_epoch,
             )
-            outcome = await AgentRunCancellationRepository(session).cancel_run_for_user(
-                run_id=seeded.run_id,
+            outcome = await repository.cancel_for_user(
+                seeded.run_id,
                 user_id=_USER_ID,
+                now=_NOW,
             )
 
     async with session_factory() as session:
@@ -290,7 +325,8 @@ async def test_policy_blocked_cancel_is_already_terminal_without_quota_release(
             )
         )
 
-    assert outcome == RunCancellationFailure(
-        RunCancellationFailureReason.ALREADY_POLICY_BLOCKED
+    assert outcome == RunRejected(
+        reason=RunRejectionReason.ALREADY_FINISHED,
+        observed_status=AgentRunStatus.POLICY_BLOCKED,
     )
     assert used_count == 4

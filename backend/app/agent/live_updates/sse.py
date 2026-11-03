@@ -34,7 +34,7 @@ from app.agent.live_updates.stream import (
     AgentRunLiveStreamStageEvent,
     AgentRunLiveStreamTerminalEvent,
 )
-from app.agent.running.types import AgentRunStatus
+from app.agent.running.state import has_attempt_started, is_finished
 
 AGENT_RUN_SSE_RUN_CONNECTION_LIMIT = 2
 AGENT_RUN_SSE_USER_CONNECTION_LIMIT = 4
@@ -315,15 +315,10 @@ class AgentRunQueuedSseConnection:
                 except Exception:
                     self._lease.mark_close_reason("unavailable")
                     return
-                if context is None or context.status in (
-                    AgentRunStatus.COMPLETED,
-                    AgentRunStatus.POLICY_BLOCKED,
-                    AgentRunStatus.DEADLINE_EXCEEDED,
-                    AgentRunStatus.FAILED,
-                ):
+                if context is None or is_finished(context.status):
                     self._lease.mark_close_reason("queued_terminal")
                     return
-                if context.attempt_epoch < 1:
+                if not has_attempt_started(context.attempt_epoch):
                     continue
                 result = await self._reader.read_after(
                     self._run_id,

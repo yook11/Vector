@@ -16,15 +16,10 @@ from app.agent.evidence_collection.external_search.contract import (
 from app.agent.evidence_collection.internal_search.query_embedding import (
     InternalQueryEmbedding,
 )
-from app.agent.running.answer_generation import (
-    AgentAnswerGenerationRepository,
-    AnswerGenerationStarted,
-)
-from app.agent.running.attempt_start import (
-    AgentRunAttemptStartRepository,
-    StartRunFailure,
-)
+from app.agent.running.answer_generation import AgentAnswerGenerationRepository
 from app.agent.running.creation import AgentRunCreationRepository
+from app.agent.running.state import AnswerGenerationStarted, AttemptStarted
+from app.agent.running.state_repository import AgentRunStateRepository
 from app.ai_providers.errors import AIProviderError
 from app.analysis.embedding.domain.value_objects import EMBEDDING_DIMENSION
 from app.models.agent_message import AgentMessage, AgentMessageSource
@@ -124,6 +119,15 @@ async def create_user_run(session_factory, *, user_id, question):
     return created
 
 
+async def start_run_attempt(session_factory, run_id):
+    async with session_factory() as session:
+        async with session.begin():
+            started = await AgentRunStateRepository(session).start_attempt(run_id)
+    if not isinstance(started, AttemptStarted):
+        raise RuntimeError(f"テスト用ランの実行を開始できませんでした: {started}")
+    return started.attempt_epoch
+
+
 async def create_answering_run(
     owner_session_factory, session_factory, *, user_id, question
 ):
@@ -132,15 +136,7 @@ async def create_answering_run(
         owner_session_factory, user_id=user_id, question=question
     )
 
-    async with session_factory() as session:
-        async with session.begin():
-            attempt_epoch = await AgentRunAttemptStartRepository(session).start_run(
-                created.run_id
-            )
-    if isinstance(attempt_epoch, StartRunFailure):
-        raise RuntimeError(
-            f"テスト用ランの実行を開始できませんでした: {attempt_epoch.reason}"
-        )
+    attempt_epoch = await start_run_attempt(session_factory, created.run_id)
 
     answer_generation = await AgentAnswerGenerationRepository(
         session_factory, created.run_id, attempt_epoch

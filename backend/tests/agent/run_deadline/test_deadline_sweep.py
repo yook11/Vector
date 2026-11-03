@@ -1,4 +1,7 @@
-"""queued/runningのdeadline sweepにおける永続状態契約。"""
+"""queued/runningのdeadline sweepにおける永続状態契約。
+
+実DBに seed した Run に対して確かめ、競合は行ロックの待ちで再現する。
+"""
 
 from __future__ import annotations
 
@@ -10,10 +13,11 @@ import pytest
 from sqlalchemy import literal, select, text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from app.agent.running.cancellation import AgentRunCancellationRepository
+from app.agent.running.daily_quota.release import DailyQuotaReleaseOutcome
 from app.agent.running.deadline.deadline_exceeded import _recover_deadline_exceeded_runs
-from app.agent.running.failure_recording import AgentRunFailureRepository
-from app.agent.running.types import AgentRunErrorCode
+from app.agent.running.state import RunFinished
+from app.agent.running.state_repository import AgentRunStateRepository
+from app.agent.running.types import AgentRunErrorCode, AgentRunStatus
 from app.models.agent_message import AgentMessage
 from app.models.agent_run import AgentRun
 from app.models.agent_thread import AgentThread
@@ -362,8 +366,11 @@ async def test_sweep_preserves_failure_or_cancellation_that_wins_run_lock(
     expected_status: str,
     single_run: bool,
 ) -> None:
+    """回収期限の前に記録した失敗・キャンセルが先にロックを取れば、待っていた回収はRunを書き換えない。"""
     answer_started_at = datetime(2026, 9, 2, 12, 0, tzinfo=UTC)
     sweep_time = answer_started_at + timedelta(seconds=45)
+    # 失敗・キャンセルは回収期限の後だと期限切れで終えるため、回収期限の直前に記録する。
+    terminal_time = sweep_time - timedelta(microseconds=1)
     async with session_factory() as session:
         run = await _seed_run(
             session,
@@ -383,21 +390,31 @@ async def test_sweep_preserves_failure_or_cancellation_that_wins_run_lock(
         sweep_task: asyncio.Task[object] | None = None
         try:
             await terminal_session.begin()
+            repository = AgentRunStateRepository(terminal_session)
             if terminalizer == "fail":
-                transitioned = await AgentRunFailureRepository(
-                    terminal_session
-                ).mark_failed(
+                failure = await repository.record_failure(
                     run.id,
-                    expected_attempt_epoch=2,
+                    attempt_epoch=2,
                     error_code=AgentRunErrorCode.INTERNAL_ERROR,
+                    now=terminal_time,
                 )
-                assert transitioned is True
+                assert failure == RunFinished(
+                    status=AgentRunStatus.FAILED,
+                    error_code=AgentRunErrorCode.INTERNAL_ERROR,
+                    quota_release_outcome=DailyQuotaReleaseOutcome.NOT_ELIGIBLE,
+                    running_attempt_epoch=2,
+                )
             else:
-                await AgentRunCancellationRepository(
-                    terminal_session
-                ).cancel_run_for_user(
-                    run_id=run.id,
+                cancellation = await repository.cancel_for_user(
+                    run.id,
                     user_id=_USER_ID,
+                    now=terminal_time,
+                )
+                assert cancellation == RunFinished(
+                    status=AgentRunStatus.FAILED,
+                    error_code=AgentRunErrorCode.CANCELLED,
+                    quota_release_outcome=DailyQuotaReleaseOutcome.NOT_ELIGIBLE,
+                    running_attempt_epoch=2,
                 )
 
             await sweep_session.begin()

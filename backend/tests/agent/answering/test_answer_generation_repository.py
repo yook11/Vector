@@ -1,4 +1,7 @@
-"""回答生成 repository の開始・再生成許可の呼び出し契約。"""
+"""回答生成 repository の開始・再生成許可の呼び出し契約。
+
+前提: DB は使わず、session と AgentRunStateRepository の判定を差し替える。
+"""
 
 from __future__ import annotations
 
@@ -8,11 +11,9 @@ from uuid import UUID
 
 import pytest
 
-from app.agent.running import answer_generation as repository_module
-from app.agent.running.answer_generation import (
-    AgentAnswerGenerationRepository,
-    AnswerGenerationStarted,
-)
+from app.agent.running.answer_generation import AgentAnswerGenerationRepository
+from app.agent.running.state import AnswerGenerationStarted
+from app.agent.running.state_repository import AgentRunStateRepository
 
 RUN_ID = UUID("019bd239-1ed4-7fbb-a336-04fe3c197652")
 ATTEMPT_EPOCH = 3
@@ -46,6 +47,7 @@ def _factory() -> Callable[[], FakeSession]:
 async def test_start_and_authorize_each_call_repository(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """開始と再生成許可は呼ぶたびに AgentRunStateRepository へ問い合わせる。"""
     start_calls = 0
     authorize_calls = 0
 
@@ -58,9 +60,9 @@ async def test_start_and_authorize_each_call_repository(
         nonlocal authorize_calls
         authorize_calls += 1
 
-    monkeypatch.setattr(repository_module, "_start_answer_generation", start_once)
+    monkeypatch.setattr(AgentRunStateRepository, "start_answer_generation", start_once)
     monkeypatch.setattr(
-        repository_module, "_authorize_answer_regeneration", authorize_once
+        AgentRunStateRepository, "authorize_answer_regeneration", authorize_once
     )
     repository = AgentAnswerGenerationRepository(
         _factory(),

@@ -8,7 +8,7 @@ from typing import Any
 from sqlalchemy import delete, exists, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.agent.running.types import AgentRunStatus
+from app.agent.running.state import ACTIVE_STATUSES
 from app.agent.threads.contracts import ThreadMessageSnapshot
 from app.agent.threads.projection import (
     build_research_thread_detail,
@@ -22,8 +22,6 @@ from app.schemas.research import (
     ResearchThreadDetail,
     ResearchThreadListParams,
 )
-
-_ACTIVE_STATUSES = (AgentRunStatus.QUEUED.value, AgentRunStatus.RUNNING.value)
 
 
 class AgentThreadRepository:
@@ -87,7 +85,7 @@ class AgentThreadRepository:
         has_active_run = exists(
             select(AgentRun.id).where(
                 AgentRun.thread_id == AgentThread.id,
-                AgentRun.status.in_(_ACTIVE_STATUSES),
+                AgentRun.status.in_(ACTIVE_STATUSES),
             )
         )
         rows = (

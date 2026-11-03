@@ -15,7 +15,9 @@ from app.agent.recording.direct_answer import (
     DirectAnswerSucceeded,
     LogfireDirectAnswerRecorder,
 )
+from app.agent.running.state import RunRejected, RunRejectionReason
 from app.agent.running.stop import AnswerGenerationStopped
+from app.agent.running.types import AgentRunStatus
 from tests.logfire._metric_helpers import attributes_of, collected_metrics
 
 _OUTCOME_METRIC = "vector.agent.direct_answer.outcome"
@@ -79,7 +81,15 @@ async def test_classified_failure_emits_failed_duration_and_outcome(
     [
         pytest.param(asyncio.CancelledError(), id="cancellation"),
         pytest.param(GeneratorExit(), id="generator-exit"),
-        pytest.param(AnswerGenerationStopped(), id="generation-stopped"),
+        pytest.param(
+            AnswerGenerationStopped(
+                RunRejected(
+                    reason=RunRejectionReason.ATTEMPT_SUPERSEDED,
+                    observed_status=AgentRunStatus.RUNNING,
+                )
+            ),
+            id="generation-stopped",
+        ),
     ],
 )
 async def test_stop_emits_stopped_duration_without_outcome(
@@ -126,7 +136,15 @@ async def test_error_after_success_discards_success_outcome(
     [
         pytest.param(asyncio.CancelledError(), id="cancellation"),
         pytest.param(GeneratorExit(), id="generator-exit"),
-        pytest.param(AnswerGenerationStopped(), id="generation-stopped"),
+        pytest.param(
+            AnswerGenerationStopped(
+                RunRejected(
+                    reason=RunRejectionReason.ATTEMPT_SUPERSEDED,
+                    observed_status=AgentRunStatus.RUNNING,
+                )
+            ),
+            id="generation-stopped",
+        ),
     ],
 )
 async def test_stop_discards_reported_outcome(

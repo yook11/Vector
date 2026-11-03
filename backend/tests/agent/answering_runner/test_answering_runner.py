@@ -34,7 +34,9 @@ from app.agent.planning.contract import (
     PlanningInput,
     QuestionPlan,
 )
+from app.agent.running.state import RunRejected, RunRejectionReason
 from app.agent.running.stop import AnswerGenerationStopped
+from app.agent.running.types import AgentRunStatus
 from app.agent.threads.contracts import ThreadMessageSnapshot
 from tests.agent.answering_runner._harness import (
     THREAD_ID,
@@ -314,7 +316,15 @@ async def test_failure_before_planning_prevents_later_work(
     "error",
     [
         pytest.param(RuntimeError("answer failed"), id="unexpected-answer-error"),
-        pytest.param(AnswerGenerationStopped(), id="generation-stopped"),
+        pytest.param(
+            AnswerGenerationStopped(
+                RunRejected(
+                    reason=RunRejectionReason.ATTEMPT_SUPERSEDED,
+                    observed_status=AgentRunStatus.RUNNING,
+                )
+            ),
+            id="generation-stopped",
+        ),
     ],
 )
 async def test_phase_exception_propagates_same_instance(error: BaseException) -> None:
@@ -333,7 +343,12 @@ async def test_phase_exception_propagates_same_instance(error: BaseException) ->
 async def test_generation_stopped_closes_run_span_without_error(
     capfire: CaptureLogfire,
 ) -> None:
-    error = AnswerGenerationStopped()
+    error = AnswerGenerationStopped(
+        RunRejected(
+            reason=RunRejectionReason.ATTEMPT_SUPERSEDED,
+            observed_status=AgentRunStatus.RUNNING,
+        )
+    )
     factory, _, _ = _direct_factory(answers=[error])
 
     with pytest.raises(AnswerGenerationStopped) as raised:

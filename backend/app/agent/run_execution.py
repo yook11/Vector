@@ -19,10 +19,7 @@ from app.agent.live_updates.reporters import (
     AgentRunLiveActivityReporter,
     AgentRunLiveStageReporter,
 )
-from app.agent.live_updates.stream import (
-    AgentRunLiveStreamPublisher,
-    AgentRunLiveStreamTerminalEvent,
-)
+from app.agent.live_updates.stream import AgentRunLiveStreamPublisher
 from app.agent.planning.failure import PlanningError
 from app.agent.research_handoff import (
     ResearchHandoff,
@@ -31,24 +28,19 @@ from app.agent.research_handoff import (
 from app.agent.running.answer_generation import (
     AgentAnswerGenerationRepository,
 )
-from app.agent.running.attempt_start import (
-    AgentRunAttemptStartRepository,
-    StartRunFailure,
-    StartRunFailureReason,
-)
-from app.agent.running.completion import (
-    AgentRunCompletionRepository,
-    RunCompletionFailure,
-    RunCompletionFailureReason,
-    RunCompletionSuccess,
-)
 from app.agent.running.continuation import AgentRunExecutionProbe
-from app.agent.running.failure_recording import AgentRunFailureRepository
+from app.agent.running.finish_notice import notify_run_finished
 from app.agent.running.question_reading import (
     AgentRunQuestionRepository,
     UserQuestionMessage,
 )
-from app.agent.running.stop import AnswerGenerationStopped, StopReason
+from app.agent.running.state import (
+    AttemptStarted,
+    RunFinished,
+    RunRejected,
+)
+from app.agent.running.state_repository import AgentRunStateRepository
+from app.agent.running.stop import AnswerGenerationStopped
 from app.agent.running.task_boundary import AgentRunTaskBoundaryError
 from app.agent.running.types import AgentRunErrorCode
 from app.agent.runtime.contract import AgentResponseInvalidError
@@ -69,13 +61,11 @@ async def execute_run_attempt(
     live_redis: aioredis.Redis,
     schedule_deadline_check: Callable[[UUID, datetime], None],
 ) -> None:
-    attempt_epoch: int | None = None
-    stream_events: AgentRunLiveStreamPublisher | None = None
     result: AnswerQuestionResult | None = None
     research_handoff: ResearchHandoff | None = None
     start_error: AgentRunTaskBoundaryError | None = None
     try:
-        start_result = await _start_run(session_factory, run_id)
+        started = await _start_run(session_factory, run_id)
     except Exception as exc:
         logger.error(
             "agent_run_start_failed",
@@ -85,14 +75,29 @@ async def execute_run_attempt(
     if start_error is not None:
         start_error.__suppress_context__ = True
         raise start_error
-    if isinstance(start_result, int):
-        attempt_epoch = start_result
-    elif start_result.reason is StartRunFailureReason.DEADLINE_EXCEEDED:
+    if isinstance(started, RunFinished):
         logger.info("agent_run_start_deadline_exceeded")
+        await notify_run_finished(
+            started,
+            run_id=run_id,
+            publisher_for=lambda epoch: AgentRunLiveStreamPublisher(
+                live_redis, run_id, epoch
+            ),
+        )
         return
-    else:
-        logger.info("agent_run_not_started", reason=start_result.reason.value)
+    if isinstance(started, RunRejected):
+        logger.info("agent_run_not_started", reason=started.reason.value)
         return
+    attempt_epoch = started.attempt_epoch
+    stream_events = AgentRunLiveStreamPublisher(
+        live_redis,
+        run_id,
+        attempt_epoch,
+    )
+
+    # workerが終えるのは現在の世代のRunだけなので、通知はこの世代のpublisherで送る。
+    def own_publisher(_attempt_epoch: int) -> AgentRunLiveStreamPublisher:
+        return stream_events
 
     question_row = None
     try:
@@ -109,16 +114,11 @@ async def execute_run_attempt(
             run_id,
             attempt_epoch,
             AgentRunErrorCode.INTERNAL_ERROR,
-            None,
+            own_publisher,
         )
         return
     user_id, thread_id, question = question_row
 
-    stream_events = AgentRunLiveStreamPublisher(
-        live_redis,
-        run_id,
-        attempt_epoch,
-    )
     delta_reporter = AgentRunLiveAnswerDeltaReporter(
         stream_events,
         run_id=run_id,
@@ -181,17 +181,23 @@ async def execute_run_attempt(
         result = run_result.final_output
         research_handoff = run_result.research_handoff
     except AnswerGenerationStopped as stopped:
+        if isinstance(stopped.outcome, RunRejected):
+            logger.info(
+                "agent_run_generation_stopped",
+                run_id=str(run_id),
+                reason=stopped.outcome.reason.value,
+            )
+            return
         logger.info(
             "agent_run_generation_stopped",
             run_id=str(run_id),
-            reason=stopped.reason.value,
+            terminal_status=stopped.outcome.status.value,
         )
-        if stopped.reason is StopReason.DEADLINE_EXCEEDED:
-            await _publish_terminal(
-                stream_events,
-                run_id,
-                AgentRunLiveStreamTerminalEvent(status="deadline_exceeded"),
-            )
+        await notify_run_finished(
+            stopped.outcome,
+            run_id=run_id,
+            publisher_for=own_publisher,
+        )
         return
     except (
         AIProviderError,
@@ -210,7 +216,7 @@ async def execute_run_attempt(
             run_id,
             attempt_epoch,
             AgentRunErrorCode.GENERATION_UNAVAILABLE,
-            stream_events,
+            own_publisher,
         )
         return
     except Exception as exc:
@@ -224,12 +230,12 @@ async def execute_run_attempt(
             run_id,
             attempt_epoch,
             AgentRunErrorCode.INTERNAL_ERROR,
-            stream_events,
+            own_publisher,
         )
         return
 
-    if attempt_epoch is None or stream_events is None or result is None:
-        raise RuntimeError("completed run is missing its execution context")
+    if result is None:
+        raise RuntimeError("completed run is missing its answer")
 
     serialized_research_handoff = _serialize_research_handoff(
         research_handoff,
@@ -238,36 +244,23 @@ async def execute_run_attempt(
     try:
         async with session_factory() as session:
             async with session.begin():
-                completion_result = await AgentRunCompletionRepository(
-                    session
-                ).complete_run(
-                    run_id=run_id,
+                completion = await AgentRunStateRepository(session).complete(
+                    run_id,
+                    attempt_epoch=attempt_epoch,
                     result=result,
-                    expected_attempt_epoch=attempt_epoch,
                     research_handoff=serialized_research_handoff,
                 )
-                if isinstance(completion_result, RunCompletionFailure):
-                    logger.info(
-                        "agent_run_completion_rejected",
-                        run_id=str(run_id),
-                        reason=completion_result.reason.value,
-                    )
-                    if (
-                        completion_result.reason
-                        is not RunCompletionFailureReason.DEADLINE_EXCEEDED
-                    ):
-                        await session.rollback()
-        if isinstance(completion_result, RunCompletionSuccess):
-            await _publish_terminal(
-                stream_events,
-                run_id,
-                AgentRunLiveStreamTerminalEvent(status="completed"),
+        if isinstance(completion, RunRejected):
+            logger.info(
+                "agent_run_completion_rejected",
+                run_id=str(run_id),
+                reason=completion.reason.value,
             )
-        elif completion_result.reason is RunCompletionFailureReason.DEADLINE_EXCEEDED:
-            await _publish_terminal(
-                stream_events,
-                run_id,
-                AgentRunLiveStreamTerminalEvent(status="deadline_exceeded"),
+        else:
+            await notify_run_finished(
+                completion,
+                run_id=run_id,
+                publisher_for=own_publisher,
             )
     except Exception:
         logger.exception(
@@ -279,17 +272,17 @@ async def execute_run_attempt(
             run_id,
             attempt_epoch,
             AgentRunErrorCode.INTERNAL_ERROR,
-            stream_events,
+            own_publisher,
         )
 
 
 async def _start_run(
     session_factory: async_sessionmaker[AsyncSession],
     run_id: UUID,
-) -> int | StartRunFailure:
+) -> AttemptStarted | RunFinished | RunRejected:
     async with session_factory() as session:
         async with session.begin():
-            return await AgentRunAttemptStartRepository(session).start_run(run_id)
+            return await AgentRunStateRepository(session).start_attempt(run_id)
 
 
 def _serialize_research_handoff(
@@ -297,7 +290,7 @@ def _serialize_research_handoff(
     *,
     run_id: UUID,
 ) -> dict[str, object] | None:
-    """handoffに起因しうる失敗をcomplete_run呼び出し前に完結させる。"""
+    """handoffに起因しうる失敗を完了の保存より前に完結させる。"""
     if research_handoff is None:
         return None
     try:
@@ -366,41 +359,20 @@ async def _read_research_handoff(
 async def _mark_failed(
     session_factory: async_sessionmaker[AsyncSession],
     run_id: UUID,
-    expected_attempt_epoch: int,
+    attempt_epoch: int,
     error_code: AgentRunErrorCode,
-    stream_events: AgentRunLiveStreamPublisher | None,
-) -> bool:
+    publisher_for: Callable[[int], AgentRunLiveStreamPublisher],
+) -> None:
     async with session_factory() as session:
         async with session.begin():
-            transitioned = await AgentRunFailureRepository(session).mark_failed(
+            recorded = await AgentRunStateRepository(session).record_failure(
                 run_id,
-                expected_attempt_epoch=expected_attempt_epoch,
+                attempt_epoch=attempt_epoch,
                 error_code=error_code,
             )
-    if not transitioned:
-        return False
-    if stream_events is not None:
-        await _publish_terminal(
-            stream_events,
-            run_id,
-            AgentRunLiveStreamTerminalEvent(
-                status="failed",
-                errorCode=error_code,
-            ),
-        )
-    return True
-
-
-async def _publish_terminal(
-    stream_events: AgentRunLiveStreamPublisher,
-    run_id: UUID,
-    event: AgentRunLiveStreamTerminalEvent,
-) -> None:
-    try:
-        await stream_events.publish(event)
-    except Exception:
-        logger.warning(
-            "agent_run_live_stream_terminal_publish_failed",
-            run_id=str(run_id),
-            terminal_status=event.status,
+    if isinstance(recorded, RunFinished):
+        await notify_run_finished(
+            recorded,
+            run_id=run_id,
+            publisher_for=publisher_for,
         )

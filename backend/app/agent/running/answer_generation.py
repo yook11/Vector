@@ -2,30 +2,20 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 from datetime import datetime
 from typing import Protocol
 from uuid import UUID
 
-from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from app.agent.running.deadline.deadline_exceeded import database_now
-from app.agent.running.stop import AnswerGenerationStopped, StopReason
-from app.agent.running.types import AgentRunStatus
-from app.models.agent_run import AgentRun
+from app.agent.running.state import AnswerGenerationStarted
+from app.agent.running.state_repository import AgentRunStateRepository
+from app.agent.running.stop import AnswerGenerationStopped
 
 __all__ = [
     "AgentAnswerGenerationRepository",
     "AnswerGenerationRepository",
-    "AnswerGenerationStarted",
 ]
-
-
-@dataclass(frozen=True, slots=True)
-class AnswerGenerationStarted:
-    run_id: UUID
-    answer_started_at: datetime
 
 
 class AnswerGenerationRepository(Protocol):
@@ -50,96 +40,29 @@ class AgentAnswerGenerationRepository:
     ) -> AnswerGenerationStarted:
         async with self._session_factory() as session:
             async with session.begin():
-                result = await _start_answer_generation(
-                    session,
-                    run_id=self._run_id,
-                    expected_attempt_epoch=self._attempt_epoch,
+                outcome = await AgentRunStateRepository(
+                    session
+                ).start_answer_generation(
+                    self._run_id,
+                    attempt_epoch=self._attempt_epoch,
                     now=now,
                 )
         # 期限切れの確定をcommitしてから止めるため、transactionを閉じた後に送出する。
-        if isinstance(result, StopReason):
-            raise AnswerGenerationStopped(result)
-        return result
+        if not isinstance(outcome, AnswerGenerationStarted):
+            raise AnswerGenerationStopped(outcome)
+        return outcome
 
     async def authorize_answer_regeneration(
         self, *, now: datetime | None = None
     ) -> None:
         async with self._session_factory() as session:
             async with session.begin():
-                stop_reason = await _authorize_answer_regeneration(
-                    session,
-                    run_id=self._run_id,
-                    expected_attempt_epoch=self._attempt_epoch,
+                stopped = await AgentRunStateRepository(
+                    session
+                ).authorize_answer_regeneration(
+                    self._run_id,
+                    attempt_epoch=self._attempt_epoch,
                     now=now,
                 )
-        if stop_reason is not None:
-            raise AnswerGenerationStopped(stop_reason)
-
-
-async def _lock_run(session: AsyncSession, run_id: UUID) -> AgentRun | None:
-    return (
-        await session.execute(
-            select(AgentRun)
-            .where(AgentRun.id == run_id)
-            .with_for_update()
-            .execution_options(populate_existing=True)
-        )
-    ).scalar_one_or_none()
-
-
-def _is_current_running(run: AgentRun | None, expected_attempt_epoch: int) -> bool:
-    return (
-        run is not None
-        and run.status == AgentRunStatus.RUNNING.value
-        and run.attempt_epoch == expected_attempt_epoch
-    )
-
-
-def _expire_for_deadline(run: AgentRun) -> StopReason:
-    run.status = AgentRunStatus.DEADLINE_EXCEEDED.value
-    run.assistant_message_id = None
-    run.error_code = None
-    return StopReason.DEADLINE_EXCEEDED
-
-
-async def _start_answer_generation(
-    session: AsyncSession,
-    *,
-    run_id: UUID,
-    expected_attempt_epoch: int,
-    now: datetime | None = None,
-) -> AnswerGenerationStarted | StopReason:
-    run = await _lock_run(session, run_id)
-    if (
-        run is None
-        or run.status != AgentRunStatus.RUNNING.value
-        or run.attempt_epoch != expected_attempt_epoch
-        or run.answer_started_at is not None
-    ):
-        return StopReason.NOT_CURRENT
-
-    now = await database_now(session, now)
-    if now >= run.deadline_at:
-        return _expire_for_deadline(run)
-
-    run.answer_started_at = now
-    return AnswerGenerationStarted(run_id=run.id, answer_started_at=now)
-
-
-async def _authorize_answer_regeneration(
-    session: AsyncSession,
-    *,
-    run_id: UUID,
-    expected_attempt_epoch: int,
-    now: datetime | None = None,
-) -> StopReason | None:
-    run = await _lock_run(session, run_id)
-    if not _is_current_running(run, expected_attempt_epoch) or (
-        run is None or run.answer_started_at is None
-    ):
-        return StopReason.NOT_CURRENT
-
-    now = await database_now(session, now)
-    if now >= run.deadline_at:
-        return _expire_for_deadline(run)
-    return None
+        if stopped is not None:
+            raise AnswerGenerationStopped(stopped)

@@ -17,20 +17,18 @@ from app.agent.running.daily_quota.release import (
     DailyQuotaReleaseReservation,
     release_daily_quotas,
 )
+from app.agent.running.state import RunState
 from app.agent.running.types import AgentRunStatus
 from app.models.agent_run import AgentRun
 from app.models.agent_thread import AgentThread
 
 
 @dataclass(frozen=True, slots=True)
-class LockedRunForDeadlineRecovery:
-    """期限回収のためにロックした時点のrun情報を保持する。"""
-
+class _DeadlineRecoveryCandidate:
     run_id: UUID
-    status: AgentRunStatus
-    attempt_epoch: int
     user_id: UUID
     quota_usage_date: date | None
+    state: RunState
 
 
 @dataclass(frozen=True, slots=True)
@@ -117,6 +115,7 @@ async def database_now(session: AsyncSession, injected: datetime | None) -> date
 
 
 def _has_reached_recovery_deadline(now: ColumnElement[datetime]) -> ColumnElement[bool]:
+    """候補を絞るだけの条件で、ロック後の確定はRunStateが判断する。"""
     return or_(
         and_(
             AgentRun.status == AgentRunStatus.QUEUED.value,
@@ -135,33 +134,6 @@ def _has_reached_recovery_deadline(now: ColumnElement[datetime]) -> ColumnElemen
             <= now,
         ),
     )
-
-
-async def expire_run(
-    session: AsyncSession,
-    *,
-    run_id: uuid_mod.UUID,
-    expected_status: AgentRunStatus,
-    expected_attempt_epoch: int,
-    now: datetime,
-) -> bool:
-    """呼び出し元がRunをロックし、取得後のDB時刻で期限切れを確定する。"""
-    result = await session.execute(
-        update(AgentRun)
-        .where(
-            AgentRun.id == run_id,
-            AgentRun.status == expected_status.value,
-            AgentRun.attempt_epoch == expected_attempt_epoch,
-            AgentRun.deadline_at <= now,
-        )
-        .values(
-            status=AgentRunStatus.DEADLINE_EXCEEDED.value,
-            assistant_message_id=None,
-            error_code=None,
-        )
-        .execution_options(synchronize_session=False)
-    )
-    return (result.rowcount or 0) == 1
 
 
 async def sweep_deadline_exceeded_runs(
@@ -201,27 +173,27 @@ async def _recover_deadline_exceeded_runs(
     clock: ColumnElement[datetime],
     run_id: UUID | None = None,
 ) -> DeadlineRunSweepResult:
-    locked_runs = await _lock_runs_for_deadline_recovery(
+    candidates = await _lock_runs_for_deadline_recovery(
         session, thread_id=thread_id, run_id=run_id, clock=clock
     )
-    if not locked_runs:
+    if not candidates:
         return DeadlineRunSweepResult.empty()
 
     # lock待機中に期限を越えるため、更新判断には取得後のDB時刻を使う。
     now = await _read_database_time(session, clock)
-    await _finalize_deadline_exceeded_runs(session, locked_runs=locked_runs, now=now)
+    await _finalize_deadline_exceeded_runs(session, candidates=candidates, now=now)
     quota_result = await release_daily_quotas(
         session,
         reservations=tuple(
             DailyQuotaReleaseReservation(
-                user_id=run.user_id,
-                usage_date=run.quota_usage_date,
+                user_id=candidate.user_id,
+                usage_date=candidate.quota_usage_date,
             )
-            for run in locked_runs
-            if run.status == AgentRunStatus.QUEUED
+            for candidate in candidates
+            if candidate.state.status is AgentRunStatus.QUEUED
         ),
     )
-    return _build_deadline_sweep_result(locked_runs, quota_result)
+    return _build_deadline_sweep_result(candidates, quota_result)
 
 
 async def _lock_runs_for_deadline_recovery(
@@ -230,12 +202,14 @@ async def _lock_runs_for_deadline_recovery(
     thread_id: UUID | None,
     run_id: UUID | None,
     clock: ColumnElement[datetime],
-) -> tuple[LockedRunForDeadlineRecovery, ...]:
+) -> tuple[_DeadlineRecoveryCandidate, ...]:
     query = (
         select(
             AgentRun.id,
             AgentRun.status,
             AgentRun.attempt_epoch,
+            AgentRun.deadline_at,
+            AgentRun.answer_started_at,
             AgentRun.quota_usage_date,
             AgentThread.user_id,
         )
@@ -250,64 +224,75 @@ async def _lock_runs_for_deadline_recovery(
         query = query.where(AgentRun.id == run_id)
     rows = (await session.execute(query)).tuples().all()
     return tuple(
-        LockedRunForDeadlineRecovery(
-            run_id=run_id,
-            status=AgentRunStatus(status),
-            attempt_epoch=attempt_epoch,
+        _DeadlineRecoveryCandidate(
+            run_id=candidate_id,
             user_id=user_id,
             quota_usage_date=quota_usage_date,
+            state=RunState(
+                status=AgentRunStatus(status),
+                attempt_epoch=attempt_epoch,
+                deadline_at=deadline_at,
+                answer_started_at=answer_started_at,
+            ),
         )
-        for run_id, status, attempt_epoch, quota_usage_date, user_id in rows
+        for (
+            candidate_id,
+            status,
+            attempt_epoch,
+            deadline_at,
+            answer_started_at,
+            quota_usage_date,
+            user_id,
+        ) in rows
     )
 
 
 async def _finalize_deadline_exceeded_runs(
     session: AsyncSession,
     *,
-    locked_runs: tuple[LockedRunForDeadlineRecovery, ...],
+    candidates: tuple[_DeadlineRecoveryCandidate, ...],
     now: datetime,
 ) -> None:
-    run_ids = [run.run_id for run in locked_runs]
-    updated_ids = set(
-        (
-            await session.scalars(
-                update(AgentRun)
-                .where(
-                    AgentRun.id.in_(run_ids),
-                    _has_reached_recovery_deadline(literal(now)),
-                )
-                # 回答とerror_codeは制約で既にNULLのため書かず、
-                # APIロールにこの2列の更新権限を求めない。
-                .values(status=AgentRunStatus.DEADLINE_EXCEEDED.value)
-                .returning(AgentRun.id)
-                .execution_options(synchronize_session=False)
-            )
-        ).all()
-    )
-    if updated_ids != set(run_ids):
+    if not all(
+        candidate.state.is_due_for_deadline_recovery(now=now)
+        for candidate in candidates
+    ):
         raise RuntimeError("deadline run sweep lost a locked candidate")
+    await session.execute(
+        update(AgentRun)
+        .where(AgentRun.id.in_([candidate.run_id for candidate in candidates]))
+        # 回答とerror_codeは制約で既にNULLのため書かず、
+        # APIロールにこの2列の更新権限を求めない。
+        .values(status=AgentRunStatus.DEADLINE_EXCEEDED.value)
+        .execution_options(synchronize_session=False)
+    )
 
 
 def _build_deadline_sweep_result(
-    locked_runs: tuple[LockedRunForDeadlineRecovery, ...],
+    candidates: tuple[_DeadlineRecoveryCandidate, ...],
     quota_result: DailyQuotaBatchReleaseResult,
 ) -> DeadlineRunSweepResult:
-    running_runs = [run for run in locked_runs if run.status == AgentRunStatus.RUNNING]
+    running = [
+        candidate
+        for candidate in candidates
+        if candidate.state.status is AgentRunStatus.RUNNING
+    ]
     return DeadlineRunSweepResult(
         queued_terminal_count=sum(
-            run.status == AgentRunStatus.QUEUED for run in locked_runs
+            candidate.state.status is AgentRunStatus.QUEUED for candidate in candidates
         ),
         queued_quota_released_count=quota_result.released_count,
         queued_quota_not_eligible_count=quota_result.not_eligible_count,
         queued_quota_inconsistent_count=quota_result.inconsistent_count,
         running_terminal_runs=tuple(
             DeadlineExceededRunningRun(
-                run_id=run.run_id, attempt_epoch=run.attempt_epoch
+                run_id=candidate.run_id,
+                attempt_epoch=candidate.state.attempt_epoch,
             )
-            for run in running_runs
-            if run.attempt_epoch > 0
+            for candidate in running
+            if candidate.state.attempt_epoch > 0
         ),
         running_quota_reservation_count=sum(
-            run.quota_usage_date is not None for run in running_runs
+            candidate.quota_usage_date is not None for candidate in running
         ),
     )
