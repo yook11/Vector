@@ -18,6 +18,7 @@ from app.agent.answering.direct_answer.contract import (
     DirectAnswerer,
     DirectAnswerInput,
 )
+from app.agent.answering.direct_answer.failure import DirectAnswerError
 from app.agent.answering.evidence_answer.contract import (
     EvidenceAnswerer,
     EvidenceAnswerInput,
@@ -25,6 +26,7 @@ from app.agent.answering.evidence_answer.contract import (
 from app.agent.answering.evidence_answer.evidence import (
     build_answer_input_evidence,
 )
+from app.agent.answering.evidence_answer.failure import EvidenceAnswerError
 from app.agent.answering.result_assembly import assemble_evidence_result
 from app.agent.contract import (
     AnswerEventReporter,
@@ -50,15 +52,19 @@ from app.agent.planning.contract import (
     QuestionPlanner,
     SearchPlan,
 )
+from app.agent.planning.failure import PlanningError
 from app.agent.research_handoff.handoff import ResearchHandoff
 from app.agent.research_handoff.handoff_input import ResearchHandoffInput
 from app.agent.research_handoff.service import ResearchHandoffOrganizer
 from app.agent.running.stop import AnswerGenerationStopped
 from app.agent.threads.contracts import ThreadMessageSnapshot
+from app.ai_providers.errors import AIProviderError
+from app.shared.errors import ApplicationError
 
 __all__ = [
     "AnsweringPhases",
     "AnsweringPhasesFactory",
+    "AnsweringRunError",
     "AnsweringRunner",
     "RunIdentity",
     "RunInput",
@@ -108,6 +114,22 @@ class RunResult:
     research_handoff: ResearchHandoff | None = None
 
 
+class AnsweringRunError(ApplicationError):
+    """1回のリサーチの実行が、Runを止める失敗で回答を作れなかった。"""
+
+    def __init__(
+        self,
+        *,
+        cause: PlanningError
+        | DirectAnswerError
+        | EvidenceAnswerError
+        | AIProviderError,
+    ) -> None:
+        self.cause = cause
+        self.__cause__ = cause
+        super().__init__("リサーチの実行が工程の失敗で止まりました")
+
+
 class AnsweringRunner:
     def __init__(
         self,
@@ -127,69 +149,78 @@ class AnsweringRunner:
         identity: RunIdentity,
     ) -> RunResult:
         with _answering_run_span(run_id=identity.run_id) as run_span:
-            previous_answer = _latest_assistant_answer(input.history)
-            phases = self._phases_factory()
+            try:
+                previous_answer = _latest_assistant_answer(input.history)
+                phases = self._phases_factory()
 
-            await self._report_progress("planning")
-            planning_input = PlanningInput(
-                question=input.question,
-                history=input.history,
-                as_of=identity.as_of,
-                research_handoff=input.research_handoff,
-            )
-            answering_request = AnsweringRequest(
-                question=input.question,
-                history=input.history,
-                as_of=identity.as_of,
-            )
-            plan = await phases.planner.plan(planning_input)
-            research_handoff: ResearchHandoff | None
-            match plan:
-                case DirectAnswerPlan():
-                    answer = await self._answer_directly(
-                        phases=phases,
-                        request=answering_request,
-                        previous_answer=previous_answer,
-                    )
-                    research_handoff = None
-                case SearchPlan():
-                    await self._report_progress("evidence_collection")
-                    collected_news = await phases.collector.collect(
-                        plan=plan,
-                        as_of=answering_request.as_of,
-                    )
-                    evidence_run = await self._review_evidence(
-                        phases=phases,
-                        collected_news=collected_news,
-                        as_of=answering_request.as_of,
-                    )
-                    _record_evidence_run_span_attributes(
-                        run_span,
-                        collected_news=collected_news,
-                        evidence_run=evidence_run,
-                    )
-                    handoff_input = ResearchHandoffInput.from_run(
-                        previous=input.research_handoff,
-                        question=answering_request.question,
-                        collected_news=collected_news,
-                        evidence_run=evidence_run,
-                        as_of=answering_request.as_of,
-                    )
-                    answer, research_handoff = await self._answer_while_organizing(
-                        phases=phases,
-                        request=answering_request,
-                        plan=plan,
-                        collected_news=collected_news,
-                        evidence_run=evidence_run,
-                        run_span=run_span,
-                        handoff_input=handoff_input,
-                    )
-                case _ as unreachable:
-                    assert_never(unreachable)
-            return RunResult(
-                final_output=answer,
-                research_handoff=research_handoff,
-            )
+                await self._report_progress("planning")
+                planning_input = PlanningInput(
+                    question=input.question,
+                    history=input.history,
+                    as_of=identity.as_of,
+                    research_handoff=input.research_handoff,
+                )
+                answering_request = AnsweringRequest(
+                    question=input.question,
+                    history=input.history,
+                    as_of=identity.as_of,
+                )
+                plan = await phases.planner.plan(planning_input)
+                research_handoff: ResearchHandoff | None
+                match plan:
+                    case DirectAnswerPlan():
+                        answer = await self._answer_directly(
+                            phases=phases,
+                            request=answering_request,
+                            previous_answer=previous_answer,
+                        )
+                        research_handoff = None
+                    case SearchPlan():
+                        await self._report_progress("evidence_collection")
+                        collected_news = await phases.collector.collect(
+                            plan=plan,
+                            as_of=answering_request.as_of,
+                        )
+                        evidence_run = await self._review_evidence(
+                            phases=phases,
+                            collected_news=collected_news,
+                            as_of=answering_request.as_of,
+                        )
+                        _record_evidence_run_span_attributes(
+                            run_span,
+                            collected_news=collected_news,
+                            evidence_run=evidence_run,
+                        )
+                        handoff_input = ResearchHandoffInput.from_run(
+                            previous=input.research_handoff,
+                            question=answering_request.question,
+                            collected_news=collected_news,
+                            evidence_run=evidence_run,
+                            as_of=answering_request.as_of,
+                        )
+                        answer, research_handoff = await self._answer_while_organizing(
+                            phases=phases,
+                            request=answering_request,
+                            plan=plan,
+                            collected_news=collected_news,
+                            evidence_run=evidence_run,
+                            run_span=run_span,
+                            handoff_input=handoff_input,
+                        )
+                    case _ as unreachable:
+                        assert_never(unreachable)
+                return RunResult(
+                    final_output=answer,
+                    research_handoff=research_handoff,
+                )
+            # runtimeの開閉で起きるAIの失敗は工程の外なので、ここで包む。
+            except (
+                PlanningError,
+                DirectAnswerError,
+                EvidenceAnswerError,
+                AIProviderError,
+            ) as failure:
+                raise AnsweringRunError(cause=failure) from failure
 
     async def _answer_while_organizing(
         self,

@@ -19,6 +19,9 @@ from app.agent.evidence_collection.external_search.contract import (
     ExternalSearchProviderError,
     ExternalSearchRequest,
 )
+from app.agent.evidence_collection.external_search.failure import (
+    ExternalQueryGenerationError,
+)
 from app.agent.evidence_collection.external_search.observability import (
     observe_time_filter_resolution,
 )
@@ -77,14 +80,17 @@ class ExternalSearchService:
                 target_time_window=target_time_window,
                 as_of=as_of,
             )
-            async with recording.record_query_generation(
-                agent_name=EXTERNAL_QUERY_AGENT.name,
-            ):
-                queries = await self._generate_queries(
-                    research_goal=research_goal,
-                    as_of=as_of,
-                    target_time_window=target_time_window,
-                )
+            try:
+                async with recording.record_query_generation(
+                    agent_name=EXTERNAL_QUERY_AGENT.name,
+                ):
+                    queries = await self._generate_queries(
+                        research_goal=research_goal,
+                        as_of=as_of,
+                        target_time_window=target_time_window,
+                    )
+            except ExternalQueryGenerationError:
+                queries = []
             if not queries:
                 execution = ExternalSearchExecution(
                     generated_queries=(),
@@ -131,7 +137,7 @@ class ExternalSearchService:
         as_of: datetime,
         target_time_window: TargetTimeWindow | None,
     ) -> list[str]:
-        """生成に失敗した場合も空listを返し、呼び出し側の失敗分類に委ねる。"""
+        """生成の失敗は、原因を持つ例外でクエリ生成の工程の外へ知らせる。"""
         query_input = ExternalQueryGenerationInput(
             task=ExternalResearchTask(research_goal=research_goal),
             as_of=as_of,
@@ -146,8 +152,8 @@ class ExternalSearchService:
                 ),
                 timeout=QUERY_GENERATE_TIMEOUT_SECONDS,
             )
-        except (AgentResponseInvalidError, AIProviderError, TimeoutError):
-            return []
+        except (AgentResponseInvalidError, AIProviderError, TimeoutError) as cause:
+            raise ExternalQueryGenerationError(cause=cause) from cause
         return clean_generated_queries(draft.queries)
 
     async def _search_queries(

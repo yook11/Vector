@@ -7,7 +7,11 @@ from datetime import UTC, datetime
 from typing import Any
 
 import pytest
+from logfire.testing import CaptureLogfire
+from opentelemetry.semconv.attributes.error_attributes import ERROR_TYPE
+from opentelemetry.trace import StatusCode
 
+from app.agent.evidence_collection.external_search.agent import EXTERNAL_QUERY_AGENT
 from app.agent.evidence_collection.external_search.contract import (
     ExternalQueryDraft,
     ExternalSearchFailureCode,
@@ -20,8 +24,10 @@ from app.agent.recording.external_search import (
     ExternalSearchSucceeded,
 )
 from app.agent.runtime.contract import AgentResponseDefect, AgentResponseInvalidError
+from app.ai_providers.errors import AIProviderResultError, AIProviderResultReason
 from tests.agent.recording._fakes import RecordingExternalSearchRecorder
 from tests.agent.runtime._fakes import ScriptedAgentRuntime
+from tests.logfire._span_helpers import exception_event, spans_named
 
 _AS_OF = datetime(2026, 7, 20, 9, 30, tzinfo=UTC)
 
@@ -141,6 +147,55 @@ async def test_search_records_completed_when_query_generation_fails() -> None:
         )
     ]
     assert recorded.error is None
+
+
+@pytest.mark.parametrize(
+    ("failure", "expected_error_type"),
+    [
+        pytest.param(
+            AgentResponseInvalidError(AgentResponseDefect.RESPONSE_NOT_JSON),
+            "response_not_json",
+            id="response-defect",
+        ),
+        pytest.param(
+            AIProviderResultError(reason=AIProviderResultReason.RESPONSE_UNPARSEABLE),
+            "ai_provider_result_error",
+            id="provider",
+        ),
+        pytest.param(TimeoutError(), "query_generation_timeout", id="timeout"),
+    ],
+)
+async def test_failed_query_generation_closes_its_phase_as_failed_with_the_cause(
+    failure: Exception,
+    expected_error_type: str,
+    capfire: CaptureLogfire,
+) -> None:
+    """クエリ生成の失敗は工程のspanを原因のcodeつきの失敗で閉じ、検索は空の結果で続ける。"""
+    service = ExternalSearchService(
+        query_runtime=ScriptedAgentRuntime([failure]),
+        search_gateway=_FakeGateway(),
+    )
+
+    execution = await _search(service)
+
+    phase = next(
+        span
+        for span in spans_named(capfire, "agent_phase")
+        if span["attributes"].get("agent_name") == EXTERNAL_QUERY_AGENT.name
+    )
+    raw_phase = next(
+        span
+        for span in capfire.exporter.exported_spans
+        if span.context is not None
+        and span.context.span_id == phase["context"]["span_id"]
+        and (span.attributes or {}).get("logfire.span_type") == "span"
+    )
+    assert (
+        execution.generated_queries,
+        raw_phase.status.status_code,
+        phase["attributes"][ERROR_TYPE],
+        exception_event(phase),
+    ) == ((), StatusCode.ERROR, expected_error_type, None)
 
 
 async def test_search_records_completed_when_every_provider_call_fails() -> None:

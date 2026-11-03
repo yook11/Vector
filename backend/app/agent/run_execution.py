@@ -9,9 +9,7 @@ from uuid import UUID
 import redis.asyncio as aioredis
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from app.agent.answering.direct_answer.failure import DirectAnswerError
-from app.agent.answering.evidence_answer.failure import EvidenceAnswerError
-from app.agent.answering_runner import RunIdentity, RunInput
+from app.agent.answering_runner import AnsweringRunError, RunIdentity, RunInput
 from app.agent.composition import build_answering_runner
 from app.agent.contract import AnswerQuestionResult
 from app.agent.live_updates.answer_delta import AgentRunLiveAnswerDeltaReporter
@@ -20,7 +18,6 @@ from app.agent.live_updates.reporters import (
     AgentRunLiveStageReporter,
 )
 from app.agent.live_updates.stream import AgentRunLiveStreamPublisher
-from app.agent.planning.failure import PlanningError
 from app.agent.research_handoff import (
     ResearchHandoff,
     recall_research_handoff,
@@ -43,11 +40,9 @@ from app.agent.running.state_repository import AgentRunStateRepository
 from app.agent.running.stop import AnswerGenerationStopped
 from app.agent.running.task_boundary import AgentRunTaskBoundaryError
 from app.agent.running.types import AgentRunErrorCode
-from app.agent.runtime.contract import AgentResponseInvalidError
 from app.agent.threads.contracts import ThreadMessageSnapshot
 from app.agent.threads.history import HISTORY_MESSAGE_LIMIT, normalize_run_history
 from app.agent.threads.repository import AgentThreadRepository
-from app.ai_providers.errors import AIProviderError
 from app.log_policy.policies.research import RESEARCH_LOG_RULES
 from app.log_policy.runtime import create_policy_json_logger
 
@@ -199,13 +194,7 @@ async def execute_run_attempt(
             publisher_for=own_publisher,
         )
         return
-    except (
-        AIProviderError,
-        AgentResponseInvalidError,
-        DirectAnswerError,
-        EvidenceAnswerError,
-        PlanningError,
-    ) as exc:
+    except AnsweringRunError as exc:
         logger.info(
             "agent_run_generation_unavailable",
             run_id=str(run_id),

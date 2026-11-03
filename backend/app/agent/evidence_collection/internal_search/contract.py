@@ -11,7 +11,10 @@ from pydantic import BaseModel, ConfigDict, Field
 from app.agent.evidence_collection.internal_search.query_embedding import (
     InternalSearchQueries,
 )
+from app.ai_providers.errors import AIProviderError
 from app.analysis.analyzed_article import InScopeAnalyzedArticle
+from app.db.errors import DatabaseConnectionError, DatabaseTimeoutError
+from app.shared.errors import ApplicationError
 
 __all__ = [
     "INTERNAL_SEARCH_HIT_POOL_LIMIT",
@@ -38,14 +41,29 @@ class InternalSearchFailureCode(StrEnum):
     ARTICLE_SEARCH_FAILED = "article_search_failed"
 
 
-class InternalSearchError(Exception):
+class InternalSearchError(ApplicationError):
     """回答継続可能と分類された内部検索の運用失敗。"""
 
-    def __init__(self, *, code: InternalSearchFailureCode) -> None:
-        if not isinstance(code, InternalSearchFailureCode):
-            raise TypeError("code must be an InternalSearchFailureCode")
-        self.code = code
-        super().__init__(code.value)
+    def __init__(
+        self,
+        *,
+        cause: AIProviderError
+        | DatabaseTimeoutError
+        | DatabaseConnectionError
+        | TimeoutError,
+    ) -> None:
+        self.cause = cause
+        self.__cause__ = cause
+        super().__init__("内部検索に失敗しました", details={"code": self.code.value})
+
+    @property
+    def code(self) -> InternalSearchFailureCode:
+        """原因の型から、失敗した操作を名乗る。"""
+        if isinstance(self.cause, AIProviderError):
+            return InternalSearchFailureCode.QUERY_EMBEDDING_FAILED
+        if isinstance(self.cause, DatabaseTimeoutError | DatabaseConnectionError):
+            return InternalSearchFailureCode.ARTICLE_SEARCH_FAILED
+        return InternalSearchFailureCode.TIMEOUT
 
 
 class InternalArticleContent(BaseModel):

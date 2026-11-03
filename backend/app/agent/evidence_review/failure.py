@@ -5,43 +5,36 @@ from __future__ import annotations
 from pydantic import ValidationError
 
 from app.agent.runtime.contract import AgentResponseDefect, AgentResponseInvalidError
-from app.ai_providers.errors import (
-    CLASSIFIED_AI_PROVIDER_ERRORS,
-    AIProviderError,
-)
+from app.ai_providers.errors import AIProviderError
+from app.shared.errors import ApplicationError
 
-__all__ = ["EvidenceReviewError", "evidence_review_error_from"]
+__all__ = ["EvidenceReviewError"]
 
 _REVIEWER_TIMEOUT = "reviewer_timeout"
 
-type _EvidenceReviewSourceError = (
-    AgentResponseInvalidError | AIProviderError | TimeoutError | ValidationError
-)
 
+class EvidenceReviewError(ApplicationError):
+    """精査の工程が、分類済みの原因で根拠を選べなかった。"""
 
-class EvidenceReviewError(Exception):
-    """既知の理由によりEvidence Review attemptを完了できなかった。"""
+    def __init__(
+        self,
+        *,
+        cause: AgentResponseInvalidError
+        | AIProviderError
+        | TimeoutError
+        | ValidationError,
+    ) -> None:
+        self.cause = cause
+        self.__cause__ = cause
+        super().__init__("根拠を精査できませんでした", details={"code": self.code})
 
-    def __init__(self, *, code: str) -> None:
-        if not code.strip():
-            raise ValueError("code must not be blank")
-        self.code = code
-        super().__init__(code)
-
-
-def evidence_review_error_from(
-    cause: _EvidenceReviewSourceError,
-) -> EvidenceReviewError:
-    """attempt由来の失敗を自由文を含まない工程codeへ写す。"""
-
-    if isinstance(cause, AgentResponseInvalidError):
-        return EvidenceReviewError(code=cause.defect.value)
-    if isinstance(cause, CLASSIFIED_AI_PROVIDER_ERRORS):
-        return EvidenceReviewError(code=cause.reason.value)
-    if isinstance(cause, TimeoutError):
-        return EvidenceReviewError(code=_REVIEWER_TIMEOUT)
-    if isinstance(cause, ValidationError):
-        return EvidenceReviewError(
-            code=AgentResponseDefect.OUTPUT_SCHEMA_MISMATCH.value
-        )
-    raise TypeError(f"unsupported evidence review error: {type(cause).__name__}")
+    @property
+    def code(self) -> str:
+        """観測に使う失敗の種別で、原因の自由文を含めない。"""
+        if isinstance(self.cause, AgentResponseInvalidError):
+            return self.cause.defect.value
+        if isinstance(self.cause, AIProviderError):
+            return self.cause.reason.value
+        if isinstance(self.cause, TimeoutError):
+            return _REVIEWER_TIMEOUT
+        return AgentResponseDefect.OUTPUT_SCHEMA_MISMATCH.value

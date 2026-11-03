@@ -3,13 +3,14 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Protocol
+from typing import ClassVar, Protocol
 
 from pydantic import BaseModel, ConfigDict
 
 from app.agent.answering.contract import AnsweringRequest
 from app.agent.contract import NonBlankText
 from app.agent.running.stop import AnswerGenerationStopped
+from app.shared.errors import ApplicationError
 
 __all__ = [
     "AnswerGenerationStopped",
@@ -19,15 +20,14 @@ __all__ = [
     "DirectAnswerInvalidError",
 ]
 
-_DIRECT_ANSWER_BLANK_RESPONSE = "direct_answer_blank_response"
 
-
-class DirectAnswerInvalidError(ValueError):
+class DirectAnswerInvalidError(ApplicationError):
     """Direct answer response が answer draft として消化できない。"""
 
-    def __init__(self, code: str = _DIRECT_ANSWER_BLANK_RESPONSE) -> None:
-        self.code = code
-        super().__init__(code)
+    CODE: ClassVar[str] = "direct_answer_blank_response"
+
+    def __init__(self) -> None:
+        super().__init__("直接回答の応答が空でした")
 
 
 class DirectAnswerDraft(BaseModel):

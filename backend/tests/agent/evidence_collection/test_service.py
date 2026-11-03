@@ -20,8 +20,6 @@ from app.agent.evidence_collection.external_search.contract import (
 from app.agent.evidence_collection.internal_search.contract import (
     InternalArticleContent,
     InternalArticleSearchHit,
-    InternalSearchError,
-    InternalSearchFailureCode,
 )
 from app.agent.evidence_collection.internal_search.query_embedding import (
     InternalSearchQueries,
@@ -31,6 +29,10 @@ from app.agent.runtime.contract import AgentResponseDefect, AgentResponseInvalid
 from app.analysis.analyzed_article import InScopeAnalyzedArticle
 from app.analysis.assessment.domain.result import InScope, InScopeCategory
 from tests.agent.answering_runner._harness import fixed_scope
+from tests.agent.evidence_collection._failures import (
+    article_search_failed,
+    query_embedding_failed,
+)
 from tests.agent.recording._fakes import RecordingEvidenceCollectionRecorder
 from tests.agent.runtime._fakes import GoalKeyedAgentRuntime, ScriptedAgentRuntime
 from tests.logfire._metric_helpers import collected_metrics
@@ -259,11 +261,7 @@ async def test_internal_failure_still_collects_external_hits() -> None:
     )
     query_runtime = ScriptedAgentRuntime([_query_draft(["nvidia supply"])])
     service = _service(
-        internal_search=_FakeInternalSearch(
-            error=InternalSearchError(
-                code=InternalSearchFailureCode.ARTICLE_SEARCH_FAILED
-            )
-        ),
+        internal_search=_FakeInternalSearch(error=article_search_failed()),
         external=_external_search(query_runtime, gateway=gateway),
         events=events,
     )
@@ -447,9 +445,7 @@ async def test_independent_collect_calls_do_not_leak_failure_between_tasks() -> 
         async def search(self, queries: Any) -> list[InternalArticleSearchHit]:
             query = queries.queries[0]
             if query == "bad":
-                raise InternalSearchError(
-                    code=InternalSearchFailureCode.ARTICLE_SEARCH_FAILED
-                )
+                raise article_search_failed()
             return [_hit(assessment_id=1001, title="sibling-hit")]
 
     class _KeyedExternalSearchGateway:
@@ -546,11 +542,7 @@ async def test_internal_failure_reports_started_only_with_task_index() -> None:
     """保証するテスト条件 11。"""
     events = _Events()
     service = _service(
-        internal_search=_FakeInternalSearch(
-            error=InternalSearchError(
-                code=InternalSearchFailureCode.QUERY_EMBEDDING_FAILED
-            )
-        ),
+        internal_search=_FakeInternalSearch(error=query_embedding_failed()),
         events=events,
     )
 

@@ -27,9 +27,15 @@ from taskiq.receiver import Receiver
 import app.agent.run_execution as run_execution
 import app.queue.tasks.agent_run as agent_run_tasks
 from app.agent.answering import timing as answer_timing
+from app.agent.answering.direct_answer.contract import DirectAnswerInvalidError
 from app.agent.answering.direct_answer.failure import DirectAnswerError
 from app.agent.answering.evidence_answer.failure import EvidenceAnswerError
-from app.agent.answering_runner import RunIdentity, RunInput, RunResult
+from app.agent.answering_runner import (
+    AnsweringRunError,
+    RunIdentity,
+    RunInput,
+    RunResult,
+)
 from app.agent.contract import (
     AnswerPlanSummary,
     AnswerQuestionResult,
@@ -1413,9 +1419,11 @@ async def test_run_agent_answer_publishes_failed_terminal_after_commit(
     async with session_factory() as session:
         _thread, _message, run = await _create_thread_message_run(session)
     fake_agent = FakeAgent(
-        exc=AIProviderResponseError(
-            reason=AIProviderResponseReason.SERVER_ERROR,
-            http_error=HttpResponseError(status_code=503, received_at=_RECEIVED_AT),
+        exc=AnsweringRunError(
+            cause=AIProviderResponseError(
+                reason=AIProviderResponseReason.SERVER_ERROR,
+                http_error=HttpResponseError(status_code=503, received_at=_RECEIVED_AT),
+            )
         )
     )
     FakeLiveStreamPublisher.instances = []
@@ -2026,7 +2034,9 @@ async def test_provider_failure_after_delta_commits_failed_without_assistant(
     async with session_factory() as session:
         _thread, _message, run = await _create_thread_message_run(session)
     fake_agent = DeltaReportingAgent(
-        exc=AIProviderResultError(reason=AIProviderResultReason.STREAM_INCOMPLETE),
+        exc=AnsweringRunError(
+            cause=AIProviderResultError(reason=AIProviderResultReason.STREAM_INCOMPLETE)
+        ),
         fragments=["P" * 512],
         finish=False,
     )
@@ -2301,9 +2311,11 @@ async def test_failed_transition_loser_does_not_publish_terminal(
     async with session_factory() as session:
         _thread, _message, run = await _create_thread_message_run(session)
     fake_agent = FakeAgent(
-        exc=AIProviderResponseError(
-            reason=AIProviderResponseReason.SERVER_ERROR,
-            http_error=HttpResponseError(status_code=503, received_at=_RECEIVED_AT),
+        exc=AnsweringRunError(
+            cause=AIProviderResponseError(
+                reason=AIProviderResponseReason.SERVER_ERROR,
+                http_error=HttpResponseError(status_code=503, received_at=_RECEIVED_AT),
+            )
         )
     )
     FakeLiveStreamPublisher.instances = []
@@ -2421,11 +2433,15 @@ async def test_initial_question_does_not_publish_resolved_event(
 @pytest.mark.parametrize(
     "exc",
     [
-        AIProviderResponseError(
-            reason=AIProviderResponseReason.AUTH,
-            http_error=HttpResponseError(status_code=401, received_at=_RECEIVED_AT),
+        AnsweringRunError(
+            cause=AIProviderResponseError(
+                reason=AIProviderResponseReason.AUTH,
+                http_error=HttpResponseError(status_code=401, received_at=_RECEIVED_AT),
+            )
         ),
-        AIProviderNotSentError(reason=AIProviderNotSentReason.NOT_CONFIGURED),
+        AnsweringRunError(
+            cause=AIProviderNotSentError(reason=AIProviderNotSentReason.NOT_CONFIGURED)
+        ),
     ],
 )
 async def test_answering_runner_setup_error_marks_generation_unavailable(
@@ -2461,122 +2477,148 @@ async def test_answering_runner_setup_error_marks_generation_unavailable(
         assert failed.error_code == "generation_unavailable"
 
 
-def _direct_answer_error_with_provider_cause() -> DirectAnswerError:
-    error = DirectAnswerError(code="direct_answer_blank_response")
-    error.__cause__ = AIProviderResultError(
-        reason=AIProviderResultReason.RESPONSE_UNPARSEABLE
-    )
-    return error
-
-
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("generation_error", "expected_exception"),
     [
-        (
-            AIProviderResponseError(
-                reason=AIProviderResponseReason.AUTH,
-                http_error=HttpResponseError(status_code=401, received_at=_RECEIVED_AT),
+        pytest.param(
+            AnsweringRunError(
+                cause=AIProviderNotSentError(
+                    reason=AIProviderNotSentReason.NOT_CONFIGURED
+                )
             ),
             {
-                "error_class": "app.ai_providers.errors.AIProviderResponseError",
-                "error_message": "AIプロバイダーが失敗の応答を返しました",
-                "error_details": {
-                    "code": "ai_provider_response_error",
-                    "reason": "auth",
-                },
-            },
-        ),
-        (
-            AIProviderResultError(reason=AIProviderResultReason.RESPONSE_UNPARSEABLE),
-            {
-                "error_class": "app.ai_providers.errors.AIProviderResultError",
-                "error_message": "AIプロバイダーの生成結果を利用できませんでした",
-                "error_details": {
-                    "code": "ai_provider_result_error",
-                    "reason": "response_unparseable",
-                },
-            },
-        ),
-        (
-            _direct_answer_error_with_provider_cause(),
-            {
-                "error_class": (
-                    "app.agent.answering.direct_answer.failure.DirectAnswerError"
-                ),
-                "error_message": "direct_answer_blank_response",
+                "error_class": "app.agent.answering_runner.AnsweringRunError",
+                "error_message": "リサーチの実行が工程の失敗で止まりました",
                 "related_exceptions": [
                     {
                         "parent": None,
                         "relation": "cause",
                         "exception": {
                             "error_class": (
-                                "app.ai_providers.errors.AIProviderResultError"
+                                "app.ai_providers.errors.AIProviderNotSentError"
                             ),
                             "error_message": (
-                                "AIプロバイダーの生成結果を利用できませんでした"
+                                "AIプロバイダーへのリクエストを送信しませんでした"
                             ),
                             "error_details": {
-                                "code": "ai_provider_result_error",
-                                "reason": "response_unparseable",
+                                "code": "ai_provider_not_sent_error",
+                                "reason": "not_configured",
                             },
                         },
                     }
                 ],
             },
+            id="runtime-not-configured",
         ),
-        (
-            EvidenceAnswerError(code="ai_provider_transport_error"),
+        pytest.param(
+            AnsweringRunError(
+                cause=PlanningError(
+                    cause=AIProviderResponseError(
+                        reason=AIProviderResponseReason.AUTH,
+                        http_error=HttpResponseError(
+                            status_code=401, received_at=_RECEIVED_AT
+                        ),
+                    )
+                )
+            ),
             {
-                "error_class": (
-                    "app.agent.answering.evidence_answer.failure.EvidenceAnswerError"
-                ),
-                "error_message": "ai_provider_transport_error",
+                "error_class": "app.agent.answering_runner.AnsweringRunError",
+                "error_message": "リサーチの実行が工程の失敗で止まりました",
+                "related_exceptions": [
+                    {
+                        "parent": None,
+                        "relation": "cause",
+                        "exception": {
+                            "error_class": "app.agent.planning.failure.PlanningError",
+                            "error_message": "質問の計画を作れませんでした",
+                            "error_details": {"code": "ai_provider_response_error"},
+                        },
+                    },
+                    {
+                        "parent": 0,
+                        "relation": "cause",
+                        "exception": {
+                            "error_class": (
+                                "app.ai_providers.errors.AIProviderResponseError"
+                            ),
+                            "error_message": "AIプロバイダーが失敗の応答を返しました",
+                            "error_details": {
+                                "code": "ai_provider_response_error",
+                                "reason": "auth",
+                            },
+                        },
+                    },
+                ],
             },
+            id="planning-provider",
         ),
-        (
-            EvidenceAnswerError(code="evidence_answer_timeout"),
+        pytest.param(
+            AnsweringRunError(
+                cause=DirectAnswerError(cause=DirectAnswerInvalidError())
+            ),
             {
-                "error_class": (
-                    "app.agent.answering.evidence_answer.failure.EvidenceAnswerError"
-                ),
-                "error_message": "evidence_answer_timeout",
+                "error_class": "app.agent.answering_runner.AnsweringRunError",
+                "error_message": "リサーチの実行が工程の失敗で止まりました",
+                "related_exceptions": [
+                    {
+                        "parent": None,
+                        "relation": "cause",
+                        "exception": {
+                            "error_class": (
+                                "app.agent.answering.direct_answer.failure."
+                                "DirectAnswerError"
+                            ),
+                            "error_message": "直接回答を作れませんでした",
+                            "error_details": {"code": "direct_answer_blank_response"},
+                        },
+                    },
+                    {
+                        "parent": 0,
+                        "relation": "cause",
+                        "exception": {
+                            "error_class": (
+                                "app.agent.answering.direct_answer.contract."
+                                "DirectAnswerInvalidError"
+                            ),
+                            "error_message": "直接回答の応答が空でした",
+                        },
+                    },
+                ],
             },
+            id="direct-answer-blank",
         ),
-        (
-            DirectAnswerError(code="direct_answer_timeout"),
+        pytest.param(
+            AnsweringRunError(cause=EvidenceAnswerError(cause=TimeoutError())),
             {
-                "error_class": (
-                    "app.agent.answering.direct_answer.failure.DirectAnswerError"
-                ),
-                "error_message": "direct_answer_timeout",
+                "error_class": "app.agent.answering_runner.AnsweringRunError",
+                "error_message": "リサーチの実行が工程の失敗で止まりました",
+                "related_exceptions": [
+                    {
+                        "parent": None,
+                        "relation": "cause",
+                        "exception": {
+                            "error_class": (
+                                "app.agent.answering.evidence_answer.failure."
+                                "EvidenceAnswerError"
+                            ),
+                            "error_message": "根拠付き回答を作れませんでした",
+                            "error_details": {"code": "evidence_answer_timeout"},
+                        },
+                    },
+                    {
+                        "parent": 0,
+                        "relation": "cause",
+                        "exception": {
+                            "error_class": "builtins.TimeoutError",
+                            "error_message": "",
+                        },
+                    },
+                ],
             },
-        ),
-        (
-            AgentResponseInvalidError(AgentResponseDefect.OUTPUT_SCHEMA_MISMATCH),
-            {
-                "error_class": "app.agent.runtime.contract.AgentResponseInvalidError",
-                "error_message": "output_schema_mismatch",
-            },
-        ),
-        (
-            PlanningError(code="ai_provider_transport_error"),
-            {
-                "error_class": "app.agent.planning.failure.PlanningError",
-                "error_message": "ai_provider_transport_error",
-            },
+            id="evidence-answer-timeout",
         ),
     ],
-    ids=(
-        "configuration",
-        "provider",
-        "direct-answer",
-        "evidence-answer",
-        "evidence-answer-timeout",
-        "direct-answer-timeout",
-        "invalid-agent-output",
-        "planning",
-    ),
 )
 async def test_run_agent_answer_generation_error_marks_failed_and_logs_cause(
     read_logs,
@@ -2630,6 +2672,30 @@ async def test_run_agent_answer_generation_error_marks_failed_and_logs_cause(
 
 
 @pytest.mark.asyncio
+async def test_unwrapped_agent_response_invalid_error_marks_internal_error(
+    session_factory: async_sessionmaker[AsyncSession],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """runnerが包まずに出した応答の契約違反は分類の漏れとして、内部エラーで終える。"""
+    async with session_factory() as session:
+        _thread, _message, run = await _create_thread_message_run(session)
+    fake_agent = FakeAgent(
+        exc=AgentResponseInvalidError(AgentResponseDefect.OUTPUT_SCHEMA_MISMATCH)
+    )
+    _patch_worker_execution(monkeypatch, lambda **_kwargs: fake_agent)
+
+    await agent_run_tasks.run_agent_answer(
+        trigger=AgentRunTrigger(run_id=run.id),
+        ctx=_ctx(session_factory),
+    )
+
+    async with session_factory() as session:
+        persisted = await session.get(AgentRun, run.id)
+    assert persisted is not None
+    assert (persisted.status, persisted.error_code) == ("failed", "internal_error")
+
+
+@pytest.mark.asyncio
 async def test_run_agent_answer_generation_error_preserves_death_progress_stage(
     session_factory: async_sessionmaker[AsyncSession],
     monkeypatch: pytest.MonkeyPatch,
@@ -2637,8 +2703,10 @@ async def test_run_agent_answer_generation_error_preserves_death_progress_stage(
     async with session_factory() as session:
         _thread, _message, run = await _create_thread_message_run(session)
     fake_agent = FakeAgent(
-        exc=AIProviderResultError(
-            "SHOULD_NOT_LEAK", reason=AIProviderResultReason.RESPONSE_UNPARSEABLE
+        exc=AnsweringRunError(
+            cause=AIProviderResultError(
+                "SHOULD_NOT_LEAK", reason=AIProviderResultReason.RESPONSE_UNPARSEABLE
+            )
         ),
         stage="evidence_collection",
     )
@@ -3086,9 +3154,11 @@ class _DeadlinePassingAnsweringRunner:
                 .values(deadline_at=func.clock_timestamp() - timedelta(seconds=1))
             )
             await session.commit()
-        raise AIProviderResponseError(
-            reason=AIProviderResponseReason.SERVER_ERROR,
-            http_error=HttpResponseError(status_code=503, received_at=_RECEIVED_AT),
+        raise AnsweringRunError(
+            cause=AIProviderResponseError(
+                reason=AIProviderResponseReason.SERVER_ERROR,
+                http_error=HttpResponseError(status_code=503, received_at=_RECEIVED_AT),
+            )
         )
 
 

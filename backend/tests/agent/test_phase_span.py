@@ -17,7 +17,12 @@ from opentelemetry.sdk.trace import ReadableSpan
 from opentelemetry.semconv.attributes.error_attributes import ERROR_TYPE
 from opentelemetry.trace import StatusCode
 
+from app.agent.answering.direct_answer.contract import DirectAnswerInvalidError
 from app.agent.answering.direct_answer.failure import DirectAnswerError
+from app.agent.answering.evidence_answer.contract import (
+    EvidenceAnswerDraftInvalidError,
+)
+from app.agent.answering.evidence_answer.failure import EvidenceAnswerError
 from app.agent.phase_span import agent_phase
 from app.agent.planning.failure import PlanningError
 from app.agent.running.state import RunRejected, RunRejectionReason
@@ -225,7 +230,15 @@ def test_agent_response_invalid_error_marks_span_error_with_defect_error_type(
 def test_planning_error_marks_span_error_with_code_and_reraises_same_instance(
     capfire: CaptureLogfire,
 ) -> None:
-    error = PlanningError(code="ai_provider_transport_error")
+    error = PlanningError(
+        cause=AIProviderTransportError(
+            http_error=HttpTransportError(
+                failure=HttpTransportFailure(
+                    HttpTransportStage.RECEIVE, HttpTransportFailureReason.TIMEOUT
+                )
+            )
+        )
+    )
 
     with pytest.raises(PlanningError) as raised:
         with agent_phase(phase="planning", agent_name="question_planner"):
@@ -237,13 +250,13 @@ def test_planning_error_marks_span_error_with_code_and_reraises_same_instance(
     assert raw.status.status_code is StatusCode.ERROR
     assert raw.status.description in (None, "")
     assert exception_event(span) is None
-    assert span["attributes"][ERROR_TYPE] == error.code
+    assert span["attributes"][ERROR_TYPE] == "ai_provider_transport_error"
 
 
 def test_direct_answer_error_marks_span_error_with_code_and_reraises_same_instance(
     capfire: CaptureLogfire,
 ) -> None:
-    error = DirectAnswerError(code="direct_answer_blank_response")
+    error = DirectAnswerError(cause=DirectAnswerInvalidError())
 
     with pytest.raises(DirectAnswerError) as raised:
         with agent_phase(phase="answering", agent_name="direct_answer"):
@@ -255,7 +268,28 @@ def test_direct_answer_error_marks_span_error_with_code_and_reraises_same_instan
     assert raw.status.status_code is StatusCode.ERROR
     assert raw.status.description in (None, "")
     assert exception_event(span) is None
-    assert span["attributes"][ERROR_TYPE] == error.code
+    assert span["attributes"][ERROR_TYPE] == "direct_answer_blank_response"
+
+
+def test_evidence_answer_error_marks_span_error_with_code_and_reraises_same_instance(
+    capfire: CaptureLogfire,
+) -> None:
+    """根拠付き回答の工程の失敗も、分類済みとしてcodeをerror.typeに載せる。"""
+    error = EvidenceAnswerError(
+        cause=EvidenceAnswerDraftInvalidError("unknown citation ref")
+    )
+
+    with pytest.raises(EvidenceAnswerError) as raised:
+        with agent_phase(phase="answering", agent_name="evidence_answer"):
+            raise error
+
+    assert raised.value is error
+    span = one_span_named(capfire, _PHASE_SPAN_NAME)
+    raw = _one_raw_phase_span(capfire)
+    assert raw.status.status_code is StatusCode.ERROR
+    assert raw.status.description in (None, "")
+    assert exception_event(span) is None
+    assert span["attributes"][ERROR_TYPE] == "answer_synthesis_draft_invalid"
 
 
 def test_unclassified_exception_passes_through_to_logfire_auto_record(

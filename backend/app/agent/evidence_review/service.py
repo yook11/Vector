@@ -21,10 +21,7 @@ from app.agent.evidence_review.answer_evidence import (
     EvidenceRunFailed,
     EvidenceRunResult,
 )
-from app.agent.evidence_review.failure import (
-    EvidenceReviewError,
-    evidence_review_error_from,
-)
+from app.agent.evidence_review.failure import EvidenceReviewError
 from app.agent.evidence_review.preparation import (
     EvidenceReviewInput,
     EvidenceReviewPreparation,
@@ -128,7 +125,7 @@ class EvidenceReviewService:
             except TimeoutError as cause:
                 if not timeout.expired():
                     raise
-                error = evidence_review_error_from(cause)
+                error = EvidenceReviewError(cause=cause)
                 recording.report_outcome(
                     EvidenceReviewFailed(
                         failure_code=error.code,
@@ -165,9 +162,9 @@ async def _review_attempt(
             attempt_number=attempt_number,
         )
     except _REVIEW_SOURCE_ERRORS as cause:
-        raise evidence_review_error_from(cause) from cause
+        raise EvidenceReviewError(cause=cause) from cause
 
     try:
         return EvidenceReviewerResponse.from_draft(draft)
     except ValidationError as cause:
-        raise evidence_review_error_from(cause) from cause
+        raise EvidenceReviewError(cause=cause) from cause

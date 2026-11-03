@@ -1,4 +1,4 @@
-"""Evidence Review工程エラーの分類契約テスト。"""
+"""精査の工程の失敗の型。原因から自由文を含まないcodeを名乗ることを確かめる(外部依存なし)。"""
 
 from __future__ import annotations
 
@@ -6,10 +6,7 @@ import pytest
 from pydantic import ValidationError
 
 from app.agent.evidence_review.agent import EVIDENCE_REVIEWER_AGENT
-from app.agent.evidence_review.failure import (
-    EvidenceReviewError,
-    evidence_review_error_from,
-)
+from app.agent.evidence_review.failure import EvidenceReviewError
 from app.agent.evidence_review.preparation import EvidenceReviewInput
 from app.agent.evidence_review.selection import EvidenceReviewerResponse
 from app.agent.evidence_review.service import _review_attempt
@@ -30,12 +27,6 @@ from app.http.failure import (
 )
 from tests.agent.evidence_review._builders import AS_OF
 from tests.agent.runtime._fakes import ScriptedAgentRuntime
-
-
-@pytest.mark.parametrize("code", ["", "   "])
-def test_evidence_review_error_rejects_blank_code(code: str) -> None:
-    with pytest.raises(ValueError, match="code must not be blank"):
-        EvidenceReviewError(code=code)
 
 
 @pytest.mark.parametrize(
@@ -68,7 +59,7 @@ def test_evidence_review_error_rejects_blank_code(code: str) -> None:
         pytest.param(TimeoutError("SECRET_TIMEOUT_MESSAGE"), "reviewer_timeout"),
     ],
 )
-def test_evidence_review_error_from_maps_source_to_safe_code(
+def test_evidence_review_error_names_the_cause_as_safe_code(
     cause: (
         AgentResponseInvalidError
         | AIProviderTransportError
@@ -77,22 +68,29 @@ def test_evidence_review_error_from_maps_source_to_safe_code(
     ),
     expected_code: str,
 ) -> None:
-    error = evidence_review_error_from(cause)
+    """原因を保持し、原因から自由文を含まないcodeを名乗ってログ用のdetailsにも載せる。"""
+    error = EvidenceReviewError(cause=cause)
 
-    assert error.code == expected_code
-    assert str(error) == expected_code
-    assert "SECRET" not in error.code
+    assert (
+        error.cause is cause,
+        error.__cause__ is cause,
+        error.code,
+        error.details,
+    ) == (True, True, expected_code, {"code": expected_code})
     assert "SECRET" not in str(error)
 
 
-def test_evidence_review_error_from_maps_draft_validation_error() -> None:
+def test_evidence_review_error_names_draft_validation_error_as_schema_mismatch() -> (
+    None
+):
+    """精査結果の検証に失敗した原因は、出力の形の不一致として名乗る。"""
     with pytest.raises(ValidationError) as raised:
         EvidenceReviewerResponse.from_raw(
             selections=[{"option_index": 0, "claim": "", "why_selected": "w"}],
             missing=[],
         )
 
-    error = evidence_review_error_from(raised.value)
+    error = EvidenceReviewError(cause=raised.value)
 
     assert error.code == "output_schema_mismatch"
 

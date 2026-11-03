@@ -35,8 +35,6 @@ from app.agent.evidence_collection.external_search.contract import (
 from app.agent.evidence_collection.internal_search import (
     InternalArticleContent,
     InternalArticleSearchHit,
-    InternalSearchError,
-    InternalSearchFailureCode,
     InternalSearchService,
 )
 from app.agent.evidence_collection.internal_search.query_embedding import (
@@ -63,6 +61,7 @@ from tests.agent.answering_runner._harness import (
     fixed_scope,
     run_identity,
 )
+from tests.agent.evidence_collection._failures import article_search_failed
 from tests.agent.runtime._fakes import ScriptedAgentRuntime
 from tests.agent.runtime._helpers import FakeGeminiClient, FakeResponse
 from tests.logfire._span_helpers import (
@@ -558,9 +557,7 @@ class _PerQueryFailableInternalSearch:
     async def search(self, queries: Any) -> list[InternalArticleSearchHit]:
         query = queries.queries[0]
         if query in self._failing_queries:
-            raise InternalSearchError(
-                code=InternalSearchFailureCode.ARTICLE_SEARCH_FAILED
-            )
+            raise article_search_failed()
         hit = _internal_hit(assessment_id=self._next_assessment_id, title=query)
         self._next_assessment_id += 1
         return [hit]

@@ -1,28 +1,13 @@
-"""Answer synthesis and direct answer failure classification."""
+"""回答工程が再試行の判断に使う、失敗の見分け方。"""
 
 from __future__ import annotations
 
-from enum import StrEnum
 from typing import TypeGuard
 
-from pydantic import BaseModel, ConfigDict, Field, ValidationError
-
 from app.ai_providers.errors import (
-    CLASSIFIED_AI_PROVIDER_ERRORS,
     AIProviderResultError,
     AIProviderResultReason,
 )
-
-PYDANTIC_VALIDATION_FAILED = "answer_synthesis_pydantic_validation_failed"
-ANSWER_DRAFT_INVALID = "answer_synthesis_draft_invalid"
-
-
-class RequestRetryDisposition(StrEnum):
-    """Request-local retry decision shared by answer generation failures."""
-
-    RETRY_IN_REQUEST = "retry_in_request"
-    DO_NOT_RETRY_IN_REQUEST = "do_not_retry_in_request"
-    UNKNOWN = "unknown"
 
 
 def is_output_truncated(exc: BaseException) -> TypeGuard[AIProviderResultError]:
@@ -30,100 +15,4 @@ def is_output_truncated(exc: BaseException) -> TypeGuard[AIProviderResultError]:
     return (
         isinstance(exc, AIProviderResultError)
         and exc.reason is AIProviderResultReason.OUTPUT_TRUNCATED
-    )
-
-
-class AnswerSynthesisFailureAttributes(BaseModel):
-    """Failure attributes carried from an attempt failure to final fallback."""
-
-    model_config = ConfigDict(frozen=True)
-
-    code: str = Field(min_length=1)
-    failure_reason: str | None = None
-    request_retry_disposition: RequestRetryDisposition
-
-
-class DirectAnswerFailureAttributes(BaseModel):
-    """Failure attributes carried from a direct attempt failure to final failure."""
-
-    model_config = ConfigDict(frozen=True)
-
-    code: str = Field(min_length=1)
-    failure_reason: str | None = None
-    request_retry_disposition: RequestRetryDisposition
-
-
-def classify_answer_synthesis_failure(
-    exc: BaseException,
-) -> AnswerSynthesisFailureAttributes:
-    """Map answer-synthesis-boundary failures to request-local failure attributes."""
-
-    from app.agent.answering.evidence_answer.contract import (
-        EvidenceAnswerDraftInvalidError,
-    )
-
-    # 打ち切りだけはrequest内でretryする。同じ入力でも書き方次第で収まるため。
-    # 打ち切りは分類済み例外にも含まれるため、先に判定する。
-    if is_output_truncated(exc):
-        return AnswerSynthesisFailureAttributes(
-            code=exc.CODE,
-            failure_reason=exc.reason.value,
-            request_retry_disposition=RequestRetryDisposition.RETRY_IN_REQUEST,
-        )
-    if isinstance(exc, CLASSIFIED_AI_PROVIDER_ERRORS):
-        return AnswerSynthesisFailureAttributes(
-            code=exc.CODE,
-            failure_reason=exc.reason.value,
-            request_retry_disposition=(RequestRetryDisposition.DO_NOT_RETRY_IN_REQUEST),
-        )
-    if isinstance(exc, EvidenceAnswerDraftInvalidError):
-        return AnswerSynthesisFailureAttributes(
-            code=ANSWER_DRAFT_INVALID,
-            failure_reason=str(exc) or ANSWER_DRAFT_INVALID,
-            request_retry_disposition=RequestRetryDisposition.RETRY_IN_REQUEST,
-        )
-    if isinstance(exc, ValidationError):
-        return AnswerSynthesisFailureAttributes(
-            code=PYDANTIC_VALIDATION_FAILED,
-            failure_reason=PYDANTIC_VALIDATION_FAILED,
-            request_retry_disposition=RequestRetryDisposition.RETRY_IN_REQUEST,
-        )
-    return AnswerSynthesisFailureAttributes(
-        code="unexpected_error",
-        failure_reason=None,
-        request_retry_disposition=RequestRetryDisposition.UNKNOWN,
-    )
-
-
-def classify_direct_answer_failure(
-    exc: BaseException,
-) -> DirectAnswerFailureAttributes:
-    """Map direct-answer-boundary failures to request-local failure attributes."""
-
-    from app.agent.answering.direct_answer.contract import DirectAnswerInvalidError
-
-    # 打ち切りだけはrequest内でretryする。同じ入力でも書き方次第で収まるため。
-    # 打ち切りは分類済み例外にも含まれるため、先に判定する。
-    if is_output_truncated(exc):
-        return DirectAnswerFailureAttributes(
-            code=exc.CODE,
-            failure_reason=exc.reason.value,
-            request_retry_disposition=RequestRetryDisposition.RETRY_IN_REQUEST,
-        )
-    if isinstance(exc, CLASSIFIED_AI_PROVIDER_ERRORS):
-        return DirectAnswerFailureAttributes(
-            code=exc.CODE,
-            failure_reason=exc.reason.value,
-            request_retry_disposition=(RequestRetryDisposition.DO_NOT_RETRY_IN_REQUEST),
-        )
-    if isinstance(exc, DirectAnswerInvalidError):
-        return DirectAnswerFailureAttributes(
-            code=exc.code,
-            failure_reason=exc.code,
-            request_retry_disposition=RequestRetryDisposition.RETRY_IN_REQUEST,
-        )
-    return DirectAnswerFailureAttributes(
-        code="unexpected_error",
-        failure_reason=None,
-        request_retry_disposition=RequestRetryDisposition.UNKNOWN,
     )

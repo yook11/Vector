@@ -15,13 +15,16 @@ from app.agent.answering.contract import AnsweringRequest
 from app.agent.answering.direct_answer.contract import (
     DirectAnswerDraft,
     DirectAnswerInput,
+    DirectAnswerInvalidError,
 )
+from app.agent.answering.direct_answer.failure import DirectAnswerError
 from app.agent.answering.evidence_answer.contract import (
     EvidenceAnswerDraft,
     EvidenceAnswerInput,
 )
 from app.agent.answering_runner import (
     AnsweringPhases,
+    AnsweringRunError,
     AnsweringRunner,
     RunIdentity,
     RunInput,
@@ -34,10 +37,12 @@ from app.agent.planning.contract import (
     PlanningInput,
     QuestionPlan,
 )
+from app.agent.planning.failure import PlanningError
 from app.agent.running.state import RunRejected, RunRejectionReason
 from app.agent.running.stop import AnswerGenerationStopped
 from app.agent.running.types import AgentRunStatus
 from app.agent.threads.contracts import ThreadMessageSnapshot
+from app.ai_providers.errors import AIProviderNotSentError, AIProviderNotSentReason
 from tests.agent.answering_runner._harness import (
     THREAD_ID,
     USER_ID,
@@ -338,6 +343,59 @@ async def test_phase_exception_propagates_same_instance(error: BaseException) ->
 
     assert raised.value is error
     assert len(direct_answerer.calls) == 1
+
+
+@pytest.mark.parametrize(
+    ("planner_outcome", "answer_outcome"),
+    [
+        pytest.param(
+            PlanningError(cause=TimeoutError()),
+            "未到達",
+            id="planning-failure",
+        ),
+        pytest.param(
+            _direct_plan(),
+            DirectAnswerError(cause=DirectAnswerInvalidError()),
+            id="direct-answer-failure",
+        ),
+        pytest.param(
+            AIProviderNotSentError(reason=AIProviderNotSentReason.NOT_CONFIGURED),
+            "未到達",
+            id="runtime-not-configured",
+        ),
+    ],
+)
+async def test_stopping_failure_is_wrapped_as_run_error_with_the_same_cause(
+    planner_outcome: QuestionPlan | BaseException,
+    answer_outcome: str | BaseException,
+) -> None:
+    """Runを止める工程の失敗とAIの失敗は、同じインスタンスを原因に持つRunの失敗として出る。"""
+    failure = (
+        planner_outcome
+        if isinstance(planner_outcome, BaseException)
+        else answer_outcome
+    )
+    factory = _PhasesFactory(
+        planner=_FakePlanner([planner_outcome]),
+        direct_answerer=_FakeDirectAnswerer(
+            [
+                answer_outcome
+                if isinstance(answer_outcome, BaseException)
+                else DirectAnswerDraft(answer=answer_outcome)
+            ]
+        ),
+    )
+
+    with pytest.raises(AnsweringRunError) as raised:
+        await _runner(factory).run(
+            RunInput(question="元の質問", history=()),
+            identity=_run_identity(),
+        )
+
+    assert (raised.value.cause is failure, raised.value.__cause__ is failure) == (
+        True,
+        True,
+    )
 
 
 async def test_generation_stopped_closes_run_span_without_error(
