@@ -25,7 +25,6 @@ from app.agent.answering import timing as answer_timing
 from app.agent.answering.direct_answer.failure import DirectAnswerError
 from app.agent.answering.evidence_answer.failure import EvidenceAnswerError
 from app.agent.contract import (
-    AnswerGenerationStopped,
     AnswerPlanSummary,
     AnswerQuestionResult,
     ExternalUrlSource,
@@ -46,11 +45,6 @@ from app.agent.research_handoff import (
     ResearchRunRecord,
     ResearchTaskRecord,
 )
-from app.agent.running import (
-    RunIdentity,
-    RunInput,
-    RunResult,
-)
 from app.agent.running.answer_generation import AnswerGenerationStarted
 from app.agent.running.attempt_start import AgentRunAttemptStartRepository
 from app.agent.running.completion import (
@@ -59,8 +53,9 @@ from app.agent.running.completion import (
     RunCompletionFailureReason,
     RunCompletionSuccess,
 )
+from app.agent.running.contract import RunIdentity, RunInput, RunResult
 from app.agent.running.failure_recording import AgentRunFailureRepository
-from app.agent.runs.execution import StopReason
+from app.agent.running.stop import AnswerGenerationStopped, StopReason
 from app.agent.runtime.contract import AgentResponseDefect, AgentResponseInvalidError
 from app.agent.threads.contracts import ThreadMessageSnapshot
 from app.agent.threads.repository import AgentThreadRepository

@@ -6,9 +6,8 @@ from unittest.mock import Mock
 import pytest
 
 from app.agent.answering import timing
-from app.agent.contract import AnswerGenerationStopped
 from app.agent.running.deadline.scheduling import AgentDeadlineScheduler
-from app.agent.runs.execution import StopReason
+from app.agent.running.stop import AnswerGenerationStopped, StopReason
 from tests.agent.answering.direct_answer import test_service as direct
 from tests.agent.answering.evidence_answer import test_service as evidence
 from tests.agent.run_deadline.test_scheduling import RecordingSource

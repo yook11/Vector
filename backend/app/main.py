@@ -13,7 +13,7 @@ from app.admin.router import admin_router
 from app.agent.live_updates.transport import AgentLiveTransport
 from app.agent.router import router as research_router
 from app.agent.running.deadline.scheduling import AgentDeadlineScheduler
-from app.agent.runs.enqueuer import AgentRunEnqueuer
+from app.agent.running.enqueuer import AgentRunEnqueuer
 from app.config import settings
 from app.db.engine import (
     API_POOL_MAX_OVERFLOW,

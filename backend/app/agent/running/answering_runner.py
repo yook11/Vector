@@ -21,7 +21,6 @@ from app.agent.answering.evidence_answer.evidence import (
 from app.agent.answering.result_assembly import assemble_evidence_result
 from app.agent.contract import (
     AnswerEventReporter,
-    AnswerGenerationStopped,
     AnswerPlanSummary,
     AnswerProgressEvent,
     AnswerProgressReporter,
@@ -47,6 +46,7 @@ from app.agent.running.contract import (
     RunInput,
     RunResult,
 )
+from app.agent.running.stop import AnswerGenerationStopped
 from app.agent.threads.contracts import ThreadMessageSnapshot
 
 __all__ = ["AnsweringRunner"]

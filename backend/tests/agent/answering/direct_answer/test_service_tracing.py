@@ -18,8 +18,7 @@ from app.agent.answering.direct_answer.agent import DIRECT_ANSWER_AGENT
 from app.agent.answering.direct_answer.contract import DirectAnswerInput
 from app.agent.answering.direct_answer.failure import DirectAnswerError
 from app.agent.answering.direct_answer.service import DirectAnswerService
-from app.agent.contract import AnswerGenerationStopped
-from app.agent.runs.execution import StopReason
+from app.agent.running.stop import AnswerGenerationStopped, StopReason
 from app.agent.runtime.contract import StreamingAgentRuntime
 from app.agent.runtime.gemini import GeminiAgentRuntime
 from app.logfire.redaction import install_exception_redaction

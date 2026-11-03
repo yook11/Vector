@@ -49,7 +49,8 @@ from app.agent.planning.contract import (
     SearchPlan,
     TargetTimeWindow,
 )
-from app.agent.running import AnsweringPhases, AnsweringRunner, RunInput
+from app.agent.running.answering_runner import AnsweringRunner
+from app.agent.running.contract import AnsweringPhases, RunInput
 from app.agent.runtime.contract import AgentResponseDefect, AgentResponseInvalidError
 from app.agent.threads.contracts import ThreadMessageSnapshot
 from app.analysis.analyzed_article import InScopeAnalyzedArticle

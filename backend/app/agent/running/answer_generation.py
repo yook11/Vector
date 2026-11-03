@@ -10,10 +10,9 @@ from uuid import UUID
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from app.agent.contract import AnswerGenerationStopped
 from app.agent.running.deadline.deadline_exceeded import database_now
-from app.agent.runs.execution import StopReason
-from app.agent.runs.types import AgentRunStatus
+from app.agent.running.stop import AnswerGenerationStopped, StopReason
+from app.agent.running.types import AgentRunStatus
 from app.models.agent_run import AgentRun
 
 __all__ = [

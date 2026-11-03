@@ -8,7 +8,7 @@ import pytest
 from fastapi import FastAPI
 
 from app.agent.live_updates.transport import AgentLiveTransport
-from app.agent.runs.enqueuer import AgentRunEnqueuer
+from app.agent.running.enqueuer import AgentRunEnqueuer
 from app.main import lifespan
 
 

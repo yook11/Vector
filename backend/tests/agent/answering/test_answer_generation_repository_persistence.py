@@ -10,13 +10,12 @@ import pytest
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from app.agent.contract import AnswerGenerationStopped
 from app.agent.running.answer_generation import (
     AgentAnswerGenerationRepository,
     AnswerGenerationStarted,
     _start_answer_generation,
 )
-from app.agent.runs.execution import StopReason
+from app.agent.running.stop import AnswerGenerationStopped, StopReason
 from app.models.agent_run import AgentRun
 from tests.agent.runs._seed import create_thread_message_run
 

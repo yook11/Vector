@@ -46,7 +46,7 @@ from app.agent.live_updates.stream import (
     AgentRunLiveStreamTerminalEvent,
 )
 from app.agent.running.presentation import OwnedAgentRunLiveContext
-from app.agent.runs.types import AgentRunStatus
+from app.agent.running.types import AgentRunStatus
 
 USER_1 = UUID("00000000-0000-4000-a000-000000000001")
 RUN_1 = UUID("00000000-0000-4000-a000-000000000011")

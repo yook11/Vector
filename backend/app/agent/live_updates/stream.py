@@ -22,7 +22,7 @@ from pydantic import (
 )
 
 from app.agent.contract import AnswerProgressEvent, AnswerProgressStage
-from app.agent.runs.types import AgentRunErrorCode
+from app.agent.running.types import AgentRunErrorCode
 from app.log_policy.policies.research import RESEARCH_LOG_RULES
 from app.log_policy.runtime import create_policy_json_logger
 

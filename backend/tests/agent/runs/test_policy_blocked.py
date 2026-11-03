@@ -21,7 +21,7 @@ from app.agent.running.cancellation import (
 )
 from app.agent.running.failure_recording import AgentRunFailureRepository
 from app.agent.running.policy_block_recording import AgentRunPolicyBlockRepository
-from app.agent.runs.types import AgentRunErrorCode
+from app.agent.running.types import AgentRunErrorCode
 from app.models.agent_message import AgentMessage, AgentMessageSource
 from app.models.agent_run import AgentRun
 from app.models.agent_thread import AgentThread

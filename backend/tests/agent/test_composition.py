@@ -17,7 +17,7 @@ from app.agent.composition import (
     ensure_agent_worker_configured,
 )
 from app.agent.planning.agent import QUESTION_PLANNER_AGENT
-from app.agent.running import AnsweringPhases
+from app.agent.running.contract import AnsweringPhases
 from app.agent.runtime.contract import (
     AgentResponseDefect,
     AgentResponseInvalidError,

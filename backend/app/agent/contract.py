@@ -16,12 +16,10 @@ from pydantic import (
     model_validator,
 )
 
-from app.agent.runs.execution import StopReason
 from app.shared.web_url import WebUrl
 
 __all__ = [
     "AnswerDeltaReporter",
-    "AnswerGenerationStopped",
     "AnswerProgressReporter",
     "AnswerProgressEvent",
     "AnswerProgressStage",
@@ -185,17 +183,6 @@ class AnswerQuestionResult(BaseModel):
         if self.plan_summary.plan_type == "direct_answer" and self.sources:
             raise ValueError("direct planned result cannot include sources")
         return self
-
-
-class AnswerGenerationStopped(Exception):
-    """現在のrun attemptが回答生成を継続できなくなった。"""
-
-    def __init__(
-        self,
-        reason: StopReason = StopReason.NOT_CURRENT,
-    ) -> None:
-        super().__init__(reason.value)
-        self.reason = reason
 
 
 class AnswerDeltaReporter(Protocol):

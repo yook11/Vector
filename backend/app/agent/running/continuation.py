@@ -12,13 +12,12 @@ from uuid import UUID
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from app.agent.contract import AnswerGenerationStopped
 from app.agent.live_updates.metrics import (
     record_agent_run_execution_probe_unavailable,
 )
 from app.agent.running.deadline.deadline_exceeded import database_now, expire_run
-from app.agent.runs.execution import StopReason
-from app.agent.runs.types import AgentRunStatus
+from app.agent.running.stop import AnswerGenerationStopped, StopReason
+from app.agent.running.types import AgentRunStatus
 from app.log_policy.policies.research import RESEARCH_LOG_RULES
 from app.log_policy.runtime import create_policy_json_logger
 from app.models.agent_run import AgentRun

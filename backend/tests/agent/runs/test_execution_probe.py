@@ -13,7 +13,6 @@ import pytest
 from logfire.testing import CaptureLogfire
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from app.agent.contract import AnswerGenerationStopped
 from app.agent.running.attempt_start import AgentRunAttemptStartRepository
 from app.agent.running.cancellation import (
     AgentRunCancellationRepository,
@@ -23,7 +22,7 @@ from app.agent.running.continuation import (
     AgentRunContinuationRepository,
     AgentRunExecutionProbe,
 )
-from app.agent.runs.execution import StopReason
+from app.agent.running.stop import AnswerGenerationStopped, StopReason
 from app.models.agent_message import AgentMessage
 from app.models.agent_run import AgentRun
 from app.models.agent_thread import AgentThread

@@ -34,7 +34,7 @@ from app.agent.live_updates.stream import (
     AgentRunLiveStreamTerminalEvent,
 )
 from app.agent.running.presentation import OwnedAgentRunLiveContext
-from app.agent.runs.types import AgentRunStatus
+from app.agent.running.types import AgentRunStatus
 
 AGENT_RUN_SSE_RUN_CONNECTION_LIMIT = 2
 AGENT_RUN_SSE_USER_CONNECTION_LIMIT = 4

@@ -37,7 +37,8 @@ from app.agent.planning.contract import (
     SearchPlan,
     TargetTimeWindow,
 )
-from app.agent.running import AnsweringPhases, AnsweringRunner
+from app.agent.running.answering_runner import AnsweringRunner
+from app.agent.running.contract import AnsweringPhases
 from app.agent.runtime.contract import AgentResponseDefect, AgentResponseInvalidError
 from app.ai_providers.errors import (
     AIProviderTransportError,

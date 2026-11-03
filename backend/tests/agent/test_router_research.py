@@ -40,8 +40,8 @@ from app.agent.running.daily_quota.release import (
 )
 from app.agent.running.daily_quota.reservation import DailyRequestLimitExceededError
 from app.agent.running.deadline.scheduling import get_agent_deadline_scheduler
+from app.agent.running.enqueuer import get_agent_run_enqueuer
 from app.agent.running.failure_recording import AgentRunFailureRepository
-from app.agent.runs.enqueuer import get_agent_run_enqueuer
 from app.config import settings
 from app.db.fastapi import get_caller_managed_session
 from app.main import app

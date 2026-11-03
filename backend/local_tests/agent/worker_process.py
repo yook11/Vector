@@ -32,7 +32,6 @@ async def main():
     from taskiq.receiver import Receiver
 
     from app.agent import composition
-    from app.agent.contract import AnswerGenerationStopped
     from app.agent.evidence_collection.external_search.contract import ExternalSearchHit
     from app.agent.evidence_collection.external_search.service import (
         ExternalSearchService,
@@ -40,6 +39,7 @@ async def main():
     from app.agent.evidence_collection.internal_search.ai import gemini
     from app.agent.running.answer_generation import AgentAnswerGenerationRepository
     from app.agent.running.completion import AgentRunCompletionRepository
+    from app.agent.running.stop import AnswerGenerationStopped
     from app.models.agent_run import AgentRun
     from app.queue.brokers import broker_agent
     from local_tests.agent.support import AgentProviderResponses

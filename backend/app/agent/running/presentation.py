@@ -7,11 +7,15 @@ from uuid import UUID
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.agent.runs.projection import build_research_run_response
-from app.agent.runs.types import AgentRunErrorCode, AgentRunStatus
+from app.agent.running.types import AgentRunErrorCode, AgentRunStatus
 from app.models.agent_run import AgentRun
 from app.models.agent_thread import AgentThread
-from app.schemas.research import ResearchRunResponse
+from app.schemas.research import (
+    ResearchMessageRun,
+    ResearchRunErrorCode,
+    ResearchRunResponse,
+    ResearchRunStatus,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -76,3 +80,53 @@ class AgentRunPresentationRepository:
             attempt_epoch=attempt_epoch,
             error_code=(AgentRunErrorCode(error_code) if error_code else None),
         )
+
+
+def build_research_run_response(*, run: AgentRun) -> ResearchRunResponse:
+    return ResearchRunResponse(
+        run_id=run.id,
+        thread_id=run.thread_id,
+        status=_run_status_value(run.status),
+        error_code=_run_error_code_value(run.error_code),
+        attempt_epoch=run.attempt_epoch,
+    )
+
+
+def build_research_message_run(*, run: AgentRun) -> ResearchMessageRun:
+    return ResearchMessageRun(
+        run_id=run.id,
+        status=_run_status_value(run.status),
+        error_code=_run_error_code_value(run.error_code),
+    )
+
+
+def _run_status_value(value: str) -> ResearchRunStatus:
+    match AgentRunStatus(value):
+        case AgentRunStatus.QUEUED:
+            return "queued"
+        case AgentRunStatus.RUNNING:
+            return "running"
+        case AgentRunStatus.COMPLETED:
+            return "completed"
+        case AgentRunStatus.POLICY_BLOCKED:
+            return "policy_blocked"
+        case AgentRunStatus.DEADLINE_EXCEEDED:
+            return "deadline_exceeded"
+        case AgentRunStatus.FAILED:
+            return "failed"
+
+
+def _run_error_code_value(value: str | None) -> ResearchRunErrorCode | None:
+    if value is None:
+        return None
+    match AgentRunErrorCode(value):
+        case AgentRunErrorCode.GENERATION_UNAVAILABLE:
+            return "generation_unavailable"
+        case AgentRunErrorCode.INTERNAL_ERROR:
+            return "internal_error"
+        case AgentRunErrorCode.ENQUEUE_FAILED:
+            return "enqueue_failed"
+        case AgentRunErrorCode.STALE:
+            return "stale"
+        case AgentRunErrorCode.CANCELLED:
+            return "cancelled"

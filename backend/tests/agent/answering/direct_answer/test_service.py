@@ -12,7 +12,7 @@ import pytest
 from logfire.testing import CaptureLogfire
 
 import app.agent.answering.direct_answer.contract as direct_answer_contract
-import app.agent.contract as shared_agent_contract
+import app.agent.running.stop as running_stop
 from app.agent.agent import Agent
 from app.agent.answering.contract import AnsweringRequest
 from app.agent.answering.direct_answer.agent import DIRECT_ANSWER_AGENT
@@ -29,7 +29,7 @@ from app.agent.recording.direct_answer import (
     DirectAnswerOutcome,
     DirectAnswerSucceeded,
 )
-from app.agent.runs.execution import StopReason
+from app.agent.running.stop import StopReason
 from app.agent.threads.contracts import ThreadMessageSnapshot
 from app.ai_providers.errors import (
     AIProviderResultError,
@@ -193,7 +193,7 @@ class RecordingDeltaReporter:
 def test_answer_generation_stopped_is_shared_identity_compatible_reexport() -> None:
     assert (
         direct_answer_contract.AnswerGenerationStopped
-        is shared_agent_contract.AnswerGenerationStopped
+        is running_stop.AnswerGenerationStopped
     )
 
 

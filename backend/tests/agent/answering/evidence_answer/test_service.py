@@ -21,14 +21,14 @@ from app.agent.answering.evidence_answer.contract import (
 from app.agent.answering.evidence_answer.evidence import AnswerInputEvidence
 from app.agent.answering.evidence_answer.failure import EvidenceAnswerError
 from app.agent.answering.evidence_answer.service import EvidenceAnswerService
-from app.agent.contract import AnswerGenerationStopped, ExternalUrlSource
+from app.agent.contract import ExternalUrlSource
 from app.agent.planning.contract import TargetTimeWindow
 from app.agent.recording.evidence_answer import (
     EvidenceAnswerFailed,
     EvidenceAnswerRecordingOutcome,
     EvidenceAnswerSucceeded,
 )
-from app.agent.runs.execution import StopReason
+from app.agent.running.stop import AnswerGenerationStopped, StopReason
 from app.agent.threads.contracts import ThreadMessageSnapshot
 from app.ai_providers.errors import (
     AIProviderResultError,

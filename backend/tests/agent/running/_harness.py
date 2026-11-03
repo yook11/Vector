@@ -42,9 +42,10 @@ from app.agent.planning.contract import (
     TargetTimeWindow,
 )
 from app.agent.research_handoff import ResearchHandoff, ResearchHandoffInput
-from app.agent.running import AnsweringRunner, RunIdentity, RunInput
 from app.agent.running import answering_runner as answering_runner_module
 from app.agent.running.answer_generation import AnswerGenerationStarted
+from app.agent.running.answering_runner import AnsweringRunner
+from app.agent.running.contract import RunIdentity, RunInput
 from app.analysis.analyzed_article import InScopeAnalyzedArticle
 from app.analysis.assessment.domain.result import InScope, InScopeCategory
 

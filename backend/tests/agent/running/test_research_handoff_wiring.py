@@ -22,7 +22,6 @@ from app.agent.answering.evidence_answer.contract import (
     EvidenceAnswerDraft,
     EvidenceAnswerInput,
 )
-from app.agent.contract import AnswerGenerationStopped
 from app.agent.evidence_collection import EvidenceCollectionService
 from app.agent.evidence_collection.external_search import ExternalSearchService
 from app.agent.evidence_collection.external_search.contract import (
@@ -43,8 +42,10 @@ from app.agent.planning.contract import (
     TargetTimeWindow,
 )
 from app.agent.research_handoff import ResearchHandoff, ResearchHandoffInput
-from app.agent.running import AnsweringPhases, AnsweringRunner, RunInput
 from app.agent.running import answering_runner as answering_runner_module
+from app.agent.running.answering_runner import AnsweringRunner
+from app.agent.running.contract import AnsweringPhases, RunInput
+from app.agent.running.stop import AnswerGenerationStopped
 from app.agent.runtime.contract import AgentResponseDefect, AgentResponseInvalidError
 from tests.agent.running._harness import (
     PassThroughOrganizer,

@@ -30,7 +30,8 @@ from app.agent.planning.contract import (
     ResearchTask,
     SearchPlan,
 )
-from app.agent.running import AnsweringPhases, AnsweringRunner, RunInput
+from app.agent.running.answering_runner import AnsweringRunner
+from app.agent.running.contract import AnsweringPhases, RunInput
 from tests.agent.running._harness import (
     PassThroughOrganizer,
     fixed_scope,

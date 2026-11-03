@@ -17,7 +17,7 @@ from app.agent.running.daily_quota.release import (
     DailyQuotaReleaseReservation,
     release_daily_quotas,
 )
-from app.agent.runs.types import AgentRunStatus
+from app.agent.running.types import AgentRunStatus
 from app.models.agent_run import AgentRun
 from app.models.agent_thread import AgentThread
 

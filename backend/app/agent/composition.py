@@ -26,10 +26,11 @@ from app.agent.evidence_collection.external_search.contract import ExternalSearc
 from app.agent.evidence_review.agent import EVIDENCE_REVIEWER_AGENT
 from app.agent.planning.agent import QUESTION_PLANNER_AGENT
 from app.agent.research_handoff.agent import RESEARCH_HANDOFF_AGENT
-from app.agent.running import AnsweringPhases, AnsweringRunner
 from app.agent.running.answer_generation import (
     AnswerGenerationRepository,
 )
+from app.agent.running.answering_runner import AnsweringRunner
+from app.agent.running.contract import AnsweringPhases
 from app.ai_providers.errors import (
     AIProviderNotSentError,
     AIProviderNotSentReason,

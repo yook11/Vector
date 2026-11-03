@@ -33,7 +33,7 @@ from app.agent.live_updates.transport import (
     get_agent_live_transport,
 )
 from app.agent.running.presentation import OwnedAgentRunLiveContext
-from app.agent.runs.types import AgentRunStatus
+from app.agent.running.types import AgentRunStatus
 from app.config import settings
 from app.main import app
 

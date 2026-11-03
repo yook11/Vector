@@ -15,11 +15,7 @@ from app.agent.research_handoff import (
     ResearchRunRecord,
     ResearchTaskRecord,
 )
-from app.agent.running import (
-    RunIdentity,
-    RunInput,
-    RunResult,
-)
+from app.agent.running.contract import RunIdentity, RunInput, RunResult
 from app.agent.threads.contracts import ThreadMessageSnapshot
 from tests.agent.running._harness import THREAD_ID, USER_ID
 

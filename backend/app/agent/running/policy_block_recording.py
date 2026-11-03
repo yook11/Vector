@@ -5,7 +5,7 @@ import uuid as uuid_mod
 from sqlalchemy import update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.agent.runs.types import AgentRunStatus
+from app.agent.running.types import AgentRunStatus
 from app.models.agent_run import AgentRun
 
 

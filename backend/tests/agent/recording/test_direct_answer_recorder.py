@@ -9,13 +9,13 @@ from types import TracebackType
 import pytest
 from logfire.testing import CaptureLogfire
 
-from app.agent.contract import AnswerGenerationStopped
 from app.agent.recording.direct_answer import (
     DirectAnswerFailed,
     DirectAnswerOutcome,
     DirectAnswerSucceeded,
     LogfireDirectAnswerRecorder,
 )
+from app.agent.running.stop import AnswerGenerationStopped
 from tests.logfire._metric_helpers import attributes_of, collected_metrics
 
 _OUTCOME_METRIC = "vector.agent.direct_answer.outcome"

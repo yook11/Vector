@@ -58,13 +58,13 @@ from app.agent.running.deadline.scheduling import (
     AgentDeadlineScheduler,
     get_agent_deadline_scheduler,
 )
+from app.agent.running.enqueuer import AgentRunEnqueuer, get_agent_run_enqueuer
 from app.agent.running.failure_recording import AgentRunFailureRepository
 from app.agent.running.presentation import (
     AgentRunPresentationRepository,
     OwnedAgentRunLiveContext,
 )
-from app.agent.runs.enqueuer import AgentRunEnqueuer, get_agent_run_enqueuer
-from app.agent.runs.types import AgentRunErrorCode, AgentRunStatus
+from app.agent.running.types import AgentRunErrorCode, AgentRunStatus
 from app.agent.threads.detail import read_owned_thread_detail
 from app.agent.threads.repository import AgentThreadRepository
 from app.db.fastapi import get_caller_managed_session

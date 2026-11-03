@@ -61,8 +61,9 @@ from app.agent.research_handoff.agent import RESEARCH_HANDOFF_AGENT
 from app.agent.research_handoff.handoff import ResearchHandoff
 from app.agent.research_handoff.handoff_input import ResearchHandoffInput
 from app.agent.research_handoff.service import ResearchHandoffService
-from app.agent.running import AnsweringPhases, AnsweringRunner, RunIdentity, RunInput
 from app.agent.running.answer_generation import AnswerGenerationStarted
+from app.agent.running.answering_runner import AnsweringRunner
+from app.agent.running.contract import AnsweringPhases, RunIdentity, RunInput
 from app.config import settings
 from app.db.engine import create_cli_engine
 from app.db.session import caller_managed_session_factory

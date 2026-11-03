@@ -13,7 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from app.agent.running.cancellation import AgentRunCancellationRepository
 from app.agent.running.deadline.deadline_exceeded import _recover_deadline_exceeded_runs
 from app.agent.running.failure_recording import AgentRunFailureRepository
-from app.agent.runs.types import AgentRunErrorCode
+from app.agent.running.types import AgentRunErrorCode
 from app.models.agent_message import AgentMessage
 from app.models.agent_run import AgentRun
 from app.models.agent_thread import AgentThread

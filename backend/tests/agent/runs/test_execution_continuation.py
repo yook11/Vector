@@ -11,8 +11,8 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.agent.running.continuation import AgentRunContinuationRepository
 from app.agent.running.deadline.deadline_exceeded import expire_run
-from app.agent.runs.execution import StopReason
-from app.agent.runs.types import AgentRunStatus
+from app.agent.running.stop import StopReason
+from app.agent.running.types import AgentRunStatus
 from app.models.agent_run import AgentRun
 from app.models.agent_user_daily_quota import AgentUserDailyQuota
 from tests.agent.runs._seed import create_thread_message_run

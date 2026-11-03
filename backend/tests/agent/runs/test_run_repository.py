@@ -1,4 +1,4 @@
-"""AgentRunRepository の開始・完了・失敗遷移契約。"""
+"""Agent run の開始・完了・失敗遷移契約。"""
 
 from __future__ import annotations
 
@@ -35,8 +35,8 @@ from app.agent.running.completion import (
 )
 from app.agent.running.failure_recording import AgentRunFailureRepository
 from app.agent.running.presentation import AgentRunPresentationRepository
-from app.agent.runs.repository import AgentRunRepository
-from app.agent.runs.types import AgentRunStatus
+from app.agent.running.question_reading import AgentRunQuestionRepository
+from app.agent.running.types import AgentRunStatus
 from app.models.agent_message import AgentMessage, AgentMessageSource
 from app.models.agent_run import AgentRun
 from app.models.agent_thread import AgentThread
@@ -564,7 +564,7 @@ async def test_start_run_reexecutes_running_and_skips_terminal_runs(
 
     assert attempt_epoch == 2
     async with session_factory() as session:
-        loaded = await AgentRunRepository(session).read_user_question_for_run(
+        loaded = await AgentRunQuestionRepository(session).read_user_question_for_run(
             running.id
         )
     assert loaded is not None

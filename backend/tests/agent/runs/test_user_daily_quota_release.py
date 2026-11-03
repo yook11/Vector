@@ -33,7 +33,7 @@ from app.agent.running.daily_quota.reservation import (
 )
 from app.agent.running.deadline.policy import RUN_DEADLINE_SECONDS
 from app.agent.running.failure_recording import AgentRunFailureRepository
-from app.agent.runs.types import AgentRunErrorCode
+from app.agent.running.types import AgentRunErrorCode
 from app.models.agent_message import AgentMessage
 from app.models.agent_run import AgentRun
 from app.models.agent_thread import AgentThread

@@ -10,8 +10,8 @@ import logfire
 from opentelemetry.semconv.attributes.error_attributes import ERROR_TYPE
 from opentelemetry.trace import StatusCode
 
-from app.agent.contract import AnswerGenerationStopped
 from app.agent.error_type import span_error_type
+from app.agent.running.stop import AnswerGenerationStopped
 from app.agent.runtime.contract import AgentResponseInvalidError
 from app.ai_providers.errors import AIProviderError
 

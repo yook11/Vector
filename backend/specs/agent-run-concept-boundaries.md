@@ -25,8 +25,9 @@
 | `app/agent/running/deadline/deadline_exceeded.py` | DB時刻取得、期限超過の確定・回収、回収結果 |
 | `app/agent/threads/result_mapper.py` | 回答結果から会話のメッセージ・出典への変換 |
 | `app/agent/threads/citation_integrity.py` | 保存する回答と出典の引用整合性検査・警告 |
-| `app/agent/runs/` | worker向けの質問取得、共有語彙・表示変換 |
-| `app/agent/running/presentation.py` | 所有ユーザー向けの表示・配信を支えるRun読み出しとライブ接続情報型 |
+| `app/agent/running/question_reading.py` | worker向けの質問取得 |
+| `app/agent/running/types.py` | Runの状態・エラーコードの語彙 |
+| `app/agent/running/presentation.py` | 所有ユーザー向けの表示・配信を支えるRun読み出しとライブ接続情報型、Runの表示変換 |
 | `app/agent/running/cancellation.py` | 所有者によるキャンセルの確定、必要な利用枠返却、キャンセル結果 |
 | `app/agent/running/policy_block_recording.py` | ポリシー判定結果によるRunの終了記録 |
 | `app/agent/running/failure_recording.py` | 実行中の失敗・キュー投入失敗の記録 |
@@ -35,7 +36,7 @@
 | `app/agent/running/attempt_start.py` | Runの開始可否、実行世代の更新、開始結果・不成立理由 |
 | `app/agent/running/answer_generation.py` | 回答生成の開始記録・再生成許可 |
 | `app/agent/running/completion.py` | 回答・出典・申し送りの保存とRun完了の確定、完了の成功・失敗理由 |
-| `app/agent/runs/execution.py` | Run実行を止める理由。`StopReason` |
+| `app/agent/running/stop.py` | Run実行を止める理由と停止の例外。`StopReason` / `AnswerGenerationStopped` |
 
 日次利用枠の予約は `reserve_daily_quota()`、`_build_daily_quota_reservation_statement()`、
 `DailyQuotaReservation`、`DailyRequestLimitExceededError` を `daily_quota/reservation.py` にまとめる。
@@ -94,14 +95,14 @@ composition経由で両回答サービスへ注入する。
 RunとThreadを結合して所有ユーザーを条件に読み出し、不存在と他ユーザーはともにNoneを返す。
 状態応答は既存のschemaと表示変換を使い、ライブ接続情報を新たにAPIへ公開しない。
 状態更新・期限回収・commitは追加せず、routerとSSEの制御は維持する。
-worker向け質問取得は既存の場所に残し、旧repository / contractsから表示・配信向け定義を再公開しない。
+worker向け質問取得は `running/question_reading.py` に置き、旧repository / contractsから表示・配信向け定義を再公開しない。
 継続確認は `AgentRunContinuationRepository.decide_execution_continuation()` と
 `AgentRunExecutionProbe` を `running/continuation.py` にまとめる。
 状態・実行世代・元の開始期限で判断し、超過時は既存の `expire_run()` で確定する。
 DB時刻の取得順序を維持し、行ロックや回答開始後の回収期限による判定を追加しない。
 probeが短いsessionとトランザクション、2秒の継続キャッシュと停止理由の保持を所有し、停止時は`AnswerGenerationStopped`を送出する。
 確認の例外時は既存のログ・メトリクスを記録して継続をキャッシュする。
-workerで呼ぶ位置と `runs/execution.py` の共通語彙は維持し、旧repository / probeから再公開しない。
+workerで呼ぶ位置と `running/stop.py` の共通語彙は維持し、旧repository / probeから再公開しない。
 期限管理は `running/deadline/` に置き、旧 `run_deadline` からの委譲・再公開は残さない。
 `policy.py` は60秒の定義と期限計算、`deadline_exceeded.py` は単件・全体・スレッド単位の確定と結果を所有する。
 DB時刻取得は同じファイルの関数に残し、時計専用ファイル・クラスを追加しない。
@@ -110,7 +111,7 @@ DB時刻取得は同じファイルの関数に残し、時計専用ファイル
 一括返却の対象は期限処理が決め、利用枠のカウンター更新は日次利用枠が所有する。
 引用警告は保存を拒否する条件にせず、既存の警告内容を維持する。
 
-`runs` の状態語彙は期限処理や会話の表示でも参照するが、各packageの
+`running/types.py` の状態語彙は期限処理や会話の表示でも参照するが、各packageの
 `__init__.py` から実装を再公開せず、repository同士の相互呼び出しは追加しない。
 
 この配置は [threads / runs境界分離](agent-threads-runs-boundary-slice.md) の配置定義を更新する。
