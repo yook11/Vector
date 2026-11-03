@@ -9,6 +9,7 @@ from uuid import UUID
 from fastapi import Query
 from pydantic import AwareDatetime, Field, StringConstraints
 
+from app.agent.running.types import AgentRunErrorCode, AgentRunStatus
 from app.schemas.base import MAX_PER_PAGE, PaginationParams, _CamelBase
 from app.shared.web_url import WebUrl
 
@@ -59,28 +60,11 @@ class ResearchDailyRequestLimitExceededResponse(_CamelBase):
     reset_at: AwareDatetime
 
 
-ResearchRunStatus = Literal[
-    "queued",
-    "running",
-    "completed",
-    "policy_blocked",
-    "deadline_exceeded",
-    "failed",
-]
-ResearchRunErrorCode = Literal[
-    "generation_unavailable",
-    "internal_error",
-    "enqueue_failed",
-    "stale",
-    "cancelled",
-]
-
-
 class ResearchRunResponse(_CamelBase):
     run_id: UUID
     thread_id: UUID
-    status: ResearchRunStatus
-    error_code: ResearchRunErrorCode | None
+    status: AgentRunStatus
+    error_code: AgentRunErrorCode | None
     attempt_epoch: int = Field(ge=0)
 
 
@@ -121,8 +105,8 @@ class PaginatedResearchThreadResponse(_CamelBase):
 
 class ResearchMessageRun(_CamelBase):
     run_id: UUID
-    status: ResearchRunStatus
-    error_code: ResearchRunErrorCode | None
+    status: AgentRunStatus
+    error_code: AgentRunErrorCode | None
 
 
 class ResearchUserMessage(_CamelBase):

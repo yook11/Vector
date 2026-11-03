@@ -2734,8 +2734,12 @@ def test_openapi_exposes_thread_ui_contract_and_slim_run_signal() -> None:
     assert "attemptEpoch" in run_schema["required"]
     assert run_schema["properties"]["attemptEpoch"]["minimum"] == 0
     assert "result" not in run_schema["properties"]
-    assert "policy_blocked" in str(run_schema["properties"]["status"])
-    assert "cancelled" in str(run_schema["properties"]["errorCode"])
+    run_status_schema = _resolve_ref(schema, run_schema["properties"]["status"]["$ref"])
+    assert "policy_blocked" in run_status_schema["enum"]
+    run_error_code_schema = _resolve_ref(
+        schema, run_schema["properties"]["errorCode"]["anyOf"][0]["$ref"]
+    )
+    assert "cancelled" in run_error_code_schema["enum"]
     assert "progressStage" not in run_schema["properties"]
 
     message_run_schema = schema["components"]["schemas"]["ResearchMessageRun"]
@@ -2745,7 +2749,10 @@ def test_openapi_exposes_thread_ui_contract_and_slim_run_signal() -> None:
         "errorCode",
     }
     assert "attemptEpoch" not in message_run_schema["required"]
-    assert "policy_blocked" in str(message_run_schema["properties"]["status"])
+    message_run_status_schema = _resolve_ref(
+        schema, message_run_schema["properties"]["status"]["$ref"]
+    )
+    assert "policy_blocked" in message_run_status_schema["enum"]
 
     assistant_schema = schema["components"]["schemas"]["ResearchAssistantMessage"]
     assert "[[1]]" in assistant_schema["properties"]["content"]["description"]

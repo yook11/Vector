@@ -34,9 +34,7 @@ from app.agent.running.completion import (
     RunCompletionSuccess,
 )
 from app.agent.running.failure_recording import AgentRunFailureRepository
-from app.agent.running.presentation import AgentRunPresentationRepository
 from app.agent.running.question_reading import AgentRunQuestionRepository
-from app.agent.running.types import AgentRunStatus
 from app.models.agent_message import AgentMessage, AgentMessageSource
 from app.models.agent_run import AgentRun
 from app.models.agent_thread import AgentThread
@@ -48,7 +46,7 @@ from tests.agent.runs._start_run_outcomes import (
     assert_start_failure,
     started_attempt_epoch,
 )
-from tests.conftest import TEST_ADMIN_ID, TEST_USER_ID
+from tests.conftest import TEST_USER_ID
 
 
 def _plan_summary(plan_type: str) -> AnswerPlanSummary:
@@ -103,67 +101,6 @@ def _handoff() -> ResearchHandoff:
         unresolved_points="在庫水準は確認できていない",
         next_search_guidance="決算資料をあたる",
     )
-
-
-@pytest.mark.asyncio
-async def test_read_live_context_for_user_returns_only_owned_internal_fields(
-    session_factory: async_sessionmaker[AsyncSession],
-) -> None:
-    async with session_factory() as setup_session:
-        _thread, _message, run = await _create_thread_message_run(
-            setup_session,
-            status="running",
-            attempt_epoch=3,
-        )
-
-    async with session_factory() as session:
-        repo = AgentRunPresentationRepository(session)
-        owned = await repo.read_live_context_for_user(
-            run_id=run.id,
-            user_id=UUID(TEST_USER_ID),
-        )
-        other_user = await repo.read_live_context_for_user(
-            run_id=run.id,
-            user_id=UUID(TEST_ADMIN_ID),
-        )
-        missing = await repo.read_live_context_for_user(
-            run_id=UUID("00000000-0000-4000-a000-000000000099"),
-            user_id=UUID(TEST_USER_ID),
-        )
-
-    assert owned is not None
-    assert owned.run_id == run.id
-    assert owned.status is AgentRunStatus.RUNNING
-    assert owned.attempt_epoch == 3
-    assert owned.error_code is None
-    assert other_user is None
-    assert missing is None
-
-
-@pytest.mark.asyncio
-async def test_read_live_context_for_user_preserves_terminal_error_code(
-    session_factory: async_sessionmaker[AsyncSession],
-) -> None:
-    async with session_factory() as setup_session:
-        _thread, _message, run = await _create_thread_message_run(
-            setup_session,
-            status="failed",
-            attempt_epoch=2,
-            error_code="cancelled",
-        )
-
-    async with session_factory() as session:
-        context = await AgentRunPresentationRepository(
-            session
-        ).read_live_context_for_user(
-            run_id=run.id,
-            user_id=UUID(TEST_USER_ID),
-        )
-
-    assert context is not None
-    assert context.status is AgentRunStatus.FAILED
-    assert context.attempt_epoch == 2
-    assert context.error_code == "cancelled"
 
 
 @pytest.mark.asyncio

@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import datetime
 from uuid import UUID
 
-from app.agent.running.presentation import build_research_message_run
+from app.agent.running.types import AgentRunErrorCode, AgentRunStatus
 from app.models.agent_message import AgentMessage, AgentMessageSource
 from app.models.agent_run import AgentRun
 from app.models.agent_thread import AgentThread
@@ -13,6 +13,7 @@ from app.schemas.research import (
     ResearchAssistantMessage,
     ResearchExternalUrlSource,
     ResearchInternalArticleSource,
+    ResearchMessageRun,
     ResearchSource,
     ResearchThreadDetail,
     ResearchThreadListItem,
@@ -88,7 +89,13 @@ def _message_response(
             seq=message.seq,
             content=message.content,
             created_at=message.created_at,
-            run=build_research_message_run(run=run),
+            run=ResearchMessageRun(
+                run_id=run.id,
+                status=AgentRunStatus(run.status),
+                error_code=(
+                    AgentRunErrorCode(run.error_code) if run.error_code else None
+                ),
+            ),
         )
     if message.role != "assistant":
         raise ValueError(f"unknown agent message role: {message.role!r}")

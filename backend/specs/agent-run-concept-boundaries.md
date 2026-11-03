@@ -27,7 +27,7 @@
 | `app/agent/threads/citation_integrity.py` | 保存する回答と出典の引用整合性検査・警告 |
 | `app/agent/running/question_reading.py` | worker向けの質問取得 |
 | `app/agent/running/types.py` | Runの状態・エラーコードの語彙 |
-| `app/agent/running/presentation.py` | 所有ユーザー向けの表示・配信を支えるRun読み出しとライブ接続情報型、Runの表示変換 |
+| `app/agent/live_updates/run_reading.py` | 所有ユーザー向けの表示・配信を支えるRun読み出しとライブ接続情報型 |
 | `app/agent/running/cancellation.py` | 所有者によるキャンセルの確定、必要な利用枠返却、キャンセル結果 |
 | `app/agent/running/policy_block_recording.py` | ポリシー判定結果によるRunの終了記録 |
 | `app/agent/running/failure_recording.py` | 実行中の失敗・キュー投入失敗の記録 |
@@ -90,10 +90,10 @@ composition経由で両回答サービスへ注入する。
 キャンセルや実行世代変更後も生成終了または15秒タイムアウトまでLLM処理・途中配信が続き得る。
 最終保存時の行ロックと状態・実行世代・回収期限の検証により、終了済みrunや古い実行の回答は保存しない。
 回答生成・再試行方針・15秒タイマーは回答サービスに残し、実行継続probeとは共通化しない。
-表示・配信向けの読み出しは `AgentRunPresentationRepository` と
-`OwnedAgentRunLiveContext` を `running/presentation.py` にまとめる。
+表示・配信向けの読み出しは `AgentRunLiveRepository` と
+`OwnedAgentRunLiveContext` を `live_updates/run_reading.py` にまとめる。
 RunとThreadを結合して所有ユーザーを条件に読み出し、不存在と他ユーザーはともにNoneを返す。
-状態応答は既存のschemaと表示変換を使い、ライブ接続情報を新たにAPIへ公開しない。
+状態応答は既存のschemaを使い、ライブ接続情報を新たにAPIへ公開しない。
 状態更新・期限回収・commitは追加せず、routerとSSEの制御は維持する。
 worker向け質問取得は `running/question_reading.py` に置き、旧repository / contractsから表示・配信向け定義を再公開しない。
 継続確認は `AgentRunContinuationRepository.decide_execution_continuation()` と
@@ -111,7 +111,7 @@ DB時刻取得は同じファイルの関数に残し、時計専用ファイル
 一括返却の対象は期限処理が決め、利用枠のカウンター更新は日次利用枠が所有する。
 引用警告は保存を拒否する条件にせず、既存の警告内容を維持する。
 
-`running/types.py` の状態語彙は期限処理や会話の表示でも参照するが、各packageの
+`running/types.py` の状態語彙は期限処理や会話の表示、APIのschemaでも参照するが、各packageの
 `__init__.py` から実装を再公開せず、repository同士の相互呼び出しは追加しない。
 
 この配置は [threads / runs境界分離](agent-threads-runs-boundary-slice.md) の配置定義を更新する。
