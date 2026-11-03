@@ -4,11 +4,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import StrEnum
-from typing import Protocol
 
 __all__ = [
     "Continue",
-    "RunExecutionContinuation",
     "Stop",
     "StopReason",
 ]
@@ -27,7 +25,3 @@ class Continue:
 @dataclass(frozen=True, slots=True)
 class Stop:
     reason: StopReason
-
-
-class RunExecutionContinuation(Protocol):
-    async def should_continue(self) -> Continue | Stop: ...
