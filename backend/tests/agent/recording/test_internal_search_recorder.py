@@ -17,6 +17,7 @@ from app.agent.recording.internal_search import (
     InternalSearchSucceeded,
     LogfireInternalSearchRecorder,
 )
+from tests.agent.evidence_collection._failures import query_embedding_failed
 from tests.logfire._metric_helpers import attributes_of, collected_metrics
 from tests.logfire._span_helpers import domain_attr_keys, one_span_named
 
@@ -64,9 +65,7 @@ async def test_empty_emits_completed_duration_and_existing_outcome(
 async def test_classified_failure_emits_failed_duration_and_failure_code(
     capfire: CaptureLogfire,
 ) -> None:
-    error = InternalSearchError(
-        code=InternalSearchFailureCode.QUERY_EMBEDDING_FAILED
-    )
+    error = query_embedding_failed()
 
     with pytest.raises(InternalSearchError) as raised:
         async with LogfireInternalSearchRecorder().record(query_count=1) as recording:

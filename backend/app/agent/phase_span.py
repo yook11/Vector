@@ -64,10 +64,17 @@ def agent_phase(
             from app.agent.answering.evidence_answer.failure import (
                 EvidenceAnswerError,
             )
+            from app.agent.evidence_collection.external_search.failure import (
+                ExternalQueryGenerationError,
+            )
             from app.agent.planning.failure import PlanningError
 
             if isinstance(
-                failure, PlanningError | DirectAnswerError | EvidenceAnswerError
+                failure,
+                PlanningError
+                | DirectAnswerError
+                | EvidenceAnswerError
+                | ExternalQueryGenerationError,
             ):
                 error_type = failure.code
             elif isinstance(failure, _CLASSIFIED_FAILURES):

@@ -39,6 +39,13 @@ from app.analysis.embedding.domain.value_objects import (
     EMBEDDING_DIMENSION,
     EmbeddingVector,
 )
+from app.db.errors import (
+    DatabaseConnectionError,
+    DatabaseConnectionErrorReason,
+    DatabaseTimeoutError,
+    DatabaseTimeoutErrorReason,
+)
+from tests.agent.evidence_collection._failures import article_search_failed
 from tests.agent.recording._fakes import RecordingInternalSearchRecorder
 from tests.logfire._metric_helpers import collected_metrics, sum_counter_for_result
 
@@ -46,9 +53,45 @@ _METRIC = "vector.agent.internal_retrieval.outcome"
 _CACHE_METRIC = "vector.agent.internal_retrieval.query_embedding_cache"
 
 
-def test_internal_search_error_rejects_unclassified_code() -> None:
-    with pytest.raises(TypeError, match="InternalSearchFailureCode"):
-        InternalSearchError(code="article_search_failed")  # type: ignore[arg-type]
+@pytest.mark.parametrize(
+    ("cause", "expected_code"),
+    [
+        pytest.param(TimeoutError(), InternalSearchFailureCode.TIMEOUT, id="timeout"),
+        pytest.param(
+            AIProviderResultError(reason=AIProviderResultReason.RESPONSE_UNPARSEABLE),
+            InternalSearchFailureCode.QUERY_EMBEDDING_FAILED,
+            id="embedding",
+        ),
+        pytest.param(
+            DatabaseTimeoutError(reason=DatabaseTimeoutErrorReason.QUERY_CANCELED),
+            InternalSearchFailureCode.ARTICLE_SEARCH_FAILED,
+            id="article-search-timeout",
+        ),
+        pytest.param(
+            DatabaseConnectionError(
+                reason=DatabaseConnectionErrorReason.CONNECTION_LOST
+            ),
+            InternalSearchFailureCode.ARTICLE_SEARCH_FAILED,
+            id="article-search-connection",
+        ),
+    ],
+)
+def test_internal_search_error_names_the_failed_operation_from_the_cause(
+    cause: AIProviderResultError
+    | DatabaseTimeoutError
+    | DatabaseConnectionError
+    | TimeoutError,
+    expected_code: InternalSearchFailureCode,
+) -> None:
+    """原因を保持し、原因の型から失敗した操作をcodeとして名乗る。"""
+    error = InternalSearchError(cause=cause)
+
+    assert (
+        error.cause is cause,
+        error.__cause__ is cause,
+        error.code,
+        error.details,
+    ) == (True, True, expected_code, {"code": expected_code.value})
 
 
 def _vector(value: float = 0.1) -> EmbeddingVector:
@@ -440,9 +483,7 @@ class TestInternalSearchService:
         self,
         capfire: CaptureLogfire,
     ) -> None:
-        repository_error = InternalSearchError(
-            code=InternalSearchFailureCode.ARTICLE_SEARCH_FAILED
-        )
+        repository_error = article_search_failed()
         service = InternalSearchService(
             embedder=FakeInternalQueryEmbedder(),
             article_search_repository=FakeArticleVectorSearchRepository(
@@ -613,9 +654,7 @@ class TestInternalSearchService:
             embedder=FakeInternalQueryEmbedder(),
             article_search_repository=FakeArticleVectorSearchRepository(
                 {},
-                error=InternalSearchError(
-                    code=InternalSearchFailureCode.ARTICLE_SEARCH_FAILED
-                ),
+                error=article_search_failed(),
             ),
             recorder=recorder,
         )

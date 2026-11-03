@@ -16,8 +16,6 @@ from app.agent.evidence_collection.external_search.contract import (
     ExternalSearchRequest,
 )
 from app.agent.evidence_collection.internal_search import (
-    InternalSearchError,
-    InternalSearchFailureCode,
     InternalSearchService,
 )
 from app.agent.evidence_collection.internal_search.query_embedding import (
@@ -26,6 +24,7 @@ from app.agent.evidence_collection.internal_search.query_embedding import (
 )
 from app.agent.planning.contract import ResearchTask, SearchPlan
 from tests.agent.answering_runner._harness import fixed_scope
+from tests.agent.evidence_collection._failures import query_embedding_failed
 from tests.agent.runtime._fakes import ScriptedAgentRuntime
 from tests.logfire._span_helpers import (
     domain_attr_keys,
@@ -161,7 +160,7 @@ async def test_success_creates_collect_task_and_internal_search_hierarchy(
 async def test_internal_failure_marks_only_internal_search_error_and_degrades(
     capfire: CaptureLogfire,
 ) -> None:
-    error = InternalSearchError(code=InternalSearchFailureCode.QUERY_EMBEDDING_FAILED)
+    error = query_embedding_failed()
 
     collected = await _service(error=error).collect(
         plan=_plan(_task("goal", "q")),

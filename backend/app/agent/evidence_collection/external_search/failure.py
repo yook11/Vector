@@ -1,0 +1,32 @@
+"""外部検索のクエリ生成工程の分類済み失敗。"""
+
+from __future__ import annotations
+
+from app.agent.error_type import span_error_type
+from app.agent.runtime.contract import AgentResponseInvalidError
+from app.ai_providers.errors import AIProviderError
+from app.shared.errors import ApplicationError
+
+__all__ = ["ExternalQueryGenerationError"]
+
+_TIMEOUT_CODE = "query_generation_timeout"
+
+
+class ExternalQueryGenerationError(ApplicationError):
+    """外部検索のクエリ生成が、分類済みの原因でクエリを作れなかった。"""
+
+    def __init__(
+        self, *, cause: AIProviderError | AgentResponseInvalidError | TimeoutError
+    ) -> None:
+        self.cause = cause
+        self.__cause__ = cause
+        super().__init__(
+            "外部検索のクエリを作れませんでした", details={"code": self.code}
+        )
+
+    @property
+    def code(self) -> str:
+        """観測に使う失敗の種別で、原因の種別をそのまま名乗る。"""
+        if isinstance(self.cause, TimeoutError):
+            return _TIMEOUT_CODE
+        return span_error_type(self.cause)

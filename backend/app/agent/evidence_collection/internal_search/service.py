@@ -11,7 +11,6 @@ from app.agent.evidence_collection.internal_search.contract import (
     INTERNAL_SEARCH_HITS_PER_QUERY,
     InternalArticleSearchHit,
     InternalSearchError,
-    InternalSearchFailureCode,
 )
 from app.agent.evidence_collection.internal_search.metrics import (
     record_query_embedding_cache_outcome,
@@ -108,9 +107,7 @@ class InternalSearchService:
                 except TimeoutError as cause:
                     if not timeout.expired():
                         raise
-                    raise InternalSearchError(
-                        code=InternalSearchFailureCode.TIMEOUT
-                    ) from cause
+                    raise InternalSearchError(cause=cause) from cause
             except InternalSearchError as exc:
                 logger.warning(
                     "internal_search_failed",
@@ -133,9 +130,7 @@ class InternalSearchService:
                 InternalSearchQueries(queries=uncached_queries)
             )
         except AIProviderError as exc:
-            raise InternalSearchError(
-                code=InternalSearchFailureCode.QUERY_EMBEDDING_FAILED
-            ) from exc
+            raise InternalSearchError(cause=exc) from exc
 
     async def _search_articles(
         self,
