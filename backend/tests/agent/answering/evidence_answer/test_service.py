@@ -11,6 +11,7 @@ from typing import Any
 
 import pytest
 from logfire.testing import CaptureLogfire
+from opentelemetry.semconv.attributes.error_attributes import ERROR_TYPE
 
 from app.agent.answering.contract import AnsweringRequest
 from app.agent.answering.evidence_answer.agent import EVIDENCE_ANSWER_AGENT
@@ -541,7 +542,10 @@ async def test_provider_error_raises_without_retry(
         }
     ]
     phase = one_span_named(capfire, _PHASE_SPAN_NAME)
-    assert exception_event(phase) is not None
+    assert (exception_event(phase), phase["attributes"][ERROR_TYPE]) == (
+        None,
+        "ai_provider_transport_error",
+    )
 
 
 @pytest.mark.asyncio

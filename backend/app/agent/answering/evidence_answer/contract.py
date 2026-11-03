@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Protocol
+from typing import ClassVar, Protocol
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -11,6 +11,7 @@ from app.agent.answering.contract import AnsweringRequest
 from app.agent.answering.evidence_answer.evidence import AnswerInputEvidence
 from app.agent.contract import NonBlankText
 from app.agent.planning.contract import TargetTimeWindow
+from app.shared.errors import ApplicationError
 
 __all__ = [
     "EvidenceAnswerDraft",
@@ -46,5 +47,7 @@ class EvidenceAnswerer(Protocol):
     async def answer(self, input: EvidenceAnswerInput) -> EvidenceAnswerDraft: ...
 
 
-class EvidenceAnswerDraftInvalidError(Exception):
+class EvidenceAnswerDraftInvalidError(ApplicationError):
     """draft が evidence への接地契約を破ったことを表す typed error。"""
+
+    CODE: ClassVar[str] = "answer_synthesis_draft_invalid"

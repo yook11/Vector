@@ -16,11 +16,7 @@ from app.agent.answering.direct_answer.contract import (
     DirectAnswerInvalidError,
 )
 from app.agent.answering.direct_answer.failure import DirectAnswerError
-from app.agent.answering.failure import (
-    RequestRetryDisposition,
-    classify_direct_answer_failure,
-    is_output_truncated,
-)
+from app.agent.answering.failure import is_output_truncated
 from app.agent.answering.live_delivery import (
     BestEffortAnswerDeltaReporter,
     close_answer_stream,
@@ -109,21 +105,18 @@ class DirectAnswerService:
                                         attempt_number=attempt_number,
                                     )
                                 except _DIRECT_ANSWER_SOURCE_ERRORS as cause:
-                                    failure = classify_direct_answer_failure(cause)
+                                    # 打ち切りと空の回答は書き方次第で収まる。
                                     retriable = (
-                                        failure.request_retry_disposition
-                                        is RequestRetryDisposition.RETRY_IN_REQUEST
-                                        and attempt_number < _MAX_ATTEMPTS
-                                    )
+                                        is_output_truncated(cause)
+                                        or isinstance(cause, DirectAnswerInvalidError)
+                                    ) and attempt_number < _MAX_ATTEMPTS
                                     if retriable:
                                         if is_output_truncated(cause):
                                             input = replace(
                                                 input, previous_output_truncated=True
                                             )
                                         continue
-                                    raise DirectAnswerError(
-                                        code=failure.code
-                                    ) from cause
+                                    raise DirectAnswerError(cause=cause) from cause
                                 break
                             else:
                                 raise AssertionError(
@@ -132,7 +125,7 @@ class DirectAnswerService:
                 except TimeoutError as cause:
                     if not timeout.expired():
                         raise
-                    raise DirectAnswerError(code="direct_answer_timeout") from cause
+                    raise DirectAnswerError(cause=cause) from cause
             except DirectAnswerError as error:
                 recording.report_outcome(
                     DirectAnswerFailed(

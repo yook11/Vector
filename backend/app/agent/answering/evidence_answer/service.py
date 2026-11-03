@@ -8,8 +8,6 @@ from dataclasses import replace
 from datetime import datetime
 from uuid import UUID
 
-from pydantic import ValidationError
-
 from app.agent.agent import Agent
 from app.agent.answering import timing as answer_timing
 from app.agent.answering.evidence_answer.contract import (
@@ -21,11 +19,7 @@ from app.agent.answering.evidence_answer.failure import EvidenceAnswerError
 from app.agent.answering.evidence_answer.validation import (
     finalize_evidence_answer_draft,
 )
-from app.agent.answering.failure import (
-    RequestRetryDisposition,
-    classify_answer_synthesis_failure,
-    is_output_truncated,
-)
+from app.agent.answering.failure import is_output_truncated
 from app.agent.answering.live_delivery import (
     BestEffortAnswerDeltaReporter,
     close_answer_stream,
@@ -54,14 +48,9 @@ from app.ai_providers.errors import AIProviderError
 __all__ = ["EvidenceAnswerService"]
 
 _MAX_ATTEMPTS = 2
-# ValidationError(pydantic)は、plain text化後のfinalize_evidence_answer_draft()が
-# 空白判定を先に行うため通常経路では到達しない。classify_answer_synthesis_failure()側の
-# 分類も維持されており、EvidenceAnswerDraftの構築自体が将来pydantic validationで
-# 失敗しうる防御的なゲートとして残すため、caught setからは外さない。
 _EVIDENCE_ANSWER_CLASSIFIED_ERRORS = (
     AIProviderError,
     EvidenceAnswerDraftInvalidError,
-    ValidationError,
 )
 
 
@@ -114,16 +103,15 @@ class EvidenceAnswerService:
                                         attempt_number=attempt_number,
                                     )
                                 except _EVIDENCE_ANSWER_CLASSIFIED_ERRORS as exc:
-                                    failure = classify_answer_synthesis_failure(exc)
+                                    # 打ち切りと接地違反は書き方次第で収まる。
                                     retriable = (
-                                        failure.request_retry_disposition
-                                        is RequestRetryDisposition.RETRY_IN_REQUEST
-                                        and attempt_number < _MAX_ATTEMPTS
-                                    )
+                                        is_output_truncated(exc)
+                                        or isinstance(
+                                            exc, EvidenceAnswerDraftInvalidError
+                                        )
+                                    ) and attempt_number < _MAX_ATTEMPTS
                                     if not retriable:
-                                        raise EvidenceAnswerError(
-                                            code=failure.code
-                                        ) from exc
+                                        raise EvidenceAnswerError(cause=exc) from exc
                                     await self._start_revision(
                                         generation=attempt_number + 1
                                     )
@@ -140,7 +128,7 @@ class EvidenceAnswerService:
                 except TimeoutError as cause:
                     if not timeout.expired():
                         raise
-                    raise EvidenceAnswerError(code="evidence_answer_timeout") from cause
+                    raise EvidenceAnswerError(cause=cause) from cause
             except EvidenceAnswerError as error:
                 recording.report_outcome(
                     EvidenceAnswerFailed(

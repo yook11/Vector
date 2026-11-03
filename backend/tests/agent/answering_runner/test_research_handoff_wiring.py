@@ -23,7 +23,13 @@ from app.agent.answering.evidence_answer.contract import (
     EvidenceAnswerDraft,
     EvidenceAnswerInput,
 )
-from app.agent.answering_runner import AnsweringPhases, AnsweringRunner, RunInput
+from app.agent.answering.evidence_answer.failure import EvidenceAnswerError
+from app.agent.answering_runner import (
+    AnsweringPhases,
+    AnsweringRunError,
+    AnsweringRunner,
+    RunInput,
+)
 from app.agent.evidence_collection import EvidenceCollectionService
 from app.agent.evidence_collection.external_search import ExternalSearchService
 from app.agent.evidence_collection.external_search.contract import (
@@ -355,6 +361,18 @@ class _StoppingEvidenceAnswerer:
         )
 
 
+class _FailingEvidenceAnswerer:
+    """並行taskへ一度制御を渡してから、時間切れで失敗する回答工程。"""
+
+    def __init__(self) -> None:
+        self.failure = EvidenceAnswerError(cause=TimeoutError())
+
+    async def answer(self, input: EvidenceAnswerInput) -> EvidenceAnswerDraft:
+        del input
+        await asyncio.sleep(0)
+        raise self.failure
+
+
 class _Organizer:
     """整理3本を書き込む、または指定の例外を送出するorganizer。"""
 
@@ -473,3 +491,27 @@ async def test_stopping_the_answer_cancels_the_organizer_and_writes_nothing() ->
         await _run(runner)
 
     assert organizer.cancelled.is_set()
+
+
+async def test_a_failed_answer_cancels_the_organizer_and_fails_the_run() -> None:
+    """回答の工程が失敗したRunは、整理をcancelして合流し、その失敗を原因に持つRunの失敗として出る。"""
+    organizer = _NeverFinishingOrganizer()
+    evidence_answerer = _FailingEvidenceAnswerer()
+    runner = _search_runner(
+        plan=_plan(research_goal="調査目標"),
+        query_runtime=ScriptedAgentRuntime([_query_draft(["q"])]),
+        reviewer_runtime=ScriptedAgentRuntime([_review_draft([])]),
+        gateway=_FakeExternalSearchGateway(
+            results_by_query={"q": [_external_hit("https://example.com/a")]}
+        ),
+        organizer=organizer,
+        evidence_answerer=evidence_answerer,
+    )
+
+    with pytest.raises(AnsweringRunError) as raised:
+        await _run(runner)
+
+    assert (
+        raised.value.cause is evidence_answerer.failure,
+        organizer.cancelled.is_set(),
+    ) == (True, True)

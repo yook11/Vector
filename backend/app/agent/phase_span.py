@@ -61,9 +61,14 @@ def agent_phase(
         except Exception as failure:
             # 工程errorは各パッケージ経由だと循環 importになる。
             from app.agent.answering.direct_answer.failure import DirectAnswerError
+            from app.agent.answering.evidence_answer.failure import (
+                EvidenceAnswerError,
+            )
             from app.agent.planning.failure import PlanningError
 
-            if isinstance(failure, PlanningError | DirectAnswerError):
+            if isinstance(
+                failure, PlanningError | DirectAnswerError | EvidenceAnswerError
+            ):
                 error_type = failure.code
             elif isinstance(failure, _CLASSIFIED_FAILURES):
                 error_type = span_error_type(failure)

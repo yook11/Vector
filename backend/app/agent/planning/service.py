@@ -11,7 +11,7 @@ from app.agent.planning.contract import (
     QuestionPlanDraft,
     plan_from_draft,
 )
-from app.agent.planning.failure import PlanningError, planning_error_from
+from app.agent.planning.failure import PlanningError
 from app.agent.recording.planning import (
     PlanningFailed,
     PlanningRecorder,
@@ -71,7 +71,7 @@ class QuestionPlanningService:
                                     and attempt_number < _MAX_ATTEMPTS
                                 ):
                                     continue
-                                raise planning_error_from(cause) from cause
+                                raise PlanningError(cause=cause) from cause
                             break
                         else:
                             raise AssertionError(
@@ -80,7 +80,7 @@ class QuestionPlanningService:
             except TimeoutError as cause:
                 if not timeout.expired():
                     raise
-                error = PlanningError(code="planning_timeout")
+                error = PlanningError(cause=cause)
                 recording.report_outcome(
                     PlanningFailed(
                         failure_code=error.code,

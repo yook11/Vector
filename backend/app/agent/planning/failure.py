@@ -2,27 +2,29 @@
 
 from __future__ import annotations
 
+from app.agent.error_type import span_error_type
 from app.agent.runtime.contract import AgentResponseInvalidError
-from app.ai_providers.errors import (
-    AIProviderError,
-)
+from app.ai_providers.errors import AIProviderError
+from app.shared.errors import ApplicationError
 
-__all__ = ["PlanningError", "planning_error_from"]
+__all__ = ["PlanningError"]
 
-
-class PlanningError(Exception):
-    """既知の理由により QuestionPlan を作成できなかった。"""
-
-    def __init__(self, *, code: str) -> None:
-        if not code:
-            raise ValueError("code must not be empty")
-        self.code = code
-        super().__init__(code)
+_TIMEOUT_CODE = "planning_timeout"
 
 
-def planning_error_from(
-    cause: AIProviderError | AgentResponseInvalidError,
-) -> PlanningError:
-    if isinstance(cause, AgentResponseInvalidError):
-        return PlanningError(code=cause.defect.value)
-    return PlanningError(code=cause.CODE)
+class PlanningError(ApplicationError):
+    """計画の工程が、分類済みの原因で質問の計画を作れなかった。"""
+
+    def __init__(
+        self, *, cause: AIProviderError | AgentResponseInvalidError | TimeoutError
+    ) -> None:
+        self.cause = cause
+        self.__cause__ = cause
+        super().__init__("質問の計画を作れませんでした", details={"code": self.code})
+
+    @property
+    def code(self) -> str:
+        """観測に使う失敗の種別で、原因の種別をそのまま名乗る。"""
+        if isinstance(self.cause, TimeoutError):
+            return _TIMEOUT_CODE
+        return span_error_type(self.cause)
