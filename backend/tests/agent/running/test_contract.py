@@ -9,13 +9,13 @@ from uuid import UUID
 
 import pytest
 
+from app.agent.answering_runner import RunIdentity, RunInput, RunResult
 from app.agent.contract import AnswerQuestionResult
 from app.agent.research_handoff import (
     ResearchHandoff,
     ResearchRunRecord,
     ResearchTaskRecord,
 )
-from app.agent.running.contract import RunIdentity, RunInput, RunResult
 from app.agent.threads.contracts import ThreadMessageSnapshot
 from tests.agent.running._harness import THREAD_ID, USER_ID
 

@@ -15,6 +15,7 @@ from uuid import UUID
 
 import pytest
 
+from app.agent import answering_runner as answering_runner_module
 from app.agent.answering.direct_answer.contract import (
     DirectAnswerDraft,
     DirectAnswerInput,
@@ -23,6 +24,7 @@ from app.agent.answering.evidence_answer.contract import (
     EvidenceAnswerDraft,
     EvidenceAnswerInput,
 )
+from app.agent.answering_runner import AnsweringRunner, RunIdentity, RunInput
 from app.agent.evidence_collection import CollectedNews
 from app.agent.evidence_collection.external_search import ExternalSearchService
 from app.agent.evidence_collection.external_search.contract import (
@@ -42,10 +44,7 @@ from app.agent.planning.contract import (
     TargetTimeWindow,
 )
 from app.agent.research_handoff import ResearchHandoff, ResearchHandoffInput
-from app.agent.running import answering_runner as answering_runner_module
 from app.agent.running.answer_generation import AnswerGenerationStarted
-from app.agent.running.answering_runner import AnsweringRunner
-from app.agent.running.contract import RunIdentity, RunInput
 from app.analysis.analyzed_article import InScopeAnalyzedArticle
 from app.analysis.assessment.domain.result import InScope, InScopeCategory
 

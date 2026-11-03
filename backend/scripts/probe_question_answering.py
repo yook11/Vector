@@ -25,6 +25,12 @@ from app.agent.answering.evidence_answer.contract import (
     EvidenceAnswerInput,
 )
 from app.agent.answering.evidence_answer.service import EvidenceAnswerService
+from app.agent.answering_runner import (
+    AnsweringPhases,
+    AnsweringRunner,
+    RunIdentity,
+    RunInput,
+)
 from app.agent.composition import (
     activate_external_search,
     activate_gemini_agent_runtime,
@@ -62,8 +68,6 @@ from app.agent.research_handoff.handoff import ResearchHandoff
 from app.agent.research_handoff.handoff_input import ResearchHandoffInput
 from app.agent.research_handoff.service import ResearchHandoffService
 from app.agent.running.answer_generation import AnswerGenerationStarted
-from app.agent.running.answering_runner import AnsweringRunner
-from app.agent.running.contract import AnsweringPhases, RunIdentity, RunInput
 from app.config import settings
 from app.db.engine import create_cli_engine
 from app.db.session import caller_managed_session_factory

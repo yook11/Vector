@@ -33,6 +33,7 @@ from app.agent.answering.evidence_answer.contract import (
     EvidenceAnswerDraft,
     EvidenceAnswerInput,
 )
+from app.agent.answering_runner import AnsweringPhases, AnsweringRunner
 from app.agent.evidence_collection import EvidenceCollectionService
 from app.agent.evidence_collection.external_search import ExternalSearchService
 from app.agent.evidence_collection.external_search.contract import ExternalSearch
@@ -48,8 +49,6 @@ from app.agent.evidence_review import (
 )
 from app.agent.evidence_review.agent import EVIDENCE_REVIEWER_AGENT
 from app.agent.planning.contract import ResearchTask, SearchPlan, TargetTimeWindow
-from app.agent.running.answering_runner import AnsweringRunner
-from app.agent.running.contract import AnsweringPhases
 from app.agent.runtime.contract import AgentResponseDefect, AgentResponseInvalidError
 from tests.agent.running._harness import (
     DEFAULT_TARGET_TIME_WINDOW as _TARGET_TIME_WINDOW,

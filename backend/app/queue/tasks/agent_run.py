@@ -11,6 +11,7 @@ from taskiq import Context, TaskiqDepends
 
 from app.agent.answering.direct_answer.failure import DirectAnswerError
 from app.agent.answering.evidence_answer.failure import EvidenceAnswerError
+from app.agent.answering_runner import RunIdentity, RunInput
 from app.agent.composition import build_answering_runner
 from app.agent.contract import AnswerQuestionResult
 from app.agent.live_updates.answer_delta import AgentRunLiveAnswerDeltaReporter
@@ -42,7 +43,6 @@ from app.agent.running.completion import (
     RunCompletionSuccess,
 )
 from app.agent.running.continuation import AgentRunExecutionProbe
-from app.agent.running.contract import RunIdentity, RunInput
 from app.agent.running.daily_quota import observability as daily_quota_observability
 from app.agent.running.deadline.deadline_exceeded import (
     DeadlineRunSweepResult,

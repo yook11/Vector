@@ -20,6 +20,7 @@ from app.agent.answering.evidence_answer.contract import (
     EvidenceAnswerDraftInvalidError,
     EvidenceAnswerInput,
 )
+from app.agent.answering_runner import AnsweringPhases, AnsweringRunner, RunInput
 from app.agent.contract import AnswerQuestionResult, ExternalUrlSource
 from app.agent.evidence_collection import EvidenceCollectionService
 from app.agent.evidence_collection.external_search import (
@@ -49,8 +50,6 @@ from app.agent.planning.contract import (
     SearchPlan,
     TargetTimeWindow,
 )
-from app.agent.running.answering_runner import AnsweringRunner
-from app.agent.running.contract import AnsweringPhases, RunInput
 from app.agent.runtime.contract import AgentResponseDefect, AgentResponseInvalidError
 from app.agent.threads.contracts import ThreadMessageSnapshot
 from app.analysis.analyzed_article import InScopeAnalyzedArticle

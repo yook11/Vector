@@ -20,6 +20,12 @@ from app.agent.answering.evidence_answer.contract import (
     EvidenceAnswerDraft,
     EvidenceAnswerInput,
 )
+from app.agent.answering_runner import (
+    AnsweringPhases,
+    AnsweringRunner,
+    RunIdentity,
+    RunInput,
+)
 from app.agent.evidence_collection import EvidenceCollectionService
 from app.agent.evidence_review import EvidenceReviewService
 from app.agent.evidence_review.agent import EVIDENCE_REVIEWER_AGENT
@@ -28,8 +34,6 @@ from app.agent.planning.contract import (
     PlanningInput,
     QuestionPlan,
 )
-from app.agent.running.answering_runner import AnsweringRunner
-from app.agent.running.contract import AnsweringPhases, RunIdentity, RunInput
 from app.agent.running.stop import AnswerGenerationStopped
 from app.agent.threads.contracts import ThreadMessageSnapshot
 from tests.agent.running._harness import (

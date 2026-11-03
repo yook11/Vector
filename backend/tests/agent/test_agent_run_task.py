@@ -24,6 +24,7 @@ import app.queue.tasks.agent_run as agent_run_tasks
 from app.agent.answering import timing as answer_timing
 from app.agent.answering.direct_answer.failure import DirectAnswerError
 from app.agent.answering.evidence_answer.failure import EvidenceAnswerError
+from app.agent.answering_runner import RunIdentity, RunInput, RunResult
 from app.agent.contract import (
     AnswerPlanSummary,
     AnswerQuestionResult,
@@ -53,7 +54,6 @@ from app.agent.running.completion import (
     RunCompletionFailureReason,
     RunCompletionSuccess,
 )
-from app.agent.running.contract import RunIdentity, RunInput, RunResult
 from app.agent.running.failure_recording import AgentRunFailureRepository
 from app.agent.running.stop import AnswerGenerationStopped, StopReason
 from app.agent.runtime.contract import AgentResponseDefect, AgentResponseInvalidError
