@@ -15,6 +15,7 @@ from app.agent.recording.research_handoff import (
     ResearchHandoffSucceeded,
     logfire_research_handoff_recorder,
 )
+from app.agent.research_handoff.failure import ResearchHandoffError
 from app.agent.research_handoff.handoff import ResearchHandoff, ResearchHandoffDraft
 from app.agent.research_handoff.handoff_input import ResearchHandoffInput
 from app.agent.runtime.contract import (
@@ -26,7 +27,6 @@ from app.ai_providers.errors import AIProviderError
 __all__ = ["ResearchHandoffOrganizer", "ResearchHandoffService"]
 
 _CLASSIFIED_FAILURES = (AIProviderError, AgentResponseInvalidError)
-_UNCLASSIFIED_PROVIDER_FAILURE = "provider_error"
 
 
 class ResearchHandoffOrganizer(Protocol):
@@ -54,18 +54,9 @@ class ResearchHandoffService:
                 async with self._runtime_scope_factory() as runtime:
                     draft = await runtime.call(self._agent, input, attempt_number=1)
             except _CLASSIFIED_FAILURES as cause:
-                recording.report_outcome(
-                    ResearchHandoffFailed(failure_code=_failure_code(cause))
-                )
+                error = ResearchHandoffError(cause=cause)
+                recording.report_outcome(ResearchHandoffFailed(failure_code=error.code))
                 return input.handoff
 
             recording.report_outcome(ResearchHandoffSucceeded())
             return input.handoff.from_draft(draft)
-
-
-def _failure_code(cause: Exception) -> str:
-    """記録の欠損でこの工程を失敗させないため、code不在でも文字列を返す。"""
-    if isinstance(cause, AgentResponseInvalidError):
-        return cause.defect.value
-    code = getattr(cause, "CODE", None)
-    return code if isinstance(code, str) and code else _UNCLASSIFIED_PROVIDER_FAILURE
