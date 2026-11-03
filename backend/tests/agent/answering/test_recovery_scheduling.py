@@ -7,7 +7,9 @@ import pytest
 
 from app.agent.answering import timing
 from app.agent.running.deadline.scheduling import AgentDeadlineScheduler
-from app.agent.running.stop import AnswerGenerationStopped, StopReason
+from app.agent.running.state import RunRejected, RunRejectionReason
+from app.agent.running.stop import AnswerGenerationStopped
+from app.agent.running.types import AgentRunStatus
 from tests.agent.answering.direct_answer import test_service as direct
 from tests.agent.answering.evidence_answer import test_service as evidence
 from tests.agent.answering_runner._harness import (
@@ -93,7 +95,15 @@ async def test_generation_finishes_while_single_recovery_reservation_is_blocked(
 @pytest.mark.parametrize("kind", ["direct", "evidence"])
 @pytest.mark.parametrize(
     "failure",
-    [AnswerGenerationStopped(StopReason.NOT_CURRENT), RuntimeError("commit failed")],
+    [
+        AnswerGenerationStopped(
+            RunRejected(
+                reason=RunRejectionReason.ATTEMPT_SUPERSEDED,
+                observed_status=AgentRunStatus.RUNNING,
+            )
+        ),
+        RuntimeError("commit failed"),
+    ],
 )
 async def test_rejected_or_failed_start_never_schedules(kind, failure):
     # 開始が確定しなければ予約も生成も起動しない。

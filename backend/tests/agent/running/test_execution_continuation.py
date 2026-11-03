@@ -1,4 +1,4 @@
-"""現在の run 実行を続けてよいかの判定。"""
+"""現在の run 実行を続けてよいかの判定(実DBに seed した Run に対して確かめる)。"""
 
 from __future__ import annotations
 
@@ -9,9 +9,9 @@ import pytest
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from app.agent.running.continuation import AgentRunContinuationRepository
-from app.agent.running.deadline.deadline_exceeded import expire_run
-from app.agent.running.stop import StopReason
+from app.agent.running.daily_quota.release import DailyQuotaReleaseOutcome
+from app.agent.running.state import RunFinished, RunRejected, RunRejectionReason
+from app.agent.running.state_repository import AgentRunStateRepository
 from app.agent.running.types import AgentRunStatus
 from app.models.agent_run import AgentRun
 from app.models.agent_user_daily_quota import AgentUserDailyQuota
@@ -30,6 +30,7 @@ _BEFORE_DEADLINE = _DEADLINE_AT - timedelta(microseconds=1)
 async def _seed_running(
     session_factory: async_sessionmaker[AsyncSession],
     *,
+    status: str = "running",
     attempt_epoch: int = 1,
 ) -> uuid.UUID:
     async with session_factory() as session:
@@ -42,7 +43,7 @@ async def _seed_running(
         )
         _thread, _message, run = await create_thread_message_run(
             session,
-            status="running",
+            status=status,
             created_at=_CREATED_AT,
             deadline_at=_DEADLINE_AT,
             attempt_epoch=attempt_epoch,
@@ -57,13 +58,11 @@ async def _decide(
     run_id: uuid.UUID,
     attempt_epoch: int,
     now: datetime,
-) -> StopReason | None:
+) -> RunFinished | RunRejected | None:
     async with session_factory() as session:
         async with session.begin():
-            return await AgentRunContinuationRepository(
-                session
-            ).decide_execution_continuation(
-                run_id=run_id,
+            return await AgentRunStateRepository(session).check_continuation(
+                run_id,
                 attempt_epoch=attempt_epoch,
                 now=now,
             )
@@ -107,6 +106,7 @@ async def test_current_attempt_at_or_after_deadline_stops_and_expires(
     session_factory: async_sessionmaker[AsyncSession],
     now: datetime,
 ) -> None:
+    """現在の世代の継続確認は、受理期限ちょうど・超過でRunを期限切れにして終え、利用枠は返さない。"""
     run_id = await _seed_running(session_factory)
     result = await _decide(
         session_factory,
@@ -114,7 +114,12 @@ async def test_current_attempt_at_or_after_deadline_stops_and_expires(
         attempt_epoch=1,
         now=now,
     )
-    assert result is StopReason.DEADLINE_EXCEEDED
+    assert result == RunFinished(
+        status=AgentRunStatus.DEADLINE_EXCEEDED,
+        error_code=None,
+        quota_release_outcome=DailyQuotaReleaseOutcome.NOT_ELIGIBLE,
+        running_attempt_epoch=1,
+    )
     assert await _load(session_factory, run_id) == ("deadline_exceeded", 1, 1)
 
 
@@ -122,6 +127,7 @@ async def test_current_attempt_at_or_after_deadline_stops_and_expires(
 async def test_wrong_epoch_or_non_running_stops_without_write(
     session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
+    """古い世代の継続確認は、受理期限ちょうどでも期限切れにせず世代違いとして拒否する。"""
     run_id = await _seed_running(session_factory, attempt_epoch=2)
     result = await _decide(
         session_factory,
@@ -129,7 +135,10 @@ async def test_wrong_epoch_or_non_running_stops_without_write(
         attempt_epoch=1,
         now=_DEADLINE_AT,
     )
-    assert result is StopReason.NOT_CURRENT
+    assert result == RunRejected(
+        reason=RunRejectionReason.ATTEMPT_SUPERSEDED,
+        observed_status=AgentRunStatus.RUNNING,
+    )
     assert await _load(session_factory, run_id) == ("running", 2, 1)
 
 
@@ -137,46 +146,16 @@ async def test_wrong_epoch_or_non_running_stops_without_write(
 async def test_already_expired_run_stops_without_rewrite(
     session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
-    run_id = await _seed_running(session_factory)
-    async with session_factory() as session:
-        async with session.begin():
-            expired = await expire_run(
-                session,
-                run_id=run_id,
-                expected_status=AgentRunStatus.RUNNING,
-                expected_attempt_epoch=1,
-                now=_DEADLINE_AT,
-            )
-    assert expired is True
+    """既に期限切れで終わったRunの継続確認は、書き換えずに終了済みとして拒否する。"""
+    run_id = await _seed_running(session_factory, status="deadline_exceeded")
     result = await _decide(
         session_factory,
         run_id=run_id,
         attempt_epoch=1,
         now=_DEADLINE_AT,
     )
-    assert result is StopReason.NOT_CURRENT
+    assert result == RunRejected(
+        reason=RunRejectionReason.ALREADY_FINISHED,
+        observed_status=AgentRunStatus.DEADLINE_EXCEEDED,
+    )
     assert await _load(session_factory, run_id) == ("deadline_exceeded", 1, 1)
-
-
-@pytest.mark.asyncio
-async def test_expire_race_loss_is_not_current(
-    session_factory: async_sessionmaker[AsyncSession],
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    run_id = await _seed_running(session_factory)
-
-    async def lose_expire(*_args: object, **_kwargs: object) -> bool:
-        return False
-
-    monkeypatch.setattr(
-        "app.agent.running.continuation.expire_run",
-        lose_expire,
-    )
-    result = await _decide(
-        session_factory,
-        run_id=run_id,
-        attempt_epoch=1,
-        now=_DEADLINE_AT,
-    )
-    assert result is StopReason.NOT_CURRENT
-    assert await _load(session_factory, run_id) == ("running", 1, 1)

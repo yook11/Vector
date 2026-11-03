@@ -18,7 +18,9 @@ from app.agent.answering.direct_answer.agent import DIRECT_ANSWER_AGENT
 from app.agent.answering.direct_answer.contract import DirectAnswerInput
 from app.agent.answering.direct_answer.failure import DirectAnswerError
 from app.agent.answering.direct_answer.service import DirectAnswerService
-from app.agent.running.stop import AnswerGenerationStopped, StopReason
+from app.agent.running.state import RunRejected, RunRejectionReason
+from app.agent.running.stop import AnswerGenerationStopped
+from app.agent.running.types import AgentRunStatus
 from app.agent.runtime.contract import StreamingAgentRuntime
 from app.agent.runtime.gemini import GeminiAgentRuntime
 from app.logfire.redaction import install_exception_redaction
@@ -303,7 +305,12 @@ async def test_start_rejection_does_not_open_phase_or_attempt(
         agent=DIRECT_ANSWER_AGENT,
         runtime_scope_factory=runtime_scope,
         repository=ScriptedAnswerGenerationRepository(
-            start=AnswerGenerationStopped(StopReason.NOT_CURRENT)
+            start=AnswerGenerationStopped(
+                RunRejected(
+                    reason=RunRejectionReason.ATTEMPT_SUPERSEDED,
+                    observed_status=AgentRunStatus.RUNNING,
+                )
+            )
         ),
     )
     try:

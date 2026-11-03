@@ -44,7 +44,9 @@ from app.agent.planning.contract import (
     TargetTimeWindow,
 )
 from app.agent.research_handoff import ResearchHandoff, ResearchHandoffInput
+from app.agent.running.state import RunRejected, RunRejectionReason
 from app.agent.running.stop import AnswerGenerationStopped
+from app.agent.running.types import AgentRunStatus
 from app.agent.runtime.contract import AgentResponseDefect, AgentResponseInvalidError
 from tests.agent.answering_runner._harness import (
     PassThroughOrganizer,
@@ -311,7 +313,7 @@ async def test_a_run_that_found_nothing_still_records_the_query_it_executed() ->
 async def test_builder_exception_yields_none_handoff_and_continues_answering(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """記録フロー4: 組み立て失敗はcomplete_run呼び出し前に閉じ、回答は継続する。"""
+    """記録フロー4: 組み立て失敗は完了記録の前に閉じ、回答は継続する。"""
 
     def _raise_build_failure(**_kwargs: object) -> None:
         raise RuntimeError("run record build boom")
@@ -345,7 +347,12 @@ class _StoppingEvidenceAnswerer:
     async def answer(self, input: EvidenceAnswerInput) -> EvidenceAnswerDraft:
         del input
         await asyncio.sleep(0)
-        raise AnswerGenerationStopped()
+        raise AnswerGenerationStopped(
+            RunRejected(
+                reason=RunRejectionReason.ATTEMPT_SUPERSEDED,
+                observed_status=AgentRunStatus.RUNNING,
+            )
+        )
 
 
 class _Organizer:

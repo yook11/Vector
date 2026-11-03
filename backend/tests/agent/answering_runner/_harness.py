@@ -44,7 +44,7 @@ from app.agent.planning.contract import (
     TargetTimeWindow,
 )
 from app.agent.research_handoff import ResearchHandoff, ResearchHandoffInput
-from app.agent.running.answer_generation import AnswerGenerationStarted
+from app.agent.running.state import AnswerGenerationStarted
 from app.analysis.analyzed_article import InScopeAnalyzedArticle
 from app.analysis.assessment.domain.result import InScope, InScopeCategory
 

@@ -7,12 +7,8 @@ from dataclasses import dataclass
 from sqlalchemy import func, literal, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.agent.running.completion import (
-    AgentRunCompletionRepository,
-    RunCompletionFailure,
-    RunCompletionFailureReason,
-)
 from app.agent.running.deadline.deadline_exceeded import _recover_deadline_exceeded_runs
+from app.agent.running.state_repository import AgentRunStateRepository
 from app.db.session import SessionFactory
 from app.models.agent_message import AgentMessage, AgentMessageSource
 from app.models.agent_run import AgentRun
@@ -45,15 +41,9 @@ class PendingRunTransaction:
                     await asyncio.sleep(0.01)
 
     async def finish(self):
-        """処理結果に応じてトランザクションを確定または取り消す。"""
+        """ワーカーと同じく、拒否された結果も取り消さずにトランザクションを確定する。"""
         result = await self.wait_for_result()
-        if (
-            isinstance(result, RunCompletionFailure)
-            and result.reason != RunCompletionFailureReason.DEADLINE_EXCEEDED
-        ):
-            await self.session.rollback()
-        else:
-            await self.session.commit()
+        await self.session.commit()
         return result
 
     async def snapshot(self, *, run_id, thread_id):
@@ -125,10 +115,10 @@ async def _pending_transaction(session_factory, operation):
 def pending_answer_completion(session_factory, *, run, answer, at):
     return _pending_transaction(
         session_factory,
-        lambda session: AgentRunCompletionRepository(session).complete_run(
-            run_id=run.run_id,
+        lambda session: AgentRunStateRepository(session).complete(
+            run.run_id,
+            attempt_epoch=run.attempt_epoch,
             result=answer,
-            expected_attempt_epoch=run.attempt_epoch,
             now=at,
         ),
     )
