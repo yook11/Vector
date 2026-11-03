@@ -11,7 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from app.agent.threads.repository import AgentThreadRepository
 from app.models.agent_message import AgentMessage
 from app.models.agent_thread import AgentThread
-from tests.agent.runs._seed import (
+from tests.agent.running._seed import (
     create_thread_message_run as _create_thread_message_run,
 )
 from tests.conftest import TEST_USER_ID

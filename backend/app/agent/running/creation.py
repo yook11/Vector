@@ -11,7 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.agent.running.daily_quota.reservation import reserve_daily_quota
 from app.agent.running.deadline.deadline_exceeded import database_now
 from app.agent.running.deadline.policy import deadline_for_run
-from app.agent.runs.types import AgentRunStatus
+from app.agent.running.types import AgentRunStatus
 from app.models.agent_message import AgentMessage
 from app.models.agent_run import AgentRun
 from app.models.agent_thread import AgentThread

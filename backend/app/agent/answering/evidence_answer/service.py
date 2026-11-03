@@ -33,7 +33,6 @@ from app.agent.answering.live_delivery import (
 from app.agent.answering.live_draft import LiveAnswerDraftSession
 from app.agent.contract import (
     AnswerDeltaReporter,
-    AnswerGenerationStopped,
     AnswerProgressReporter,
 )
 from app.agent.recording.evidence_answer import (
@@ -45,7 +44,6 @@ from app.agent.recording.evidence_answer import (
 from app.agent.running.answer_generation import (
     AnswerGenerationRepository,
 )
-from app.agent.runs.execution import Stop
 from app.agent.runtime.contract import (
     AgentTextStream,
     StreamingAgentRuntime,
@@ -93,8 +91,6 @@ class EvidenceAnswerService:
         """再試行を含む時間枠内でdraftを完成させ、生成不能は例外で通知する。"""
 
         result = await self._repository.start_answer_generation()
-        if isinstance(result, Stop):
-            raise AnswerGenerationStopped(result.reason)
 
         timeout = asyncio.timeout(answer_timing.ANSWER_GENERATION_TIMEOUT_SECONDS)
         async with self._recorder.record(agent_name=self._agent.name) as recording:
@@ -192,7 +188,5 @@ class EvidenceAnswerService:
             await close_answer_stream(stream)
 
     async def _start_revision(self, *, generation: int) -> None:
-        result = await self._repository.authorize_answer_regeneration()
-        if isinstance(result, Stop):
-            raise AnswerGenerationStopped(result.reason)
+        await self._repository.authorize_answer_regeneration()
         await self._delta.reset(generation=generation)

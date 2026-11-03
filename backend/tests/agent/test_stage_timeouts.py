@@ -32,6 +32,7 @@ from tests.agent.answering.evidence_answer.test_service import (
     _evidence,
     _request,
 )
+from tests.agent.answering_runner._harness import AllowAnswerGenerationStart
 from tests.agent.evidence_review.test_service import (
     _ANY_REVIEWER_DRAFT,
     AS_OF,
@@ -45,7 +46,6 @@ from tests.agent.recording._fakes import (
     RecordingEvidenceReviewRecorder,
     RecordingPlanningRecorder,
 )
-from tests.agent.running._harness import AllowAnswerGenerationStart
 
 STAGES = ("planning", "review", "direct", "evidence")
 MODULES = {

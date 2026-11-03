@@ -1,27 +1,33 @@
-"""1回の回答処理を進行する AnsweringRunner。"""
+"""1回の回答処理を進行する AnsweringRunner と、その工程・入力・出力。"""
 
 from __future__ import annotations
 
 import asyncio
 from collections.abc import Iterator
 from contextlib import contextmanager
+from dataclasses import dataclass
 from datetime import datetime
-from typing import assert_never
+from typing import Protocol, assert_never
 from uuid import UUID
 
 import logfire
 from logfire import LogfireSpan
 
 from app.agent.answering.contract import AnsweringRequest
-from app.agent.answering.direct_answer.contract import DirectAnswerInput
-from app.agent.answering.evidence_answer.contract import EvidenceAnswerInput
+from app.agent.answering.direct_answer.contract import (
+    DirectAnswerer,
+    DirectAnswerInput,
+)
+from app.agent.answering.evidence_answer.contract import (
+    EvidenceAnswerer,
+    EvidenceAnswerInput,
+)
 from app.agent.answering.evidence_answer.evidence import (
     build_answer_input_evidence,
 )
 from app.agent.answering.result_assembly import assemble_evidence_result
 from app.agent.contract import (
     AnswerEventReporter,
-    AnswerGenerationStopped,
     AnswerPlanSummary,
     AnswerProgressEvent,
     AnswerProgressReporter,
@@ -30,30 +36,76 @@ from app.agent.contract import (
     AnswerSource,
     EvidenceReviewSelectedEvent,
 )
-from app.agent.evidence_collection import CollectedNews
+from app.agent.evidence_collection import CollectedNews, EvidenceCollector
 from app.agent.evidence_review import (
     AnswerEvidence,
+    EvidenceReviewer,
     EvidenceRunCompleted,
     EvidenceRunFailed,
     EvidenceRunResult,
 )
-from app.agent.planning.contract import DirectAnswerPlan, PlanningInput, SearchPlan
+from app.agent.planning.contract import (
+    DirectAnswerPlan,
+    PlanningInput,
+    QuestionPlanner,
+    SearchPlan,
+)
 from app.agent.research_handoff.handoff import ResearchHandoff
 from app.agent.research_handoff.handoff_input import ResearchHandoffInput
-from app.agent.running.contract import (
-    AnsweringPhases,
-    AnsweringPhasesFactory,
-    RunIdentity,
-    RunInput,
-    RunResult,
-)
+from app.agent.research_handoff.service import ResearchHandoffOrganizer
+from app.agent.running.stop import AnswerGenerationStopped
 from app.agent.threads.contracts import ThreadMessageSnapshot
 
-__all__ = ["AnsweringRunner"]
+__all__ = [
+    "AnsweringPhases",
+    "AnsweringPhasesFactory",
+    "AnsweringRunner",
+    "RunIdentity",
+    "RunInput",
+    "RunResult",
+]
 
 _SPAN_NAME = "agent_answering_run"
 # 回答はストリームし終えているため、整理をこれ以上待たずRunを閉じる。
 HANDOFF_ORGANIZE_TIMEOUT_SECONDS = 20.0
+
+
+@dataclass(frozen=True, slots=True)
+class AnsweringPhases:
+    planner: QuestionPlanner
+    collector: EvidenceCollector
+    direct_answerer: DirectAnswerer
+    evidence_answerer: EvidenceAnswerer
+    reviewer: EvidenceReviewer
+    organizer: ResearchHandoffOrganizer
+
+
+class AnsweringPhasesFactory(Protocol):
+    def __call__(self) -> AnsweringPhases: ...
+
+
+@dataclass(frozen=True, slots=True)
+class RunInput:
+    question: str
+    history: tuple[ThreadMessageSnapshot, ...]
+    # 同threadの調査の申し送り。読出し・検証失敗時はNone。
+    research_handoff: ResearchHandoff | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class RunIdentity:
+    user_id: UUID
+    run_id: UUID
+    thread_id: UUID
+    as_of: datetime
+
+
+@dataclass(frozen=True, slots=True)
+class RunResult:
+    final_output: AnswerQuestionResult
+    # 記録を追加できなかったRun(direct_answer含む)ではNone。書き込み側はNoneを
+    # 「触らない」と解釈し、threadの既存handoffをそのまま残す。
+    research_handoff: ResearchHandoff | None = None
 
 
 class AnsweringRunner:

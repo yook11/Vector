@@ -1,21 +1,25 @@
-"""Repository for agent run lifecycle commands and state."""
+"""worker が実行する run の質問を読む。"""
 
 from __future__ import annotations
 
 import uuid as uuid_mod
+from dataclasses import dataclass
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.agent.runs.contracts import (
-    UserQuestionMessage,
-)
 from app.models.agent_message import AgentMessage
 from app.models.agent_run import AgentRun
 from app.models.agent_thread import AgentThread
 
 
-class AgentRunRepository:
+@dataclass(frozen=True, slots=True)
+class UserQuestionMessage:
+    content: str
+    seq: int
+
+
+class AgentRunQuestionRepository:
     def __init__(self, session: AsyncSession) -> None:
         self._session = session
 

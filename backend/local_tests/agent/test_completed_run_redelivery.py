@@ -4,12 +4,12 @@ from unittest.mock import patch
 
 import pytest
 
+from app.agent.answering_runner import AnsweringRunner
 from app.agent.contract import (
     AnswerPlanSummary,
     AnswerQuestionResult,
     ExternalUrlSource,
 )
-from app.agent.running.answering_runner import AnsweringRunner
 from app.agent.running.completion import (
     AgentRunCompletionRepository,
     RunCompletionFailure,

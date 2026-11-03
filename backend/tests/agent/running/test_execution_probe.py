@@ -22,18 +22,17 @@ from app.agent.running.continuation import (
     AgentRunContinuationRepository,
     AgentRunExecutionProbe,
 )
-from app.agent.runs.execution import Continue, Stop, StopReason
+from app.agent.running.stop import AnswerGenerationStopped, StopReason
 from app.models.agent_message import AgentMessage
 from app.models.agent_run import AgentRun
 from app.models.agent_thread import AgentThread
-from tests.agent.runs._start_run_outcomes import started_attempt_epoch
+from tests.agent.running._start_run_outcomes import started_attempt_epoch
 from tests.conftest import TEST_USER_ID
 from tests.logfire._metric_helpers import collected_metrics
 
 RUN_ID = UUID("00000000-0000-4000-a000-000000000011")
 ATTEMPT_EPOCH = 3
 UNAVAILABLE_METRIC = "vector.agent.execution_probe.unavailable"
-_STOP_NOT_CURRENT = Stop(StopReason.NOT_CURRENT)
 
 
 @dataclass
@@ -117,14 +116,14 @@ def _new_probe(
 
 def _patch_decisions(
     monkeypatch: pytest.MonkeyPatch,
-    outcomes: Sequence[Continue | Stop | BaseException],
+    outcomes: Sequence[StopReason | BaseException | None],
 ) -> None:
     pending = deque(outcomes)
 
     async def decide(
         self: AgentRunContinuationRepository,
         **_kwargs: object,
-    ) -> Continue | Stop:
+    ) -> StopReason | None:
         item = pending.popleft()
         if isinstance(item, BaseException):
             raise item
@@ -133,6 +132,12 @@ def _patch_decisions(
     monkeypatch.setattr(
         AgentRunContinuationRepository, "decide_execution_continuation", decide
     )
+
+
+async def _stop_reason(probe: AgentRunExecutionProbe) -> StopReason:
+    with pytest.raises(AnswerGenerationStopped) as stopped:
+        await probe.ensure_can_continue()
+    return stopped.value.reason
 
 
 def _metric_points(capfire: CaptureLogfire) -> list[dict[str, Any]]:
@@ -153,18 +158,18 @@ def _metric_points(capfire: CaptureLogfire) -> list[dict[str, Any]]:
 async def test_probe_cache_rechecks_at_exactly_two_seconds(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    _patch_decisions(monkeypatch, [Continue(), _STOP_NOT_CURRENT])
+    _patch_decisions(monkeypatch, [None, StopReason.NOT_CURRENT])
     factory = FakeSessionFactory()
     clock = ManualClock()
     probe = _new_probe(factory, clock)
 
-    assert await probe.should_continue() == Continue()
+    await probe.ensure_can_continue()
     clock.advance(1.999)
-    assert await probe.should_continue() == Continue()
+    await probe.ensure_can_continue()
     assert len(factory.sessions) == 1
 
     clock.now = 2.0
-    assert await probe.should_continue() == _STOP_NOT_CURRENT
+    assert await _stop_reason(probe) is StopReason.NOT_CURRENT
     assert len(factory.sessions) == 2
     assert all(session.entered == 1 for session in factory.sessions)
     assert all(
@@ -177,14 +182,14 @@ async def test_probe_cache_rechecks_at_exactly_two_seconds(
 async def test_stop_result_is_terminal_cache_without_later_database_check(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    _patch_decisions(monkeypatch, [_STOP_NOT_CURRENT, Continue()])
+    _patch_decisions(monkeypatch, [StopReason.NOT_CURRENT, None])
     factory = FakeSessionFactory()
     clock = ManualClock()
     probe = _new_probe(factory, clock)
 
-    assert await probe.should_continue() == _STOP_NOT_CURRENT
+    assert await _stop_reason(probe) is StopReason.NOT_CURRENT
     clock.advance(200.0)
-    assert await probe.should_continue() == _STOP_NOT_CURRENT
+    assert await _stop_reason(probe) is StopReason.NOT_CURRENT
     assert len(factory.sessions) == 1
 
 
@@ -194,19 +199,19 @@ async def test_database_check_failure_fails_open_and_recovers_after_cache_window
 ) -> None:
     _patch_decisions(
         monkeypatch,
-        [RuntimeError("DB_SECRET"), _STOP_NOT_CURRENT],
+        [RuntimeError("DB_SECRET"), StopReason.NOT_CURRENT],
     )
     factory = FakeSessionFactory()
     clock = ManualClock()
     probe = _new_probe(factory, clock)
 
-    assert await probe.should_continue() == Continue()
+    await probe.ensure_can_continue()
     clock.advance(1.999)
-    assert await probe.should_continue() == Continue()
+    await probe.ensure_can_continue()
     assert len(factory.sessions) == 1
 
     clock.now = 2.0
-    assert await probe.should_continue() == _STOP_NOT_CURRENT
+    assert await _stop_reason(probe) is StopReason.NOT_CURRENT
     assert len(factory.sessions) == 2
 
 
@@ -216,9 +221,9 @@ async def test_session_open_failure_also_fails_open_and_is_cached() -> None:
     clock = ManualClock()
     probe = _new_probe(factory, clock)
 
-    assert await probe.should_continue() == Continue()
+    await probe.ensure_can_continue()
     clock.advance(1.0)
-    assert await probe.should_continue() == Continue()
+    await probe.ensure_can_continue()
     assert len(factory.sessions) == 1
 
 
@@ -239,11 +244,11 @@ async def test_unavailable_observation_is_once_per_real_failure_and_pii_free(
     question = "QUESTION_SECRET"
     user_id = "USER_ID_SECRET"
 
-    assert await probe.should_continue() == Continue()
+    await probe.ensure_can_continue()
     clock.advance(1.0)
-    assert await probe.should_continue() == Continue()
+    await probe.ensure_can_continue()
     clock.advance(1.0)
-    assert await probe.should_continue() == Continue()
+    await probe.ensure_can_continue()
     logs = read_logs()
 
     unavailable_logs = [
@@ -338,7 +343,7 @@ async def test_actual_cancel_commit_makes_cached_probe_stop_after_two_seconds(
         run_id=run.id,
         attempt_epoch=1,
     )
-    assert await probe.should_continue() == Continue()
+    await probe.ensure_can_continue()
 
     async with session_factory() as cancel_session:
         async with cancel_session.begin():
@@ -351,7 +356,7 @@ async def test_actual_cancel_commit_makes_cached_probe_stop_after_two_seconds(
     assert isinstance(result, RunCancellationSuccess)
     clock.advance(2.0)
 
-    assert await probe.should_continue() == _STOP_NOT_CURRENT
+    assert await _stop_reason(probe) is StopReason.NOT_CURRENT
 
 
 @pytest.mark.integration
@@ -372,7 +377,7 @@ async def test_actual_restart_makes_old_epoch_probe_stop_after_two_seconds(
         run_id=run.id,
         attempt_epoch=1,
     )
-    assert await probe.should_continue() == Continue()
+    await probe.ensure_can_continue()
 
     async with session_factory() as start_session:
         async with start_session.begin():
@@ -382,7 +387,7 @@ async def test_actual_restart_makes_old_epoch_probe_stop_after_two_seconds(
     assert attempt_epoch == 2
     clock.advance(2.0)
 
-    assert await probe.should_continue() == _STOP_NOT_CURRENT
+    assert await _stop_reason(probe) is StopReason.NOT_CURRENT
 
 
 @pytest.mark.integration
@@ -404,9 +409,9 @@ async def test_expired_deadline_stops_through_choke_and_writes_once(
         run_id=run.id,
         attempt_epoch=1,
     )
-    assert await probe.should_continue() == Stop(StopReason.DEADLINE_EXCEEDED)
+    assert await _stop_reason(probe) is StopReason.DEADLINE_EXCEEDED
     clock.advance(200.0)
-    assert await probe.should_continue() == Stop(StopReason.DEADLINE_EXCEEDED)
+    assert await _stop_reason(probe) is StopReason.DEADLINE_EXCEEDED
 
     async with session_factory() as session:
         persisted = await session.get(AgentRun, run.id)

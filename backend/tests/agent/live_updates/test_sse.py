@@ -16,6 +16,7 @@ from starlette.requests import ClientDisconnect
 
 import app.agent.live_updates.sse as sse_module
 from app.agent.contract import ExternalSearchHitsFetchedEvent
+from app.agent.live_updates.run_reading import OwnedAgentRunLiveContext
 from app.agent.live_updates.sse import (
     AGENT_RUN_SSE_LEASE_TTL_SECONDS,
     AGENT_RUN_SSE_PROCESS_CONNECTION_LIMIT,
@@ -45,8 +46,7 @@ from app.agent.live_updates.stream import (
     AgentRunLiveStreamStageEvent,
     AgentRunLiveStreamTerminalEvent,
 )
-from app.agent.running.presentation import OwnedAgentRunLiveContext
-from app.agent.runs.types import AgentRunStatus
+from app.agent.running.types import AgentRunStatus
 
 USER_1 = UUID("00000000-0000-4000-a000-000000000001")
 RUN_1 = UUID("00000000-0000-4000-a000-000000000011")

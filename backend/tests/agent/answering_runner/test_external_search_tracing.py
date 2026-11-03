@@ -23,6 +23,7 @@ from app.agent.answering.evidence_answer.contract import (
     EvidenceAnswerDraft,
     EvidenceAnswerInput,
 )
+from app.agent.answering_runner import AnsweringPhases, AnsweringRunner, RunInput
 from app.agent.evidence_collection import EvidenceCollectionService
 from app.agent.evidence_collection.external_search import ExternalSearchService
 from app.agent.evidence_collection.external_search.agent import EXTERNAL_QUERY_AGENT
@@ -51,13 +52,12 @@ from app.agent.planning.contract import (
     SearchPlan,
     TargetTimeWindow,
 )
-from app.agent.running import AnsweringPhases, AnsweringRunner, RunInput
 from app.agent.runtime.contract import AgentResponseDefect, AgentResponseInvalidError
 from app.agent.runtime.gemini import GeminiAgentRuntime
 from app.analysis.analyzed_article import InScopeAnalyzedArticle
 from app.analysis.assessment.domain.result import InScope, InScopeCategory
 from app.logfire.redaction import install_exception_redaction
-from tests.agent.running._harness import (
+from tests.agent.answering_runner._harness import (
     ExternalScopes,
     PassThroughOrganizer,
     fixed_scope,

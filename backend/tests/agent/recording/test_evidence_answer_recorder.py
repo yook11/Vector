@@ -9,13 +9,13 @@ from types import TracebackType
 import pytest
 from logfire.testing import CaptureLogfire
 
-from app.agent.contract import AnswerGenerationStopped
 from app.agent.recording.evidence_answer import (
     EvidenceAnswerFailed,
     EvidenceAnswerRecordingOutcome,
     EvidenceAnswerSucceeded,
     LogfireEvidenceAnswerRecorder,
 )
+from app.agent.running.stop import AnswerGenerationStopped
 from tests.logfire._metric_helpers import attributes_of, collected_metrics
 
 _OUTCOME_METRIC = "vector.agent.evidence_answer.outcome"

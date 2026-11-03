@@ -22,6 +22,7 @@ from app.agent.live_updates.metrics import (
     record_agent_run_sse_open,
     record_agent_run_sse_projection_drop,
 )
+from app.agent.live_updates.run_reading import OwnedAgentRunLiveContext
 from app.agent.live_updates.stream import (
     AgentRunLiveStreamActivityEvent,
     AgentRunLiveStreamAnswerDeltaEvent,
@@ -33,8 +34,7 @@ from app.agent.live_updates.stream import (
     AgentRunLiveStreamStageEvent,
     AgentRunLiveStreamTerminalEvent,
 )
-from app.agent.running.presentation import OwnedAgentRunLiveContext
-from app.agent.runs.types import AgentRunStatus
+from app.agent.running.types import AgentRunStatus
 
 AGENT_RUN_SSE_RUN_CONNECTION_LIMIT = 2
 AGENT_RUN_SSE_USER_CONNECTION_LIMIT = 4

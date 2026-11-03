@@ -12,7 +12,7 @@ import pytest
 from logfire.testing import CaptureLogfire
 
 import app.agent.answering.direct_answer.contract as direct_answer_contract
-import app.agent.contract as shared_agent_contract
+import app.agent.running.stop as running_stop
 from app.agent.agent import Agent
 from app.agent.answering.contract import AnsweringRequest
 from app.agent.answering.direct_answer.agent import DIRECT_ANSWER_AGENT
@@ -29,7 +29,7 @@ from app.agent.recording.direct_answer import (
     DirectAnswerOutcome,
     DirectAnswerSucceeded,
 )
-from app.agent.runs.execution import Continue, Stop, StopReason
+from app.agent.running.stop import StopReason
 from app.agent.threads.contracts import ThreadMessageSnapshot
 from app.ai_providers.errors import (
     AIProviderResultError,
@@ -42,11 +42,11 @@ from app.http.failure import (
     HttpTransportFailureReason,
     HttpTransportStage,
 )
-from tests.agent.recording._fakes import RecordingDirectAnswerRecorder
-from tests.agent.running._harness import (
+from tests.agent.answering_runner._harness import (
     AllowAnswerGenerationStart,
     ScriptedAnswerGenerationRepository,
 )
+from tests.agent.recording._fakes import RecordingDirectAnswerRecorder
 from tests.agent.runtime._fakes import AgentRuntimeCall
 from tests.logfire._metric_helpers import collected_metrics
 
@@ -193,7 +193,7 @@ class RecordingDeltaReporter:
 def test_answer_generation_stopped_is_shared_identity_compatible_reexport() -> None:
     assert (
         direct_answer_contract.AnswerGenerationStopped
-        is shared_agent_contract.AnswerGenerationStopped
+        is running_stop.AnswerGenerationStopped
     )
 
 
@@ -771,7 +771,7 @@ async def test_generation_stop_records_stopped_without_outcome() -> None:
         await _service(
             runtime,
             repository=ScriptedAnswerGenerationRepository(
-                authorizes=[Stop(StopReason.NOT_CURRENT)]
+                authorizes=[AnswerGenerationStopped(StopReason.NOT_CURRENT)]
             ),
             recorder=recorder,
         ).answer(_input())
@@ -841,13 +841,13 @@ async def test_start_continue_reports_answering_before_generation() -> None:
 @pytest.mark.parametrize(
     "outcome",
     [
-        Stop(StopReason.DEADLINE_EXCEEDED),
-        Stop(StopReason.NOT_CURRENT),
+        AnswerGenerationStopped(StopReason.DEADLINE_EXCEEDED),
+        AnswerGenerationStopped(StopReason.NOT_CURRENT),
         RuntimeError("answer start transaction failed"),
     ],
 )
 async def test_start_rejection_does_not_generate_or_report_answering(
-    outcome: Continue | Stop | BaseException,
+    outcome: BaseException,
 ) -> None:
     runtime = ScriptedStreamingRuntime(["呼ばれない"])
     enters = 0
@@ -862,8 +862,7 @@ async def test_start_rejection_does_not_generate_or_report_answering(
     progress = _RecordingProgress()
     recorder = RecordingDirectAnswerRecorder()
 
-    expected = AnswerGenerationStopped if isinstance(outcome, Stop) else type(outcome)
-    with pytest.raises(expected) as raised:
+    with pytest.raises(type(outcome)) as raised:
         await DirectAnswerService(
             schedule_deadline_check=lambda *_: None,
             agent=DIRECT_ANSWER_AGENT,
@@ -873,10 +872,7 @@ async def test_start_rejection_does_not_generate_or_report_answering(
             recorder=recorder,
         ).answer(_input())
 
-    if isinstance(outcome, Stop):
-        assert raised.value.reason is outcome.reason
-    else:
-        assert raised.value is outcome
+    assert raised.value is outcome
     assert start.calls == 1
     assert enters == 0
     assert runtime.calls == []
@@ -888,7 +884,7 @@ async def test_start_rejection_does_not_generate_or_report_answering(
 async def test_regeneration_stop_does_not_start_second_generation() -> None:
     runtime = ScriptedStreamingRuntime([" \n\t", "呼ばれない"])
     repository = ScriptedAnswerGenerationRepository(
-        authorizes=[Stop(StopReason.DEADLINE_EXCEEDED)]
+        authorizes=[AnswerGenerationStopped(StopReason.DEADLINE_EXCEEDED)]
     )
 
     with pytest.raises(AnswerGenerationStopped) as raised:

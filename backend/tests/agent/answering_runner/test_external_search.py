@@ -12,6 +12,7 @@ from typing import Any
 import pytest
 from logfire.testing import CaptureLogfire
 
+from app.agent.answering_runner import AnsweringPhases, AnsweringRunner
 from app.agent.evidence_collection import EvidenceCollectionService
 from app.agent.evidence_collection.external_search import (
     ExternalSearch,
@@ -37,7 +38,6 @@ from app.agent.planning.contract import (
     SearchPlan,
     TargetTimeWindow,
 )
-from app.agent.running import AnsweringPhases, AnsweringRunner
 from app.agent.runtime.contract import AgentResponseDefect, AgentResponseInvalidError
 from app.ai_providers.errors import (
     AIProviderTransportError,
@@ -48,44 +48,44 @@ from app.http.failure import (
     HttpTransportFailureReason,
     HttpTransportStage,
 )
-from tests.agent.running._harness import (
+from tests.agent.answering_runner._harness import (
     AS_OF,
     ExternalScopes,
     PassThroughOrganizer,
     fixed_scope,
     internal_hit,
 )
-from tests.agent.running._harness import (
+from tests.agent.answering_runner._harness import (
     DEFAULT_TARGET_TIME_WINDOW as _DEFAULT_TARGET_TIME_WINDOW,
 )
-from tests.agent.running._harness import (
+from tests.agent.answering_runner._harness import (
     Events as _Events,
 )
-from tests.agent.running._harness import (
+from tests.agent.answering_runner._harness import (
     EvidenceAnswerer as _EvidenceAnswerer,
 )
-from tests.agent.running._harness import (
+from tests.agent.answering_runner._harness import (
     UnreachableDirectAnswerer as _UnreachableDirectAnswerer,
 )
-from tests.agent.running._harness import (
+from tests.agent.answering_runner._harness import (
     capture_external_outcome as _capture_external_outcome,
 )
-from tests.agent.running._harness import (
+from tests.agent.answering_runner._harness import (
     execute_run as _run,
 )
-from tests.agent.running._harness import (
+from tests.agent.answering_runner._harness import (
     external_hit as _hit,
 )
-from tests.agent.running._harness import (
+from tests.agent.answering_runner._harness import (
     external_research_runtime as _runtime,
 )
-from tests.agent.running._harness import (
+from tests.agent.answering_runner._harness import (
     external_task as _task,
 )
-from tests.agent.running._harness import (
+from tests.agent.answering_runner._harness import (
     query_draft as _query_draft,
 )
-from tests.agent.running._harness import (
+from tests.agent.answering_runner._harness import (
     review_draft as _review_draft,
 )
 from tests.agent.runtime._fakes import GoalKeyedAgentRuntime, ScriptedAgentRuntime
@@ -1032,7 +1032,7 @@ async def test_collection_events_are_per_task_causal_with_their_contract_payload
     evidence_review.selectedは両task分がまとめて精査成功後にRun単位1本でしか
     発火しない(task0が完結してからtask1が始まる、というper-task逐次因果は
     成立しない)。evidence_review.selectedの発火本数・payload形は
-    tests/agent/running/test_evidence_review.py::
+    tests/agent/answering_runner/test_evidence_review.py::
     test_selected_event_fires_once_for_the_whole_run_without_task_index が
     正本のため、ここでは重複して主張しない。
     """

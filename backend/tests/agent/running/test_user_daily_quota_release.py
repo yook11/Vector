@@ -33,13 +33,13 @@ from app.agent.running.daily_quota.reservation import (
 )
 from app.agent.running.deadline.policy import RUN_DEADLINE_SECONDS
 from app.agent.running.failure_recording import AgentRunFailureRepository
-from app.agent.runs.types import AgentRunErrorCode
+from app.agent.running.types import AgentRunErrorCode
 from app.models.agent_message import AgentMessage
 from app.models.agent_run import AgentRun
 from app.models.agent_thread import AgentThread
 from app.models.agent_user_daily_quota import AgentUserDailyQuota
 from tests.agent.run_deadline.clock import sweep_deadline_exceeded_runs_at
-from tests.agent.runs._start_run_outcomes import (
+from tests.agent.running._start_run_outcomes import (
     assert_start_failure,
     started_attempt_epoch,
 )

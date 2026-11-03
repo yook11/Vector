@@ -8,7 +8,7 @@ from typing import Any
 from sqlalchemy import delete, exists, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.agent.runs.types import AgentRunStatus
+from app.agent.running.types import AgentRunStatus
 from app.agent.threads.contracts import ThreadMessageSnapshot
 from app.agent.threads.projection import (
     build_research_thread_detail,

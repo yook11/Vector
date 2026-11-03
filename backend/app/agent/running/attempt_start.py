@@ -13,7 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.agent.running.daily_quota import observability as daily_quota_observability
 from app.agent.running.daily_quota.release import release_daily_quota
 from app.agent.running.deadline.deadline_exceeded import database_now, expire_run
-from app.agent.runs.types import AgentRunStatus
+from app.agent.running.types import AgentRunStatus
 from app.log_policy.policies.research import RESEARCH_LOG_RULES
 from app.log_policy.runtime import create_policy_json_logger
 from app.models.agent_run import AgentRun

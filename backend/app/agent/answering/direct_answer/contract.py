@@ -8,7 +8,8 @@ from typing import Protocol
 from pydantic import BaseModel, ConfigDict
 
 from app.agent.answering.contract import AnsweringRequest
-from app.agent.contract import AnswerGenerationStopped, NonBlankText
+from app.agent.contract import NonBlankText
+from app.agent.running.stop import AnswerGenerationStopped
 
 __all__ = [
     "AnswerGenerationStopped",

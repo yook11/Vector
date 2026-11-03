@@ -29,7 +29,6 @@ from app.agent.answering.live_draft import LiveAnswerDraftSession
 from app.agent.citation_markers import strip_citation_markers
 from app.agent.contract import (
     AnswerDeltaReporter,
-    AnswerGenerationStopped,
     AnswerProgressReporter,
 )
 from app.agent.recording.direct_answer import (
@@ -41,7 +40,6 @@ from app.agent.recording.direct_answer import (
 from app.agent.running.answer_generation import (
     AnswerGenerationRepository,
 )
-from app.agent.runs.execution import Stop
 from app.agent.runtime.contract import (
     AgentTextStream,
     StreamingAgentRuntime,
@@ -84,8 +82,6 @@ class DirectAnswerService:
         """Return a valid direct draft, retrying only blank response defects."""
 
         result = await self._repository.start_answer_generation()
-        if isinstance(result, Stop):
-            raise AnswerGenerationStopped(result.reason)
 
         timeout = asyncio.timeout(answer_timing.ANSWER_GENERATION_TIMEOUT_SECONDS)
         async with self._recorder.record(agent_name=self._agent.name) as recording:
@@ -103,13 +99,9 @@ class DirectAnswerService:
                         async with self._runtime_scope_factory() as runtime:
                             for attempt_number in range(1, _MAX_ATTEMPTS + 1):
                                 if attempt_number > 1:
-                                    regeneration = await (
+                                    await (
                                         self._repository.authorize_answer_regeneration()
                                     )
-                                    if isinstance(regeneration, Stop):
-                                        raise AnswerGenerationStopped(
-                                            regeneration.reason
-                                        )
                                 try:
                                     draft = await self._generate_draft(
                                         runtime=runtime,

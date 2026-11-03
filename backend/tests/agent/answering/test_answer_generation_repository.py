@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from datetime import UTC, datetime
 from uuid import UUID
 
 import pytest
@@ -10,11 +11,12 @@ import pytest
 from app.agent.running import answer_generation as repository_module
 from app.agent.running.answer_generation import (
     AgentAnswerGenerationRepository,
+    AnswerGenerationStarted,
 )
-from app.agent.runs.execution import Continue
 
 RUN_ID = UUID("019bd239-1ed4-7fbb-a336-04fe3c197652")
 ATTEMPT_EPOCH = 3
+STARTED_AT = datetime(2026, 9, 5, 12, 0, tzinfo=UTC)
 
 
 class _NullTransaction:
@@ -47,15 +49,14 @@ async def test_start_and_authorize_each_call_repository(
     start_calls = 0
     authorize_calls = 0
 
-    async def start_once(*_args: object, **_kwargs: object) -> Continue:
+    async def start_once(*_args: object, **_kwargs: object) -> AnswerGenerationStarted:
         nonlocal start_calls
         start_calls += 1
-        return Continue()
+        return AnswerGenerationStarted(RUN_ID, STARTED_AT)
 
-    async def authorize_once(*_args: object, **_kwargs: object) -> Continue:
+    async def authorize_once(*_args: object, **_kwargs: object) -> None:
         nonlocal authorize_calls
         authorize_calls += 1
-        return Continue()
 
     monkeypatch.setattr(repository_module, "_start_answer_generation", start_once)
     monkeypatch.setattr(

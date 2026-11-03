@@ -46,7 +46,7 @@ from app.agent.live_updates.stream import (
 )
 from app.agent.planning.contract import TargetTimeWindow
 from app.config import settings
-from tests.agent.running._harness import AllowAnswerGenerationStart
+from tests.agent.answering_runner._harness import AllowAnswerGenerationStart
 
 pytestmark = pytest.mark.xdist_group("redis")
 

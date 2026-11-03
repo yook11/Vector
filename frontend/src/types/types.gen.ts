@@ -5,6 +5,16 @@ export type ClientOptions = {
 };
 
 /**
+ * AgentRunErrorCode
+ */
+export type AgentRunErrorCode = 'generation_unavailable' | 'internal_error' | 'enqueue_failed' | 'stale' | 'cancelled';
+
+/**
+ * AgentRunStatus
+ */
+export type AgentRunStatus = 'queued' | 'running' | 'completed' | 'policy_blocked' | 'deadline_exceeded' | 'failed';
+
+/**
  * AnalyzedArticle
  *
  * 分析済み記事について公開する情報をすべて持つ表現 (GET /api/v1/articles/{id})。
@@ -528,14 +538,8 @@ export type ResearchMessageRun = {
      * Runid
      */
     runId: string;
-    /**
-     * Status
-     */
-    status: 'queued' | 'running' | 'completed' | 'policy_blocked' | 'deadline_exceeded' | 'failed';
-    /**
-     * Errorcode
-     */
-    errorCode: 'generation_unavailable' | 'internal_error' | 'enqueue_failed' | 'stale' | 'cancelled' | null;
+    status: AgentRunStatus;
+    errorCode: AgentRunErrorCode | null;
 };
 
 /**
@@ -564,14 +568,8 @@ export type ResearchRunResponse = {
      * Threadid
      */
     threadId: string;
-    /**
-     * Status
-     */
-    status: 'queued' | 'running' | 'completed' | 'policy_blocked' | 'deadline_exceeded' | 'failed';
-    /**
-     * Errorcode
-     */
-    errorCode: 'generation_unavailable' | 'internal_error' | 'enqueue_failed' | 'stale' | 'cancelled' | null;
+    status: AgentRunStatus;
+    errorCode: AgentRunErrorCode | null;
     /**
      * Attemptepoch
      */

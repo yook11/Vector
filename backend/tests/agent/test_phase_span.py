@@ -18,9 +18,9 @@ from opentelemetry.semconv.attributes.error_attributes import ERROR_TYPE
 from opentelemetry.trace import StatusCode
 
 from app.agent.answering.direct_answer.failure import DirectAnswerError
-from app.agent.contract import AnswerGenerationStopped
 from app.agent.phase_span import agent_phase
 from app.agent.planning.failure import PlanningError
+from app.agent.running.stop import AnswerGenerationStopped
 from app.agent.runtime.contract import AgentResponseDefect, AgentResponseInvalidError
 from app.ai_providers.errors import (
     AIProviderTransportError,

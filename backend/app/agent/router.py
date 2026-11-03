@@ -24,6 +24,10 @@ from fastapi import (
 from fastapi.responses import JSONResponse, StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from app.agent.live_updates.run_reading import (
+    AgentRunLiveRepository,
+    OwnedAgentRunLiveContext,
+)
 from app.agent.live_updates.sse import (
     AgentRunQueuedSseConnection,
     AgentRunSseCapacity,
@@ -58,13 +62,9 @@ from app.agent.running.deadline.scheduling import (
     AgentDeadlineScheduler,
     get_agent_deadline_scheduler,
 )
+from app.agent.running.enqueuer import AgentRunEnqueuer, get_agent_run_enqueuer
 from app.agent.running.failure_recording import AgentRunFailureRepository
-from app.agent.running.presentation import (
-    AgentRunPresentationRepository,
-    OwnedAgentRunLiveContext,
-)
-from app.agent.runs.enqueuer import AgentRunEnqueuer, get_agent_run_enqueuer
-from app.agent.runs.types import AgentRunErrorCode, AgentRunStatus
+from app.agent.running.types import AgentRunErrorCode, AgentRunStatus
 from app.agent.threads.detail import read_owned_thread_detail
 from app.agent.threads.repository import AgentThreadRepository
 from app.db.fastapi import get_caller_managed_session
@@ -107,7 +107,7 @@ async def read_agent_run_live_context(
     session_factory: async_sessionmaker[AsyncSession],
 ) -> OwnedAgentRunLiveContext | None:
     async with session_factory() as session:
-        return await AgentRunPresentationRepository(session).read_live_context_for_user(
+        return await AgentRunLiveRepository(session).read_live_context_for_user(
             run_id=run_id,
             user_id=user_id,
         )
@@ -508,7 +508,7 @@ async def get_research_run(
     user: Annotated[AuthenticatedUser, Depends(require_authenticated_user)],
     session: Annotated[AsyncSession, Depends(get_caller_managed_session)],
 ) -> ResearchRunResponse:
-    repo = AgentRunPresentationRepository(session)
+    repo = AgentRunLiveRepository(session)
     response = await repo.read_run_for_user(run_id=run_id, user_id=user.id)
     if response is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)

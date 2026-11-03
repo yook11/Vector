@@ -25,7 +25,7 @@ from app.agent.evidence_collection.internal_search.query_embedding import (
     InternalSearchQueries,
 )
 from app.agent.planning.contract import ResearchTask, SearchPlan
-from tests.agent.running._harness import fixed_scope
+from tests.agent.answering_runner._harness import fixed_scope
 from tests.agent.runtime._fakes import ScriptedAgentRuntime
 from tests.logfire._span_helpers import (
     domain_attr_keys,
@@ -161,9 +161,7 @@ async def test_success_creates_collect_task_and_internal_search_hierarchy(
 async def test_internal_failure_marks_only_internal_search_error_and_degrades(
     capfire: CaptureLogfire,
 ) -> None:
-    error = InternalSearchError(
-        code=InternalSearchFailureCode.QUERY_EMBEDDING_FAILED
-    )
+    error = InternalSearchError(code=InternalSearchFailureCode.QUERY_EMBEDDING_FAILED)
 
     collected = await _service(error=error).collect(
         plan=_plan(_task("goal", "q")),

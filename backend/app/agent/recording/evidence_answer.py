@@ -15,9 +15,9 @@ from typing import Protocol
 
 import logfire
 
-from app.agent.contract import AnswerGenerationStopped
 from app.agent.phase_span import agent_phase
 from app.agent.recording.types import PhaseStatus
+from app.agent.running.stop import AnswerGenerationStopped
 
 __all__ = [
     "EvidenceAnswerFailed",

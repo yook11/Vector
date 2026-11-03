@@ -25,6 +25,12 @@ from app.agent.answering.evidence_answer.contract import (
     EvidenceAnswerInput,
 )
 from app.agent.answering.evidence_answer.service import EvidenceAnswerService
+from app.agent.answering_runner import (
+    AnsweringPhases,
+    AnsweringRunner,
+    RunIdentity,
+    RunInput,
+)
 from app.agent.composition import (
     activate_external_search,
     activate_gemini_agent_runtime,
@@ -61,8 +67,7 @@ from app.agent.research_handoff.agent import RESEARCH_HANDOFF_AGENT
 from app.agent.research_handoff.handoff import ResearchHandoff
 from app.agent.research_handoff.handoff_input import ResearchHandoffInput
 from app.agent.research_handoff.service import ResearchHandoffService
-from app.agent.running import AnsweringPhases, AnsweringRunner, RunIdentity, RunInput
-from app.agent.runs.execution import Continue
+from app.agent.running.answer_generation import AnswerGenerationStarted
 from app.config import settings
 from app.db.engine import create_cli_engine
 from app.db.session import caller_managed_session_factory
@@ -74,11 +79,11 @@ MAX_EXTERNAL_RESEARCH_TASKS = 3
 
 
 class _ProbeAnswerGenerationStart:
-    async def start_answer_generation(self) -> Continue:
-        return Continue()
+    async def start_answer_generation(self) -> AnswerGenerationStarted:
+        return AnswerGenerationStarted(uuid4(), datetime.now(UTC))
 
-    async def authorize_answer_regeneration(self) -> Continue:
-        return Continue()
+    async def authorize_answer_regeneration(self) -> None:
+        return None
 
 
 class _UnreachableInternalSearch:

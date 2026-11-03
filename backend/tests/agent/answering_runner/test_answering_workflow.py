@@ -15,6 +15,7 @@ from app.agent.answering.evidence_answer.contract import (
     EvidenceAnswerDraft,
     EvidenceAnswerInput,
 )
+from app.agent.answering_runner import AnsweringPhases, AnsweringRunner, RunInput
 from app.agent.evidence_collection import EvidenceCollectionService
 from app.agent.evidence_collection.external_search import ExternalSearchService
 from app.agent.evidence_collection.external_search.contract import ExternalQueryDraft
@@ -30,8 +31,7 @@ from app.agent.planning.contract import (
     ResearchTask,
     SearchPlan,
 )
-from app.agent.running import AnsweringPhases, AnsweringRunner, RunInput
-from tests.agent.running._harness import (
+from tests.agent.answering_runner._harness import (
     PassThroughOrganizer,
     fixed_scope,
     run_identity,
@@ -117,7 +117,7 @@ class _EvidenceAnswerer:
         self.calls: list[EvidenceAnswerInput] = []
 
     async def answer(self, input: EvidenceAnswerInput) -> EvidenceAnswerDraft:
-        # S5: review_missingの受け渡し検証はtests/agent/running/
+        # S5: review_missingの受け渡し検証はtests/agent/answering_runner/
         # test_retrieval_dispatch.pyが正本(条件7)。このfakeはworkflowの
         # 呼び出し順序を見るためのものであり、既存契約だけを追跡する。
         self._timeline.append("evidence_answerer")

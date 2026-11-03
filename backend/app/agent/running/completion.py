@@ -14,7 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.agent.answering import timing as answer_timing
 from app.agent.contract import AnswerQuestionResult
 from app.agent.running.deadline.deadline_exceeded import database_now
-from app.agent.runs.types import AgentRunStatus
+from app.agent.running.types import AgentRunStatus
 from app.agent.threads.citation_integrity import warn_on_citation_source_mismatch
 from app.agent.threads.result_mapper import (
     build_assistant_message_for_result,

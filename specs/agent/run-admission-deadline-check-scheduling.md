@@ -134,7 +134,7 @@ runを終了させない。このタスクから回答生成後の期限へ再�
 - [受付endpoint](../../backend/app/agent/router.py): run作成commit後に回答実行をenqueueする。
 - [run作成repository](../../backend/app/agent/running/creation.py): DB時刻から`created_at`と`deadline_at`を確定する。
 - [内部作成結果](../../backend/app/agent/running/creation.py): `CreatedAgentRun`が保存した`deadline_at`を返す。
-- [回答実行のenqueue](../../backend/app/agent/runs/enqueuer.py): 受付からbroker投入を分離する。
+- [回答実行のenqueue](../../backend/app/agent/running/enqueuer.py): 受付からbroker投入を分離する。
 - [元の期限定義](../../backend/app/agent/running/deadline/policy.py): 受付から60秒の期限を定義する。
 - [共通回収処理](../../backend/app/agent/running/deadline/deadline_exceeded.py): 開始記録に応じた期限とquotaを扱う。
 - [生成工程の時間定義](../../backend/app/agent/answering/timing.py): 工程制限時間と回収猶予の正本。

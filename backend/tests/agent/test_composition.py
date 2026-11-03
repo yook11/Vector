@@ -11,13 +11,13 @@ from pydantic import SecretStr
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.agent import composition
+from app.agent.answering_runner import AnsweringPhases
 from app.agent.composition import (
     activate_gemini_agent_runtime,
     activate_gemini_client,
     ensure_agent_worker_configured,
 )
 from app.agent.planning.agent import QUESTION_PLANNER_AGENT
-from app.agent.running import AnsweringPhases
 from app.agent.runtime.contract import (
     AgentResponseDefect,
     AgentResponseInvalidError,

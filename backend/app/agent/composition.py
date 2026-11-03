@@ -16,6 +16,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.agent.answering.direct_answer.agent import DIRECT_ANSWER_AGENT
 from app.agent.answering.evidence_answer.agent import EVIDENCE_ANSWER_AGENT
+from app.agent.answering_runner import AnsweringPhases, AnsweringRunner
 from app.agent.contract import (
     AnswerDeltaReporter,
     AnswerEventReporter,
@@ -26,7 +27,6 @@ from app.agent.evidence_collection.external_search.contract import ExternalSearc
 from app.agent.evidence_review.agent import EVIDENCE_REVIEWER_AGENT
 from app.agent.planning.agent import QUESTION_PLANNER_AGENT
 from app.agent.research_handoff.agent import RESEARCH_HANDOFF_AGENT
-from app.agent.running import AnsweringPhases, AnsweringRunner
 from app.agent.running.answer_generation import (
     AnswerGenerationRepository,
 )

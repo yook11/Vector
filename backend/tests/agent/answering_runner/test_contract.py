@@ -9,19 +9,15 @@ from uuid import UUID
 
 import pytest
 
+from app.agent.answering_runner import RunIdentity, RunInput, RunResult
 from app.agent.contract import AnswerQuestionResult
 from app.agent.research_handoff import (
     ResearchHandoff,
     ResearchRunRecord,
     ResearchTaskRecord,
 )
-from app.agent.running import (
-    RunIdentity,
-    RunInput,
-    RunResult,
-)
 from app.agent.threads.contracts import ThreadMessageSnapshot
-from tests.agent.running._harness import THREAD_ID, USER_ID
+from tests.agent.answering_runner._harness import THREAD_ID, USER_ID
 
 
 def _field_contract(contract_type: type[Any]) -> tuple[tuple[str, Any], ...]:

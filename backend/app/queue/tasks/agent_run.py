@@ -11,8 +11,9 @@ from taskiq import Context, TaskiqDepends
 
 from app.agent.answering.direct_answer.failure import DirectAnswerError
 from app.agent.answering.evidence_answer.failure import EvidenceAnswerError
+from app.agent.answering_runner import RunIdentity, RunInput
 from app.agent.composition import build_answering_runner
-from app.agent.contract import AnswerGenerationStopped, AnswerQuestionResult
+from app.agent.contract import AnswerQuestionResult
 from app.agent.live_updates.answer_delta import AgentRunLiveAnswerDeltaReporter
 from app.agent.live_updates.reporters import (
     AgentRunLiveActivityReporter,
@@ -26,10 +27,6 @@ from app.agent.planning.failure import PlanningError
 from app.agent.research_handoff import (
     ResearchHandoff,
     recall_research_handoff,
-)
-from app.agent.running import (
-    RunIdentity,
-    RunInput,
 )
 from app.agent.running.answer_generation import (
     AgentAnswerGenerationRepository,
@@ -55,10 +52,12 @@ from app.agent.running.deadline.deadline_exceeded import (
     check_agent_run_deadline as recover_agent_run,
 )
 from app.agent.running.failure_recording import AgentRunFailureRepository
-from app.agent.runs.contracts import UserQuestionMessage
-from app.agent.runs.execution import Stop, StopReason
-from app.agent.runs.repository import AgentRunRepository
-from app.agent.runs.types import AgentRunErrorCode
+from app.agent.running.question_reading import (
+    AgentRunQuestionRepository,
+    UserQuestionMessage,
+)
+from app.agent.running.stop import AnswerGenerationStopped, StopReason
+from app.agent.running.types import AgentRunErrorCode
 from app.agent.runtime.contract import AgentResponseInvalidError
 from app.agent.threads.contracts import ThreadMessageSnapshot
 from app.agent.threads.history import HISTORY_MESSAGE_LIMIT, normalize_run_history
@@ -187,9 +186,7 @@ async def run_agent_answer(
             events=activity_reporter,
             delta_reporter=delta_reporter,
         )
-        decision = await continuation.should_continue()
-        if isinstance(decision, Stop):
-            raise AnswerGenerationStopped(decision.reason)
+        await continuation.ensure_can_continue()
         run_result = await answering_runner.run(
             RunInput(
                 question=question.content,
@@ -452,7 +449,9 @@ async def _read_user_question(
     run_id: UUID,
 ) -> tuple[UUID, UUID, UserQuestionMessage] | None:
     async with session_factory() as session:
-        return await AgentRunRepository(session).read_user_question_for_run(run_id)
+        return await AgentRunQuestionRepository(session).read_user_question_for_run(
+            run_id
+        )
 
 
 async def _read_history(

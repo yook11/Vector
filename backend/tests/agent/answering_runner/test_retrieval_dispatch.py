@@ -13,6 +13,7 @@ from uuid import UUID
 import pytest
 from logfire.testing import CaptureLogfire
 
+from app.agent import answering_runner as answering_runner_module
 from app.agent.answering.direct_answer.contract import (
     DirectAnswerDraft,
     DirectAnswerInput,
@@ -21,6 +22,7 @@ from app.agent.answering.evidence_answer.contract import (
     EvidenceAnswerDraft,
     EvidenceAnswerInput,
 )
+from app.agent.answering_runner import AnsweringPhases, AnsweringRunner, RunInput
 from app.agent.contract import AnswerProgressStage
 from app.agent.evidence_collection import (
     CollectedNews,
@@ -55,12 +57,10 @@ from app.agent.planning.contract import (
     SearchPlan,
     TargetTimeWindow,
 )
-from app.agent.running import AnsweringPhases, AnsweringRunner, RunInput
-from app.agent.running import answering_runner as answering_runner_module
 from app.agent.runtime.contract import AgentResponseDefect, AgentResponseInvalidError
 from app.analysis.analyzed_article import InScopeAnalyzedArticle
 from app.analysis.assessment.domain.result import InScope, InScopeCategory
-from tests.agent.running._harness import (
+from tests.agent.answering_runner._harness import (
     ExternalScopes,
     PassThroughOrganizer,
     fixed_scope,

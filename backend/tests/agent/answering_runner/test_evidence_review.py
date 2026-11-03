@@ -33,6 +33,7 @@ from app.agent.answering.evidence_answer.contract import (
     EvidenceAnswerDraft,
     EvidenceAnswerInput,
 )
+from app.agent.answering_runner import AnsweringPhases, AnsweringRunner
 from app.agent.evidence_collection import EvidenceCollectionService
 from app.agent.evidence_collection.external_search import ExternalSearchService
 from app.agent.evidence_collection.external_search.contract import ExternalSearch
@@ -48,46 +49,45 @@ from app.agent.evidence_review import (
 )
 from app.agent.evidence_review.agent import EVIDENCE_REVIEWER_AGENT
 from app.agent.planning.contract import ResearchTask, SearchPlan, TargetTimeWindow
-from app.agent.running import AnsweringPhases, AnsweringRunner
 from app.agent.runtime.contract import AgentResponseDefect, AgentResponseInvalidError
-from tests.agent.running._harness import (
+from tests.agent.answering_runner._harness import (
     DEFAULT_TARGET_TIME_WINDOW as _TARGET_TIME_WINDOW,
 )
-from tests.agent.running._harness import (
+from tests.agent.answering_runner._harness import (
     Events as _Events,
 )
-from tests.agent.running._harness import (
+from tests.agent.answering_runner._harness import (
     EvidenceAnswerer as _EvidenceAnswerer,
 )
-from tests.agent.running._harness import (
+from tests.agent.answering_runner._harness import (
     FakeExternalSearchGateway as _FakeExternalSearchGateway,
 )
-from tests.agent.running._harness import (
+from tests.agent.answering_runner._harness import (
     PassThroughOrganizer,
     fixed_scope,
 )
-from tests.agent.running._harness import (
+from tests.agent.answering_runner._harness import (
     Planner as _Planner,
 )
-from tests.agent.running._harness import (
+from tests.agent.answering_runner._harness import (
     UnreachableDirectAnswerer as _UnreachableDirectAnswerer,
 )
-from tests.agent.running._harness import (
+from tests.agent.answering_runner._harness import (
     capture_external_outcome as _capture_external_outcome,
 )
-from tests.agent.running._harness import (
+from tests.agent.answering_runner._harness import (
     execute_run as _run,
 )
-from tests.agent.running._harness import (
+from tests.agent.answering_runner._harness import (
     external_hit as _external_hit,
 )
-from tests.agent.running._harness import (
+from tests.agent.answering_runner._harness import (
     internal_hit as _internal_hit,
 )
-from tests.agent.running._harness import (
+from tests.agent.answering_runner._harness import (
     query_draft as _query_draft,
 )
-from tests.agent.running._harness import (
+from tests.agent.answering_runner._harness import (
     review_draft as _draft,
 )
 from tests.agent.runtime._fakes import ScriptedAgentRuntime
