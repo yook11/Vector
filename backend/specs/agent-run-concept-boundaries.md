@@ -23,6 +23,7 @@
 | `app/agent/running/daily_quota/reservation.py` | 日次利用枠の予約、予約SQL、予約結果、上限超過例外 |
 | `app/agent/running/deadline/policy.py` | 受付時に固定する期限の計算 |
 | `app/agent/running/deadline/deadline_exceeded.py` | DB時刻取得、期限超過の確定・回収、回収結果 |
+| `app/agent/running/deadline/recovery.py` | 期限切れ回収の実行と、回収後のログ・利用枠の観測・終了通知 |
 | `app/agent/threads/result_mapper.py` | 回答結果から会話のメッセージ・出典への変換 |
 | `app/agent/threads/citation_integrity.py` | 保存する回答と出典の引用整合性検査・警告 |
 | `app/agent/running/question_reading.py` | worker向けの質問取得 |
@@ -34,6 +35,8 @@
 | `app/agent/running/continuation.py` | Runの継続可否の判断、短いsessionで確認するprobeとキャッシュ |
 | `app/agent/running/creation.py` | 質問・queuedのRunの作成、利用枠予約、作成結果・例外 |
 | `app/agent/running/attempt_start.py` | Runの開始可否、実行世代の更新、開始結果・不成立理由 |
+| `app/agent/run_execution.py` | workerによる各回の実行(開始・質問と履歴の読み出し・回答・完了と失敗の記録・終了通知) |
+| `app/agent/running/task_boundary.py` | taskiqへ渡す、元の例外の詳細を落とした失敗 |
 | `app/agent/running/answer_generation.py` | 回答生成の開始記録・再生成許可 |
 | `app/agent/running/completion.py` | 回答・出典・申し送りの保存とRun完了の確定、完了の成功・失敗理由 |
 | `app/agent/running/stop.py` | Run実行を止める理由と停止の例外。`StopReason` / `AnswerGenerationStopped` |

@@ -10,7 +10,6 @@ import pytest
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-import app.queue.tasks.agent_run as agent_run_tasks
 from app.agent.contract import (
     AnswerPlanSummary,
     AnswerQuestionResult,
@@ -35,6 +34,7 @@ from app.agent.running.completion import (
 )
 from app.agent.running.failure_recording import AgentRunFailureRepository
 from app.agent.running.question_reading import AgentRunQuestionRepository
+from app.agent.running.types import AgentRunErrorCode
 from app.models.agent_message import AgentMessage, AgentMessageSource
 from app.models.agent_run import AgentRun
 from app.models.agent_thread import AgentThread
@@ -323,7 +323,7 @@ async def test_complete_run_lost_race_rolls_back_assistant_message(
                     await AgentRunFailureRepository(winner_session).mark_failed(
                         run.id,
                         expected_attempt_epoch=run.attempt_epoch,
-                        error_code=agent_run_tasks.AgentRunErrorCode.STALE,
+                        error_code=AgentRunErrorCode.STALE,
                     )
 
         async with stale_session.begin():
@@ -460,7 +460,7 @@ async def test_stale_mark_failed_does_not_alter_newer_attempt(
             transitioned = await AgentRunFailureRepository(session).mark_failed(
                 run.id,
                 expected_attempt_epoch=1,
-                error_code=agent_run_tasks.AgentRunErrorCode.STALE,
+                error_code=AgentRunErrorCode.STALE,
             )
 
     assert transitioned is False
@@ -673,7 +673,7 @@ async def test_start_run_reports_idempotent_skip_when_transition_loses_race(
         changed = await AgentRunFailureRepository(winner).mark_failed(
             run.id,
             expected_attempt_epoch=run.attempt_epoch,
-            error_code=agent_run_tasks.AgentRunErrorCode.STALE,
+            error_code=AgentRunErrorCode.STALE,
         )
         assert changed is True
         start_task = asyncio.create_task(start_once())

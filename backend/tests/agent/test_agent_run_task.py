@@ -20,6 +20,7 @@ from taskiq import InMemoryBroker
 from taskiq.message import TaskiqMessage
 from taskiq.receiver import Receiver
 
+import app.agent.run_execution as run_execution
 import app.queue.tasks.agent_run as agent_run_tasks
 from app.agent.answering import timing as answer_timing
 from app.agent.answering.direct_answer.failure import DirectAnswerError
@@ -56,6 +57,8 @@ from app.agent.running.completion import (
 )
 from app.agent.running.failure_recording import AgentRunFailureRepository
 from app.agent.running.stop import AnswerGenerationStopped, StopReason
+from app.agent.running.task_boundary import AgentRunTaskBoundaryError
+from app.agent.running.types import AgentRunErrorCode
 from app.agent.runtime.contract import AgentResponseDefect, AgentResponseInvalidError
 from app.agent.threads.contracts import ThreadMessageSnapshot
 from app.agent.threads.repository import AgentThreadRepository
@@ -73,7 +76,6 @@ from app.models.agent_run import AgentRun
 from app.models.agent_thread import AgentThread
 from app.models.agent_user_daily_quota import AgentUserDailyQuota
 from app.queue.messages.agent_run import AgentRunTrigger
-from app.queue.tasks.agent_run import AgentRunTaskBoundaryError
 from app.shared.web_url import WebUrl
 from tests.agent.running._seed import (
     create_thread_message_run as _create_thread_message_run,
@@ -387,7 +389,7 @@ def _patch_worker_execution(
         return answering_runner
 
     monkeypatch.setattr(
-        agent_run_tasks,
+        run_execution,
         "build_answering_runner",
         build_runner,
         raising=False,
@@ -405,7 +407,7 @@ def _patch_delta_worker(
     monkeypatch.setattr(FakeLiveStreamPublisher, "publish_outcomes", [])
     _patch_worker_execution(monkeypatch, builder)
     monkeypatch.setattr(
-        agent_run_tasks,
+        run_execution,
         "AgentRunLiveStreamPublisher",
         stream_publisher,
     )
@@ -875,7 +877,7 @@ async def test_run_agent_answer_completion_preserves_last_progress_stage(
 
     _patch_worker_execution(monkeypatch, build_agent)
     monkeypatch.setattr(
-        agent_run_tasks,
+        run_execution,
         "AgentRunLiveStreamPublisher",
         FakeLiveStreamPublisher,
     )
@@ -941,7 +943,7 @@ async def test_run_agent_answer_starts_stream_attempt_only_after_start(
 
     _patch_worker_execution(monkeypatch, build_agent)
     monkeypatch.setattr(
-        agent_run_tasks,
+        run_execution,
         "AgentRunLiveStreamPublisher",
         FakeLiveStreamPublisher,
         raising=False,
@@ -981,24 +983,24 @@ async def test_run_agent_answer_binds_attempt_epoch_to_live_and_db_controls(
 
     _patch_worker_execution(monkeypatch, build_agent)
     monkeypatch.setattr(
-        agent_run_tasks,
+        run_execution,
         "AgentRunLiveStreamPublisher",
         FakeLiveStreamPublisher,
     )
     monkeypatch.setattr(
-        agent_run_tasks,
+        run_execution,
         "AgentRunLiveAnswerDeltaReporter",
         CapturingDeltaReporter,
         raising=False,
     )
     monkeypatch.setattr(
-        agent_run_tasks,
+        run_execution,
         "AgentRunExecutionProbe",
         CapturingExecutionProbe,
         raising=False,
     )
     monkeypatch.setattr(
-        agent_run_tasks,
+        run_execution,
         "AgentAnswerGenerationRepository",
         CapturingAnswerStart,
         raising=False,
@@ -1060,19 +1062,19 @@ async def test_answer_start_deadline_publishes_existing_terminal_event(
         return DeadlineAtAnswerStartRunner(kwargs["repository"])
 
     monkeypatch.setattr(
-        agent_run_tasks,
+        run_execution,
         "build_answering_runner",
         build_runner,
         raising=False,
     )
     monkeypatch.setattr(
-        agent_run_tasks,
+        run_execution,
         "AgentRunExecutionProbe",
         CapturingExecutionProbe,
         raising=False,
     )
     monkeypatch.setattr(
-        agent_run_tasks,
+        run_execution,
         "AgentRunLiveStreamPublisher",
         FakeLiveStreamPublisher,
     )
@@ -1109,7 +1111,7 @@ async def test_run_agent_answer_continues_when_stream_begin_attempt_raises(
     monkeypatch.setattr(FakeLiveStreamPublisher, "raise_on_begin", True)
     _patch_worker_execution(monkeypatch, lambda **_kwargs: fake_agent)
     monkeypatch.setattr(
-        agent_run_tasks,
+        run_execution,
         "AgentRunLiveStreamPublisher",
         FakeLiveStreamPublisher,
         raising=False,
@@ -1149,31 +1151,31 @@ async def test_idempotent_skip_does_not_create_or_start_stream_publisher(
         )
 
     monkeypatch.setattr(
-        agent_run_tasks,
+        run_execution,
         "build_answering_runner",
         forbidden_builder,
         raising=False,
     )
     monkeypatch.setattr(
-        agent_run_tasks,
+        run_execution,
         "AgentRunLiveStreamPublisher",
         FakeLiveStreamPublisher,
         raising=False,
     )
     monkeypatch.setattr(
-        agent_run_tasks,
+        run_execution,
         "AgentRunLiveAnswerDeltaReporter",
         ForbiddenConstruction,
         raising=False,
     )
     monkeypatch.setattr(
-        agent_run_tasks,
+        run_execution,
         "AgentRunExecutionProbe",
         ForbiddenConstruction,
         raising=False,
     )
     monkeypatch.setattr(
-        agent_run_tasks,
+        run_execution,
         "AgentAnswerGenerationRepository",
         ForbiddenConstruction,
         raising=False,
@@ -1246,14 +1248,14 @@ async def test_run_agent_answer_passes_answering_runner_identity_and_history(
         "make_external_async_client",
     ):
         monkeypatch.setattr(
-            agent_run_tasks,
+            run_execution,
             legacy_name,
             fail_if_legacy_semantic_owner_is_called,
             raising=False,
         )
-    monkeypatch.setattr(agent_run_tasks, "datetime", FixedDateTime)
+    monkeypatch.setattr(run_execution, "datetime", FixedDateTime)
     monkeypatch.setattr(
-        agent_run_tasks,
+        run_execution,
         "AgentRunLiveStreamPublisher",
         FakeLiveStreamPublisher,
     )
@@ -1321,7 +1323,7 @@ async def test_run_agent_answer_publishes_completed_terminal_after_commit(
 
     _patch_worker_execution(monkeypatch, lambda **_kwargs: fake_agent)
     monkeypatch.setattr(
-        agent_run_tasks,
+        run_execution,
         "AgentRunLiveStreamPublisher",
         CommitCheckingPublisher,
     )
@@ -1364,7 +1366,7 @@ async def test_completion_deadline_publishes_after_commit_and_survives_publish_f
 
     _patch_worker_execution(monkeypatch, lambda **_kwargs: fake_agent)
     monkeypatch.setattr(
-        agent_run_tasks,
+        run_execution,
         "AgentRunLiveStreamPublisher",
         CommitCheckingPublisher,
     )
@@ -1414,7 +1416,7 @@ async def test_run_agent_answer_publishes_failed_terminal_after_commit(
 
     _patch_worker_execution(monkeypatch, lambda **_kwargs: fake_agent)
     monkeypatch.setattr(
-        agent_run_tasks,
+        run_execution,
         "AgentRunLiveStreamPublisher",
         CommitCheckingPublisher,
     )
@@ -1464,10 +1466,10 @@ async def test_generation_stopped_is_routine_return_without_run_transition(
         _repository: AgentRunFailureRepository,
         run_id: UUID,
         *,
-        error_code: agent_run_tasks.AgentRunErrorCode,
+        error_code: AgentRunErrorCode,
         expected_attempt_epoch: int,
     ) -> bool:
-        assert error_code == agent_run_tasks.AgentRunErrorCode.INTERNAL_ERROR
+        assert error_code == AgentRunErrorCode.INTERNAL_ERROR
         mark_failed_calls.append((run_id, expected_attempt_epoch))
         return False
 
@@ -1537,7 +1539,7 @@ async def test_epoch_advance_before_answer_start_stops_old_worker_through_actual
             return self.now
 
     clock = ManualClock()
-    production_probe_type = agent_run_tasks.AgentRunExecutionProbe
+    production_probe_type = run_execution.AgentRunExecutionProbe
     probe_bindings: list[tuple[object, UUID, int]] = []
     complete_calls: list[tuple[UUID, int]] = []
     mark_failed_calls: list[tuple[UUID, int]] = []
@@ -1600,20 +1602,20 @@ async def test_epoch_advance_before_answer_start_stops_old_worker_through_actual
         _repository: AgentRunFailureRepository,
         run_id: UUID,
         *,
-        error_code: agent_run_tasks.AgentRunErrorCode,
+        error_code: AgentRunErrorCode,
         expected_attempt_epoch: int,
     ) -> bool:
-        assert error_code == agent_run_tasks.AgentRunErrorCode.INTERNAL_ERROR
+        assert error_code == AgentRunErrorCode.INTERNAL_ERROR
         mark_failed_calls.append((run_id, expected_attempt_epoch))
         return False
 
     FakeLiveStreamPublisher.instances = []
     monkeypatch.setattr(FakeLiveStreamPublisher, "publish_outcomes", [])
     monkeypatch.setattr(
-        agent_run_tasks, "AgentRunLiveStreamPublisher", FakeLiveStreamPublisher
+        run_execution, "AgentRunLiveStreamPublisher", FakeLiveStreamPublisher
     )
-    monkeypatch.setattr(agent_run_tasks, "build_answering_runner", build_runner)
-    monkeypatch.setattr(agent_run_tasks, "AgentRunExecutionProbe", build_probe)
+    monkeypatch.setattr(run_execution, "build_answering_runner", build_runner)
+    monkeypatch.setattr(run_execution, "AgentRunExecutionProbe", build_probe)
     monkeypatch.setattr(AgentRunCompletionRepository, "complete_run", observe_complete)
     monkeypatch.setattr(AgentRunFailureRepository, "mark_failed", observe_mark_failed)
 
@@ -1689,7 +1691,7 @@ async def test_deadline_stop_publishes_terminal_without_mark_failed(
             return self.now
 
     clock = ManualClock()
-    production_probe_type = agent_run_tasks.AgentRunExecutionProbe
+    production_probe_type = run_execution.AgentRunExecutionProbe
     mark_failed_calls: list[tuple[UUID, int]] = []
     probes: list[object] = []
 
@@ -1735,14 +1737,14 @@ async def test_deadline_stop_publishes_terminal_without_mark_failed(
         _repository: AgentRunFailureRepository,
         run_id: UUID,
         *,
-        error_code: agent_run_tasks.AgentRunErrorCode,
+        error_code: AgentRunErrorCode,
         expected_attempt_epoch: int,
     ) -> bool:
         mark_failed_calls.append((run_id, expected_attempt_epoch))
         return False
 
     _patch_delta_worker(monkeypatch, build_agent)
-    monkeypatch.setattr(agent_run_tasks, "AgentRunExecutionProbe", build_probe)
+    monkeypatch.setattr(run_execution, "AgentRunExecutionProbe", build_probe)
     monkeypatch.setattr(AgentRunFailureRepository, "mark_failed", observe_mark_failed)
 
     await agent_run_tasks.run_agent_answer(
@@ -2100,7 +2102,7 @@ async def test_completion_failure_publishes_failed_terminal(
 
     _patch_worker_execution(monkeypatch, lambda **_kwargs: fake_agent)
     monkeypatch.setattr(
-        agent_run_tasks,
+        run_execution,
         "AgentRunLiveStreamPublisher",
         FakeLiveStreamPublisher,
     )
@@ -2161,7 +2163,7 @@ async def test_completion_skip_does_not_publish_terminal(
 
     _patch_worker_execution(monkeypatch, lambda **_kwargs: fake_agent)
     monkeypatch.setattr(
-        agent_run_tasks,
+        run_execution,
         "AgentRunLiveStreamPublisher",
         FakeLiveStreamPublisher,
     )
@@ -2199,19 +2201,19 @@ async def test_failed_transition_loser_does_not_publish_terminal(
         _repo: AgentRunFailureRepository,
         run_id: UUID,
         *,
-        error_code: agent_run_tasks.AgentRunErrorCode,
+        error_code: AgentRunErrorCode,
         expected_attempt_epoch: int,
     ) -> bool:
         assert (run_id, error_code, expected_attempt_epoch) == (
             run.id,
-            agent_run_tasks.AgentRunErrorCode.GENERATION_UNAVAILABLE,
+            AgentRunErrorCode.GENERATION_UNAVAILABLE,
             1,
         )
         return False
 
     _patch_worker_execution(monkeypatch, lambda **_kwargs: fake_agent)
     monkeypatch.setattr(
-        agent_run_tasks,
+        run_execution,
         "AgentRunLiveStreamPublisher",
         FakeLiveStreamPublisher,
     )
@@ -2247,7 +2249,7 @@ async def test_terminal_publish_failure_does_not_revert_completed_run(
 
     _patch_worker_execution(monkeypatch, build_agent)
     monkeypatch.setattr(
-        agent_run_tasks,
+        run_execution,
         "AgentRunLiveStreamPublisher",
         FakeLiveStreamPublisher,
     )
@@ -2551,7 +2553,7 @@ async def test_run_agent_answer_unexpected_error_marks_internal_error(
     FakeLiveStreamPublisher.instances = []
     _patch_worker_execution(monkeypatch, lambda **_kwargs: fake_agent)
     monkeypatch.setattr(
-        agent_run_tasks,
+        run_execution,
         "AgentRunLiveStreamPublisher",
         FakeLiveStreamPublisher,
     )
@@ -2626,9 +2628,13 @@ async def test_taskiq_receiver_result_and_log_expose_only_safe_start_error(
     async def fail_start(*_args: object, **_kwargs: object) -> object:
         raise SensitivePersistenceFailure
 
-    monkeypatch.setattr(agent_run_tasks, "_start_run", fail_start)
+    monkeypatch.setattr(run_execution, "_start_run", fail_start)
     broker = InMemoryBroker()
     broker.state.session_factory = object()
+    broker.state.agent_live_redis = object()
+    broker.state.agent_deadline_scheduler = SimpleNamespace(
+        reserve_in_background=lambda *_: None
+    )
     receiver = Receiver(
         broker,
         max_async_tasks=1,
@@ -2704,7 +2710,7 @@ async def test_start_commit_failure_raises_sanitized_task_boundary_error(
 
     FakeLiveStreamPublisher.instances = []
     monkeypatch.setattr(
-        agent_run_tasks,
+        run_execution,
         "AgentRunLiveStreamPublisher",
         FakeLiveStreamPublisher,
     )
@@ -2760,7 +2766,7 @@ async def test_provider_timeout_error_follows_existing_unexpected_error_path(
         lambda **_kwargs: FakeAgent(exc=TimeoutError("provider timeout")),
     )
     monkeypatch.setattr(
-        agent_run_tasks,
+        run_execution,
         "AgentRunLiveStreamPublisher",
         FakeLiveStreamPublisher,
     )
@@ -2833,7 +2839,7 @@ async def test_completion_rolls_back_written_artifacts(
     )
     FakeLiveStreamPublisher.instances = []
     monkeypatch.setattr(
-        agent_run_tasks, "AgentRunLiveStreamPublisher", FakeLiveStreamPublisher
+        run_execution, "AgentRunLiveStreamPublisher", FakeLiveStreamPublisher
     )
     sa_event.listen(Session, "after_flush", invalidate_attempt_after_sources)
     sa_event.listen(Session, "before_commit", fail_completed_commit)

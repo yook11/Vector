@@ -126,7 +126,7 @@ target module名は責任を示す案であり、実装PRで最終確定する�
 | RUN | outer run・context・hook・run span | `AnsweringRunner` / `running/test_answering_runner.py`, `running/test_answering_workflow.py` | owner不変 | Scripted preparer/phases。spanは実Runner |
 | TH | bounded history・thread projection | `AgentThreadRepository`, projection / `threads/test_repository.py`ほか | 不変 | 実test DB |
 | RP | Run lifecycle・completion・race・mapping | `AgentRunRepository`, result mapper / 現在worker巨大file内 | `runs/test_repository_*.py`, `test_result_mapper.py`へ移す | 実test DB |
-| WK | persistent attempt coordination | `queue/tasks/agent_run.py` / `test_agent_run_task.py` | owner不変。wiring/outcome/live/logへ分割 | Recording Runner/publisher。repositoryは実物 |
+| WK | persistent attempt coordination | `agent/run_execution.py` / `test_agent_run_task.py` | owner不変。wiring/outcome/live/logへ分割 | Recording Runner/publisher。repositoryは実物 |
 | LIVE | List/Stream/delta/SSE | `live_updates/` / `live_updates/test_*.py` | owner不変 | unit用Redis double＋real Redis integration |
 | API | research router・公開schema | router＋Pydantic schema / `test_router_research.py` | owner不変。response/thread/run/contractへ分割案 | enqueue/Redisのみ差し替え、実ASGI＋DB |
 | CP | provider resource構築・配線 | `composition.py` / `test_composition.py` | PR4 factory、PR5 phases factoryへ段階的に置換 | SDK client factory / constructor recorder |
