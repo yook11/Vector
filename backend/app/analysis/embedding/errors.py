@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from enum import StrEnum
 
+from app.shared.errors import ApplicationError
+
 
 class EmbeddingFailureReason(StrEnum):
     """呼び出し側の再試行方針とは独立した失敗理由。"""
@@ -12,14 +14,24 @@ class EmbeddingFailureReason(StrEnum):
     RESPONSE_INVALID = "response_invalid"
 
 
-class EmbeddingError(Exception):
+class EmbeddingError(ApplicationError):
     """Embedding工程で確定した失敗理由を呼び出し元へ伝える。"""
 
     def __init__(self, *, reason: EmbeddingFailureReason) -> None:
         if not isinstance(reason, EmbeddingFailureReason):
             raise TypeError("reason must be an EmbeddingFailureReason")
-        super().__init__()
         self.reason = reason
+        message = {
+            EmbeddingFailureReason.ARTICLE_MISSING: (
+                "埋め込み対象の分析記事が存在しません"
+            ),
+            EmbeddingFailureReason.RESPONSE_INVALID: (
+                "埋め込み応答がベクトルの契約を満たしていません"
+            ),
+        }[reason]
+        super().__init__(
+            message, details={"reason": self.reason.value, "code": self.code}
+        )
 
     @property
     def code(self) -> str:

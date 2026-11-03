@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from enum import StrEnum
 
+from app.shared.errors import ApplicationError
+
 
 class CurationFailureReason(StrEnum):
     """呼び出し側の再試行・記事削除方針から独立した失敗理由。"""
@@ -11,14 +13,21 @@ class CurationFailureReason(StrEnum):
     RESPONSE_INVALID = "response_invalid"
 
 
-class CurationError(Exception):
+class CurationError(ApplicationError):
     """Curation工程で確定した失敗理由を呼び出し元へ伝える。"""
 
     def __init__(self, *, reason: CurationFailureReason) -> None:
         if not isinstance(reason, CurationFailureReason):
             raise TypeError("reason must be CurationFailureReason")
-        super().__init__()
         self.reason = reason
+        message = {
+            CurationFailureReason.RESPONSE_INVALID: (
+                "AI応答がCurationの契約を満たしていません"
+            ),
+        }[reason]
+        super().__init__(
+            message, details={"reason": self.reason.value, "code": self.code}
+        )
 
     @property
     def code(self) -> str:

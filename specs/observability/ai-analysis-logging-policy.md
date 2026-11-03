@@ -248,7 +248,7 @@ Assessment handlerの`setup_lambda_logging()`呼び出しは削除済みで、�
 | 二次障害 | §3.3.2と同じ2イベント | 対象IDはCurationが`analyzable_article_id`、Embeddingが`analyzed_article_id`。 |
 | AI呼び出し | `curator_api_call/success` / `embedder_api_call/success` | モデルを束縛したロガーから`model`。 |
 
-`noise_id`と保存ログの`model`は出さない（Assessmentの保存ログと同じ）。共通コードのモジュールロガー（`gemini_resource_exhausted`・`gemini_client_cleanup_failed`）はこの接続に含めず、Assessmentと同じくJSONの全体設定なしで出力される。工程例外（`CurationError`・`EmbeddingError`）は`ApplicationError`ではないため、`exc_info`の診断は例外型と空の説明になる。
+`noise_id`と保存ログの`model`は出さない（Assessmentの保存ログと同じ）。共通コードのモジュールロガー（`gemini_resource_exhausted`・`gemini_client_cleanup_failed`）はこの接続に含めず、Assessmentと同じくJSONの全体設定なしで出力される。工程例外（`CurationError`・`EmbeddingError`）もAssessmentと同じく`ApplicationError`を継承し、固定文の説明と`code`・`reason`を診断に渡す。
 
 ### 3.4 禁止・サニタイズ
 
