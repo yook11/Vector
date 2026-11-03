@@ -223,7 +223,7 @@ Lambdaの完了ログは`reason=ready_build_rejected`と`rejection_code`を持�
 
 Repositoryの保存ID／競合時`None`／例外の契約とトランザクションを維持する。保存・監査・Outbox・commitの失敗をCompletionへ変換しない。AIの`Signal | Noise`も変更しない。
 
-`errors.py`の`CurationFailureReason`は`PROVIDER_ERROR`と`RESPONSE_INVALID`を持つ。`CurationError`は理由と分類済みの元プロバイダー例外を保持する。プロバイダー障害では元例外を必須とし、Serviceは`raise to_curation_error(exc) from exc`で同一性と原因チェーンを保つ。`CurationResponseInvalidError()`は引数なし・コード`extraction_response_invalid`を維持する。文字列表現は安全なコードだけとし、再試行・hold・記事削除の制御属性を持たない。既存Curationエラー・DB障害・timeout・想定外例外は変換しない。
+`errors.py`の`CurationFailureReason`は`RESPONSE_INVALID`を持つ。`CurationResponseInvalidError()`は引数なし・コード`extraction_response_invalid`を維持する。説明は入力値を含まない固定文とし、再試行・hold・記事削除の制御属性を持たない。AIプロバイダーの失敗・DB障害・timeout・想定外例外は`CurationError`に包まず伝播する。
 
 旧経路の`CurationRecoverableError`／`CurationTerminalKeepError`／`CurationTerminalDropError`は`task_errors.py`へ置き、`CurationTaskError`を共通基底とする。`to_curation_task_error`がServiceエラーを既存の再試行・保持・削除方針へ対応付ける。プロバイダー障害の原因チェーンはTaskエラー → Serviceエラー → 元プロバイダー例外となる。旧TaskiqはReady拒否を値で分岐し、Serviceの`SIGNAL`だけでAssessmentを投入する。Noise・処理済み・Ready拒否では投入しない。CLIも同じ旧経路分類へ接続し、再試行回数・成功／失敗／スキップ・dry-run・既存Signalの更新を維持する。
 

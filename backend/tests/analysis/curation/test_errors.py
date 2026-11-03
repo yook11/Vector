@@ -75,18 +75,6 @@ async def test_service_propagates_ai_call_errors_without_opening_database(
     session_factory.assert_not_called()
 
 
-def test_curation_error_directly_inherits_exception():
-    """工程例外はログ固有の基底クラスへ依存しない。"""
-    assert CurationError.__bases__ == (Exception,)
-
-
-def test_curation_error_uses_standard_empty_message():
-    """メッセージ未指定の例外文字列をcodeで補完しない。"""
-    error = CurationResponseInvalidError()
-    assert error.args == ()
-    assert str(error) == ""
-
-
 def test_response_invalid_is_curation_error():
     """応答不正を工程例外として捕捉できる。"""
     assert issubclass(CurationResponseInvalidError, CurationError)
