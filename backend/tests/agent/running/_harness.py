@@ -45,7 +45,6 @@ from app.agent.research_handoff import ResearchHandoff, ResearchHandoffInput
 from app.agent.running import AnsweringRunner, RunIdentity, RunInput
 from app.agent.running import answering_runner as answering_runner_module
 from app.agent.running.answer_generation import AnswerGenerationStarted
-from app.agent.runs.execution import Continue, Stop
 from app.analysis.analyzed_article import InScopeAnalyzedArticle
 from app.analysis.assessment.domain.result import InScope, InScopeCategory
 
@@ -70,19 +69,18 @@ class AllowAnswerGenerationStart:
             self._timeline.append("answer_start")
         return AnswerGenerationStarted(RUN_ID, AS_OF)
 
-    async def authorize_answer_regeneration(self) -> Continue:
+    async def authorize_answer_regeneration(self) -> None:
         self.authorize_calls += 1
-        return Continue()
 
 
 class ScriptedAnswerGenerationRepository:
     def __init__(
         self,
         *,
-        start: AnswerGenerationStarted | Stop | BaseException = AnswerGenerationStarted(
+        start: AnswerGenerationStarted | BaseException = AnswerGenerationStarted(
             RUN_ID, AS_OF
         ),
-        authorizes: list[Continue | Stop | BaseException] | None = None,
+        authorizes: list[BaseException | None] | None = None,
         timeline: list[str] | None = None,
     ) -> None:
         self.calls = 0
@@ -92,7 +90,7 @@ class ScriptedAnswerGenerationRepository:
         self._authorizes = list(authorizes or [])
         self._timeline = timeline
 
-    async def start_answer_generation(self) -> AnswerGenerationStarted | Stop:
+    async def start_answer_generation(self) -> AnswerGenerationStarted:
         self.calls += 1
         self.start_calls += 1
         if self._timeline is not None:
@@ -101,14 +99,13 @@ class ScriptedAnswerGenerationRepository:
             raise self._start
         return self._start
 
-    async def authorize_answer_regeneration(self) -> Continue | Stop:
+    async def authorize_answer_regeneration(self) -> None:
         self.authorize_calls += 1
         if not self._authorizes:
-            return Continue()
+            return
         outcome = self._authorizes.pop(0)
-        if isinstance(outcome, BaseException):
+        if outcome is not None:
             raise outcome
-        return outcome
 
 
 def review_draft(

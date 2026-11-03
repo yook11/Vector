@@ -11,7 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.agent.running.continuation import AgentRunContinuationRepository
 from app.agent.running.deadline.deadline_exceeded import expire_run
-from app.agent.runs.execution import Continue, Stop, StopReason
+from app.agent.runs.execution import StopReason
 from app.agent.runs.types import AgentRunStatus
 from app.models.agent_run import AgentRun
 from app.models.agent_user_daily_quota import AgentUserDailyQuota
@@ -57,7 +57,7 @@ async def _decide(
     run_id: uuid.UUID,
     attempt_epoch: int,
     now: datetime,
-) -> Continue | Stop:
+) -> StopReason | None:
     async with session_factory() as session:
         async with session.begin():
             return await AgentRunContinuationRepository(
@@ -97,7 +97,7 @@ async def test_current_attempt_before_deadline_continues_without_write(
         attempt_epoch=1,
         now=_BEFORE_DEADLINE,
     )
-    assert result == Continue()
+    assert result is None
     assert await _load(session_factory, run_id) == ("running", 1, 1)
 
 
@@ -114,7 +114,7 @@ async def test_current_attempt_at_or_after_deadline_stops_and_expires(
         attempt_epoch=1,
         now=now,
     )
-    assert result == Stop(StopReason.DEADLINE_EXCEEDED)
+    assert result is StopReason.DEADLINE_EXCEEDED
     assert await _load(session_factory, run_id) == ("deadline_exceeded", 1, 1)
 
 
@@ -129,7 +129,7 @@ async def test_wrong_epoch_or_non_running_stops_without_write(
         attempt_epoch=1,
         now=_DEADLINE_AT,
     )
-    assert result == Stop(StopReason.NOT_CURRENT)
+    assert result is StopReason.NOT_CURRENT
     assert await _load(session_factory, run_id) == ("running", 2, 1)
 
 
@@ -154,7 +154,7 @@ async def test_already_expired_run_stops_without_rewrite(
         attempt_epoch=1,
         now=_DEADLINE_AT,
     )
-    assert result == Stop(StopReason.NOT_CURRENT)
+    assert result is StopReason.NOT_CURRENT
     assert await _load(session_factory, run_id) == ("deadline_exceeded", 1, 1)
 
 
@@ -178,5 +178,5 @@ async def test_expire_race_loss_is_not_current(
         attempt_epoch=1,
         now=_DEADLINE_AT,
     )
-    assert result == Stop(StopReason.NOT_CURRENT)
+    assert result is StopReason.NOT_CURRENT
     assert await _load(session_factory, run_id) == ("running", 1, 1)

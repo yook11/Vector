@@ -35,7 +35,7 @@
 | `app/agent/running/attempt_start.py` | Runの開始可否、実行世代の更新、開始結果・不成立理由 |
 | `app/agent/running/answer_generation.py` | 回答生成の開始記録・再生成許可 |
 | `app/agent/running/completion.py` | 回答・出典・申し送りの保存とRun完了の確定、完了の成功・失敗理由 |
-| `app/agent/runs/execution.py` | 1回のRun実行を続けてよいか。`Continue` / `Stop` |
+| `app/agent/runs/execution.py` | Run実行を止める理由。`StopReason` |
 
 日次利用枠の予約は `reserve_daily_quota()`、`_build_daily_quota_reservation_statement()`、
 `DailyQuotaReservation`、`DailyRequestLimitExceededError` を `daily_quota/reservation.py` にまとめる。
@@ -99,8 +99,8 @@ worker向け質問取得は既存の場所に残し、旧repository / contracts�
 `AgentRunExecutionProbe` を `running/continuation.py` にまとめる。
 状態・実行世代・元の開始期限で判断し、超過時は既存の `expire_run()` で確定する。
 DB時刻の取得順序を維持し、行ロックや回答開始後の回収期限による判定を追加しない。
-probeが短いsessionとトランザクション、2秒のContinueキャッシュとStop保持を所有する。
-確認の例外時は既存のログ・メトリクスを記録してContinueをキャッシュする。
+probeが短いsessionとトランザクション、2秒の継続キャッシュと停止理由の保持を所有し、停止時は`AnswerGenerationStopped`を送出する。
+確認の例外時は既存のログ・メトリクスを記録して継続をキャッシュする。
 workerで呼ぶ位置と `runs/execution.py` の共通語彙は維持し、旧repository / probeから再公開しない。
 期限管理は `running/deadline/` に置き、旧 `run_deadline` からの委譲・再公開は残さない。
 `policy.py` は60秒の定義と期限計算、`deadline_exceeded.py` は単件・全体・スレッド単位の確定と結果を所有する。

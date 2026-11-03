@@ -29,7 +29,7 @@ from app.agent.recording.direct_answer import (
     DirectAnswerOutcome,
     DirectAnswerSucceeded,
 )
-from app.agent.runs.execution import Continue, Stop, StopReason
+from app.agent.runs.execution import StopReason
 from app.agent.threads.contracts import ThreadMessageSnapshot
 from app.ai_providers.errors import (
     AIProviderResultError,
@@ -771,7 +771,7 @@ async def test_generation_stop_records_stopped_without_outcome() -> None:
         await _service(
             runtime,
             repository=ScriptedAnswerGenerationRepository(
-                authorizes=[Stop(StopReason.NOT_CURRENT)]
+                authorizes=[AnswerGenerationStopped(StopReason.NOT_CURRENT)]
             ),
             recorder=recorder,
         ).answer(_input())
@@ -841,13 +841,13 @@ async def test_start_continue_reports_answering_before_generation() -> None:
 @pytest.mark.parametrize(
     "outcome",
     [
-        Stop(StopReason.DEADLINE_EXCEEDED),
-        Stop(StopReason.NOT_CURRENT),
+        AnswerGenerationStopped(StopReason.DEADLINE_EXCEEDED),
+        AnswerGenerationStopped(StopReason.NOT_CURRENT),
         RuntimeError("answer start transaction failed"),
     ],
 )
 async def test_start_rejection_does_not_generate_or_report_answering(
-    outcome: Continue | Stop | BaseException,
+    outcome: BaseException,
 ) -> None:
     runtime = ScriptedStreamingRuntime(["呼ばれない"])
     enters = 0
@@ -862,8 +862,7 @@ async def test_start_rejection_does_not_generate_or_report_answering(
     progress = _RecordingProgress()
     recorder = RecordingDirectAnswerRecorder()
 
-    expected = AnswerGenerationStopped if isinstance(outcome, Stop) else type(outcome)
-    with pytest.raises(expected) as raised:
+    with pytest.raises(type(outcome)) as raised:
         await DirectAnswerService(
             schedule_deadline_check=lambda *_: None,
             agent=DIRECT_ANSWER_AGENT,
@@ -873,10 +872,7 @@ async def test_start_rejection_does_not_generate_or_report_answering(
             recorder=recorder,
         ).answer(_input())
 
-    if isinstance(outcome, Stop):
-        assert raised.value.reason is outcome.reason
-    else:
-        assert raised.value is outcome
+    assert raised.value is outcome
     assert start.calls == 1
     assert enters == 0
     assert runtime.calls == []
@@ -888,7 +884,7 @@ async def test_start_rejection_does_not_generate_or_report_answering(
 async def test_regeneration_stop_does_not_start_second_generation() -> None:
     runtime = ScriptedStreamingRuntime([" \n\t", "呼ばれない"])
     repository = ScriptedAnswerGenerationRepository(
-        authorizes=[Stop(StopReason.DEADLINE_EXCEEDED)]
+        authorizes=[AnswerGenerationStopped(StopReason.DEADLINE_EXCEEDED)]
     )
 
     with pytest.raises(AnswerGenerationStopped) as raised:

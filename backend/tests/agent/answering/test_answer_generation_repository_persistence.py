@@ -10,12 +10,13 @@ import pytest
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from app.agent.contract import AnswerGenerationStopped
 from app.agent.running.answer_generation import (
     AgentAnswerGenerationRepository,
     AnswerGenerationStarted,
     _start_answer_generation,
 )
-from app.agent.runs.execution import Continue, Stop, StopReason
+from app.agent.runs.execution import StopReason
 from app.models.agent_run import AgentRun
 from tests.agent.runs._seed import create_thread_message_run
 
@@ -111,12 +112,13 @@ async def test_start_at_deadline_expires_without_recording_start(
 ) -> None:
     run_id = await _seed_running(session_factory)
 
-    result = await _repository(session_factory, run_id).start_answer_generation(
-        now=_DEADLINE_AT
-    )
+    with pytest.raises(AnswerGenerationStopped) as stopped:
+        await _repository(session_factory, run_id).start_answer_generation(
+            now=_DEADLINE_AT
+        )
 
     run = await _load_run(session_factory, run_id)
-    assert result == Stop(StopReason.DEADLINE_EXCEEDED)
+    assert stopped.value.reason is StopReason.DEADLINE_EXCEEDED
     assert run.status == "deadline_exceeded"
     assert run.answer_started_at is None
 
@@ -127,12 +129,13 @@ async def test_start_stale_attempt_does_not_record_or_expire_run(
 ) -> None:
     run_id = await _seed_running(session_factory)
 
-    result = await _repository(
-        session_factory, run_id, attempt_epoch=_ATTEMPT_EPOCH - 1
-    ).start_answer_generation(now=_DEADLINE_AT)
+    with pytest.raises(AnswerGenerationStopped) as stopped:
+        await _repository(
+            session_factory, run_id, attempt_epoch=_ATTEMPT_EPOCH - 1
+        ).start_answer_generation(now=_DEADLINE_AT)
 
     run = await _load_run(session_factory, run_id)
-    assert result == Stop(StopReason.NOT_CURRENT)
+    assert stopped.value.reason is StopReason.NOT_CURRENT
     assert run.status == "running"
     assert run.answer_started_at is None
 
@@ -147,12 +150,13 @@ async def test_start_terminal_run_does_not_record_or_overwrite_status(
         error_code="internal_error",
     )
 
-    result = await _repository(session_factory, run_id).start_answer_generation(
-        now=_BEFORE_DEADLINE
-    )
+    with pytest.raises(AnswerGenerationStopped) as stopped:
+        await _repository(session_factory, run_id).start_answer_generation(
+            now=_BEFORE_DEADLINE
+        )
 
     run = await _load_run(session_factory, run_id)
-    assert result == Stop(StopReason.NOT_CURRENT)
+    assert stopped.value.reason is StopReason.NOT_CURRENT
     assert run.status == "failed"
     assert run.answer_started_at is None
 
@@ -166,12 +170,13 @@ async def test_start_recorded_start_is_not_overwritten_on_redelivery(
         answer_started_at=_ANSWER_STARTED_AT,
     )
 
-    result = await _repository(session_factory, run_id).start_answer_generation(
-        now=_BEFORE_DEADLINE
-    )
+    with pytest.raises(AnswerGenerationStopped) as stopped:
+        await _repository(session_factory, run_id).start_answer_generation(
+            now=_BEFORE_DEADLINE
+        )
 
     run = await _load_run(session_factory, run_id)
-    assert result == Stop(StopReason.NOT_CURRENT)
+    assert stopped.value.reason is StopReason.NOT_CURRENT
     assert run.status == "running"
     assert run.answer_started_at == _ANSWER_STARTED_AT
 
@@ -180,11 +185,12 @@ async def test_start_recorded_start_is_not_overwritten_on_redelivery(
 async def test_start_missing_run_stops_without_write(
     session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
-    result = await _repository(session_factory, uuid.uuid4()).start_answer_generation(
-        now=_BEFORE_DEADLINE
-    )
+    with pytest.raises(AnswerGenerationStopped) as stopped:
+        await _repository(session_factory, uuid.uuid4()).start_answer_generation(
+            now=_BEFORE_DEADLINE
+        )
 
-    assert result == Stop(StopReason.NOT_CURRENT)
+    assert stopped.value.reason is StopReason.NOT_CURRENT
 
 
 @pytest.mark.asyncio
@@ -238,7 +244,7 @@ async def test_lock_wait_uses_database_time_after_acquiring_run_lock(
         session_factory() as contender,
         session_factory() as observer,
     ):
-        start_task: asyncio.Task[Continue | Stop] | None = None
+        start_task: asyncio.Task[AnswerGenerationStarted | StopReason] | None = None
         try:
             await locker.begin()
             locked_run = (
@@ -276,7 +282,7 @@ async def test_lock_wait_uses_database_time_after_acquiring_run_lock(
                     await session.rollback()
 
     run = await _load_run(session_factory, run_id)
-    assert result == Stop(StopReason.DEADLINE_EXCEEDED)
+    assert result is StopReason.DEADLINE_EXCEEDED
     assert run.status == "deadline_exceeded"
     assert run.answer_started_at is None
 
@@ -290,12 +296,11 @@ async def test_authorize_before_deadline_keeps_start_time(
         answer_started_at=_ANSWER_STARTED_AT,
     )
 
-    result = await _repository(session_factory, run_id).authorize_answer_regeneration(
+    await _repository(session_factory, run_id).authorize_answer_regeneration(
         now=_BEFORE_DEADLINE
     )
 
     run = await _load_run(session_factory, run_id)
-    assert result == Continue()
     assert run.status == "running"
     assert run.answer_started_at == _ANSWER_STARTED_AT
 
@@ -309,12 +314,13 @@ async def test_authorize_at_deadline_expires_without_changing_start_time(
         answer_started_at=_ANSWER_STARTED_AT,
     )
 
-    result = await _repository(session_factory, run_id).authorize_answer_regeneration(
-        now=_DEADLINE_AT
-    )
+    with pytest.raises(AnswerGenerationStopped) as stopped:
+        await _repository(session_factory, run_id).authorize_answer_regeneration(
+            now=_DEADLINE_AT
+        )
 
     run = await _load_run(session_factory, run_id)
-    assert result == Stop(StopReason.DEADLINE_EXCEEDED)
+    assert stopped.value.reason is StopReason.DEADLINE_EXCEEDED
     assert run.status == "deadline_exceeded"
     assert run.answer_started_at == _ANSWER_STARTED_AT
 
@@ -325,12 +331,13 @@ async def test_authorize_without_start_does_not_expire(
 ) -> None:
     run_id = await _seed_running(session_factory)
 
-    result = await _repository(session_factory, run_id).authorize_answer_regeneration(
-        now=_DEADLINE_AT
-    )
+    with pytest.raises(AnswerGenerationStopped) as stopped:
+        await _repository(session_factory, run_id).authorize_answer_regeneration(
+            now=_DEADLINE_AT
+        )
 
     run = await _load_run(session_factory, run_id)
-    assert result == Stop(StopReason.NOT_CURRENT)
+    assert stopped.value.reason is StopReason.NOT_CURRENT
     assert run.status == "running"
     assert run.answer_started_at is None
 
@@ -344,12 +351,13 @@ async def test_authorize_stale_attempt_does_not_change_run(
         answer_started_at=_ANSWER_STARTED_AT,
     )
 
-    result = await _repository(
-        session_factory, run_id, attempt_epoch=_ATTEMPT_EPOCH - 1
-    ).authorize_answer_regeneration(now=_DEADLINE_AT)
+    with pytest.raises(AnswerGenerationStopped) as stopped:
+        await _repository(
+            session_factory, run_id, attempt_epoch=_ATTEMPT_EPOCH - 1
+        ).authorize_answer_regeneration(now=_DEADLINE_AT)
 
     run = await _load_run(session_factory, run_id)
-    assert result == Stop(StopReason.NOT_CURRENT)
+    assert stopped.value.reason is StopReason.NOT_CURRENT
     assert run.status == "running"
     assert run.answer_started_at == _ANSWER_STARTED_AT
 

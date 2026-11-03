@@ -1,27 +1,12 @@
-"""1回の run 実行を続けてよいか。"""
+"""run attempt の実行を止める理由。"""
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 from enum import StrEnum
 
-__all__ = [
-    "Continue",
-    "Stop",
-    "StopReason",
-]
+__all__ = ["StopReason"]
 
 
 class StopReason(StrEnum):
     DEADLINE_EXCEEDED = "deadline_exceeded"
     NOT_CURRENT = "not_current"
-
-
-@dataclass(frozen=True, slots=True)
-class Continue:
-    pass
-
-
-@dataclass(frozen=True, slots=True)
-class Stop:
-    reason: StopReason

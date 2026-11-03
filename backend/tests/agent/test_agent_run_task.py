@@ -51,6 +51,7 @@ from app.agent.running import (
     RunInput,
     RunResult,
 )
+from app.agent.running.answer_generation import AnswerGenerationStarted
 from app.agent.running.attempt_start import AgentRunAttemptStartRepository
 from app.agent.running.completion import (
     AgentRunCompletionRepository,
@@ -59,7 +60,7 @@ from app.agent.running.completion import (
     RunCompletionSuccess,
 )
 from app.agent.running.failure_recording import AgentRunFailureRepository
-from app.agent.runs.execution import Continue, Stop, StopReason
+from app.agent.runs.execution import StopReason
 from app.agent.runtime.contract import AgentResponseDefect, AgentResponseInvalidError
 from app.agent.threads.contracts import ThreadMessageSnapshot
 from app.agent.threads.repository import AgentThreadRepository
@@ -214,9 +215,7 @@ class FakeAnsweringRunner:
             raise self.exc
         assert self.execution is not None
         assert self.repository is not None
-        start_result = await cast(Any, self.repository).start_answer_generation()
-        if isinstance(start_result, Stop):
-            raise AnswerGenerationStopped(start_result.reason)
+        await cast(Any, self.repository).start_answer_generation()
         final_output = await cast(Any, self.execution).answer()
         return RunResult(
             final_output=final_output,
@@ -336,8 +335,8 @@ class CapturingExecutionProbe:
         self.attempt_epoch = attempt_epoch
         CapturingExecutionProbe.instances.append(self)
 
-    async def should_continue(self) -> Continue | Stop:
-        return Continue()
+    async def ensure_can_continue(self) -> None:
+        return None
 
 
 class CapturingAnswerStart:
@@ -354,8 +353,8 @@ class CapturingAnswerStart:
         self.attempt_epoch = attempt_epoch
         CapturingAnswerStart.instances.append(self)
 
-    async def start_answer_generation(self) -> Continue | Stop:
-        return Continue()
+    async def start_answer_generation(self) -> AnswerGenerationStarted:
+        return AnswerGenerationStarted(self.run_id, datetime.now(UTC))
 
 
 class ForbiddenConstruction:
@@ -1057,9 +1056,10 @@ async def test_answer_start_deadline_publishes_existing_terminal_event(
                     persisted = await session.get(AgentRun, run.id)
                     assert persisted is not None
                     persisted.deadline_at = datetime.now(UTC) - timedelta(seconds=1)
-            decision = await cast(Any, self._answer_start).start_answer_generation()
-            assert decision == Stop(StopReason.DEADLINE_EXCEEDED)
-            raise AnswerGenerationStopped(decision.reason)
+            with pytest.raises(AnswerGenerationStopped) as stopped:
+                await cast(Any, self._answer_start).start_answer_generation()
+            assert stopped.value.reason is StopReason.DEADLINE_EXCEEDED
+            raise stopped.value
 
     def build_runner(**kwargs: object) -> DeadlineAtAnswerStartRunner:
         return DeadlineAtAnswerStartRunner(kwargs["repository"])
@@ -1569,7 +1569,7 @@ async def test_epoch_advance_before_answer_start_stops_old_worker_through_actual
 
         async def run(self, input: RunInput, *, identity: RunIdentity) -> RunResult:
             assert self.continuation is not None
-            assert await self.continuation.should_continue() == Continue()  # type: ignore[attr-defined]
+            await self.continuation.ensure_can_continue()  # type: ignore[attr-defined]
             async with session_factory() as restart_session:
                 async with restart_session.begin():
                     attempt_epoch = started_attempt_epoch(
@@ -1579,10 +1579,10 @@ async def test_epoch_advance_before_answer_start_stops_old_worker_through_actual
                     )
             assert attempt_epoch == 2
             clock.now = 2.0
-            assert await self.continuation.should_continue() == Stop(  # type: ignore[attr-defined]
-                StopReason.NOT_CURRENT
-            )
-            raise AnswerGenerationStopped
+            with pytest.raises(AnswerGenerationStopped) as stopped:
+                await self.continuation.ensure_can_continue()  # type: ignore[attr-defined]
+            assert stopped.value.reason is StopReason.NOT_CURRENT
+            raise stopped.value
 
     fake_runner = EpochAdvancingRunner()
 
@@ -1724,9 +1724,10 @@ async def test_deadline_stop_publishes_terminal_without_mark_failed(
                     assert persisted is not None
                     persisted.deadline_at = datetime.now(UTC) - timedelta(seconds=1)
             clock.now = 2.0
-            decision = await self.continuation.should_continue()  # type: ignore[attr-defined]
-            assert decision == Stop(StopReason.DEADLINE_EXCEEDED)
-            raise AnswerGenerationStopped(decision.reason)
+            with pytest.raises(AnswerGenerationStopped) as stopped:
+                await self.continuation.ensure_can_continue()  # type: ignore[attr-defined]
+            assert stopped.value.reason is StopReason.DEADLINE_EXCEEDED
+            raise stopped.value
 
     fake_agent = DeadlineExpiringAgent()
 

@@ -56,7 +56,7 @@ from app.agent.running.deadline.deadline_exceeded import (
 )
 from app.agent.running.failure_recording import AgentRunFailureRepository
 from app.agent.runs.contracts import UserQuestionMessage
-from app.agent.runs.execution import Stop, StopReason
+from app.agent.runs.execution import StopReason
 from app.agent.runs.repository import AgentRunRepository
 from app.agent.runs.types import AgentRunErrorCode
 from app.agent.runtime.contract import AgentResponseInvalidError
@@ -187,9 +187,7 @@ async def run_agent_answer(
             events=activity_reporter,
             delta_reporter=delta_reporter,
         )
-        decision = await continuation.should_continue()
-        if isinstance(decision, Stop):
-            raise AnswerGenerationStopped(decision.reason)
+        await continuation.ensure_can_continue()
         run_result = await answering_runner.run(
             RunInput(
                 question=question.content,

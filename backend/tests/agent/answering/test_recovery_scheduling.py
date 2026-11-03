@@ -8,7 +8,7 @@ import pytest
 from app.agent.answering import timing
 from app.agent.contract import AnswerGenerationStopped
 from app.agent.running.deadline.scheduling import AgentDeadlineScheduler
-from app.agent.runs.execution import Stop, StopReason
+from app.agent.runs.execution import StopReason
 from tests.agent.answering.direct_answer import test_service as direct
 from tests.agent.answering.evidence_answer import test_service as evidence
 from tests.agent.run_deadline.test_scheduling import RecordingSource
@@ -93,7 +93,8 @@ async def test_generation_finishes_while_single_recovery_reservation_is_blocked(
 @pytest.mark.asyncio
 @pytest.mark.parametrize("kind", ["direct", "evidence"])
 @pytest.mark.parametrize(
-    "failure", [Stop(StopReason.NOT_CURRENT), RuntimeError("commit failed")]
+    "failure",
+    [AnswerGenerationStopped(StopReason.NOT_CURRENT), RuntimeError("commit failed")],
 )
 async def test_rejected_or_failed_start_never_schedules(kind, failure):
     # 開始が確定しなければ予約も生成も起動しない。
@@ -101,8 +102,6 @@ async def test_rejected_or_failed_start_never_schedules(kind, failure):
     service, input, _ = make_service(
         kind, ScriptedAnswerGenerationRepository(start=failure), schedule
     )
-    with pytest.raises(
-        AnswerGenerationStopped if isinstance(failure, Stop) else RuntimeError
-    ):
+    with pytest.raises(type(failure)):
         await service.answer(input)
     schedule.assert_not_called()

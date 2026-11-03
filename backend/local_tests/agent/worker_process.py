@@ -32,6 +32,7 @@ async def main():
     from taskiq.receiver import Receiver
 
     from app.agent import composition
+    from app.agent.contract import AnswerGenerationStopped
     from app.agent.evidence_collection.external_search.contract import ExternalSearchHit
     from app.agent.evidence_collection.external_search.service import (
         ExternalSearchService,
@@ -39,7 +40,6 @@ async def main():
     from app.agent.evidence_collection.internal_search.ai import gemini
     from app.agent.running.answer_generation import AgentAnswerGenerationRepository
     from app.agent.running.completion import AgentRunCompletionRepository
-    from app.agent.runs.execution import Stop
     from app.models.agent_run import AgentRun
     from app.queue.brokers import broker_agent
     from local_tests.agent.support import AgentProviderResponses
@@ -135,10 +135,11 @@ async def main():
         async def observe_answer_start(repository, **kwargs):
             nonlocal answer_generation_stop_reason, answer_generation_calls
             answer_generation_calls += 1
-            result = await original_answer_start(repository, **kwargs)
-            if isinstance(result, Stop):
-                answer_generation_stop_reason = result.reason.value
-            return result
+            try:
+                return await original_answer_start(repository, **kwargs)
+            except AnswerGenerationStopped as stopped:
+                answer_generation_stop_reason = stopped.reason.value
+                raise
 
         class DeliveryObserver(TaskiqMiddleware):
             async def post_execute(self, message, result):

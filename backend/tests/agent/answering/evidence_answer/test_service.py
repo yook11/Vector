@@ -28,7 +28,7 @@ from app.agent.recording.evidence_answer import (
     EvidenceAnswerRecordingOutcome,
     EvidenceAnswerSucceeded,
 )
-from app.agent.runs.execution import Continue, Stop, StopReason
+from app.agent.runs.execution import StopReason
 from app.agent.threads.contracts import ThreadMessageSnapshot
 from app.ai_providers.errors import (
     AIProviderResultError,
@@ -888,7 +888,7 @@ async def test_provider_error_closes_stream_without_retry(
             generator,
             delta_reporter=reporter,
             answer_start=ScriptedAnswerGenerationRepository(
-                authorizes=[Stop(StopReason.NOT_CURRENT)]
+                authorizes=[AnswerGenerationStopped(StopReason.NOT_CURRENT)]
             ),
         )
 
@@ -1079,7 +1079,7 @@ async def test_generation_stop_records_stopped_without_outcome() -> None:
         await _answer(
             generator,
             answer_start=ScriptedAnswerGenerationRepository(
-                authorizes=[Stop(StopReason.NOT_CURRENT)]
+                authorizes=[AnswerGenerationStopped(StopReason.NOT_CURRENT)]
             ),
             recorder=recorder,
         )
@@ -1108,7 +1108,7 @@ async def test_provider_error_records_failure_without_fallback() -> None:
         await _answer(
             generator,
             answer_start=ScriptedAnswerGenerationRepository(
-                authorizes=[Stop(StopReason.NOT_CURRENT)]
+                authorizes=[AnswerGenerationStopped(StopReason.NOT_CURRENT)]
             ),
             recorder=recorder,
         )
@@ -1185,21 +1185,20 @@ async def test_start_continue_reports_answering_before_generation() -> None:
 @pytest.mark.parametrize(
     "outcome",
     [
-        Stop(StopReason.DEADLINE_EXCEEDED),
-        Stop(StopReason.NOT_CURRENT),
+        AnswerGenerationStopped(StopReason.DEADLINE_EXCEEDED),
+        AnswerGenerationStopped(StopReason.NOT_CURRENT),
         RuntimeError("answer start transaction failed"),
     ],
 )
 async def test_start_rejection_does_not_generate_or_report_answering(
-    outcome: Continue | Stop | BaseException,
+    outcome: BaseException,
 ) -> None:
     generator = FakeGenerator(["呼ばれない"])
     start = ScriptedAnswerGenerationRepository(start=outcome)
     progress = _RecordingProgress()
     recorder = RecordingEvidenceAnswerRecorder()
 
-    expected = AnswerGenerationStopped if isinstance(outcome, Stop) else type(outcome)
-    with pytest.raises(expected) as raised:
+    with pytest.raises(type(outcome)) as raised:
         await _answer(
             generator,
             answer_start=start,
@@ -1207,10 +1206,7 @@ async def test_start_rejection_does_not_generate_or_report_answering(
             recorder=recorder,
         )
 
-    if isinstance(outcome, Stop):
-        assert raised.value.reason is outcome.reason
-    else:
-        assert raised.value is outcome
+    assert raised.value is outcome
     assert start.calls == 1
     assert generator.scope_enters == 0
     assert generator.calls == []
@@ -1222,7 +1218,7 @@ async def test_start_rejection_does_not_generate_or_report_answering(
 async def test_regeneration_stop_does_not_start_second_generation() -> None:
     generator = FakeGenerator(["引用がありません。", "呼ばれない[[1]]"])
     repository = ScriptedAnswerGenerationRepository(
-        authorizes=[Stop(StopReason.DEADLINE_EXCEEDED)]
+        authorizes=[AnswerGenerationStopped(StopReason.DEADLINE_EXCEEDED)]
     )
     reporter = RecordingDeltaReporter()
 
