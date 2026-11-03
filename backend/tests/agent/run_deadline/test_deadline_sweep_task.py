@@ -23,7 +23,7 @@ from app.models.agent_run import AgentRun
 from app.models.agent_user_daily_quota import AgentUserDailyQuota
 from app.queue.messages.agent_run import AgentRunTrigger
 from app.queue.tasks.agent_run import AgentRunTaskBoundaryError
-from tests.agent.runs._seed import (
+from tests.agent.running._seed import (
     create_thread_message_run as _create_thread_message_run,
 )
 from tests.conftest import TEST_USER_ID

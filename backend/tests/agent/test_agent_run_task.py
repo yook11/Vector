@@ -75,10 +75,10 @@ from app.models.agent_user_daily_quota import AgentUserDailyQuota
 from app.queue.messages.agent_run import AgentRunTrigger
 from app.queue.tasks.agent_run import AgentRunTaskBoundaryError
 from app.shared.web_url import WebUrl
-from tests.agent.runs._seed import (
+from tests.agent.running._seed import (
     create_thread_message_run as _create_thread_message_run,
 )
-from tests.agent.runs._start_run_outcomes import (
+from tests.agent.running._start_run_outcomes import (
     started_attempt_epoch,
 )
 from tests.conftest import TEST_USER_ID

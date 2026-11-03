@@ -17,7 +17,7 @@ from app.agent.research_handoff import (
     ResearchTaskRecord,
 )
 from app.agent.threads.contracts import ThreadMessageSnapshot
-from tests.agent.running._harness import THREAD_ID, USER_ID
+from tests.agent.answering_runner._harness import THREAD_ID, USER_ID
 
 
 def _field_contract(contract_type: type[Any]) -> tuple[tuple[str, Any], ...]:

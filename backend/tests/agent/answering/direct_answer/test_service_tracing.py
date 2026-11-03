@@ -22,7 +22,7 @@ from app.agent.running.stop import AnswerGenerationStopped, StopReason
 from app.agent.runtime.contract import StreamingAgentRuntime
 from app.agent.runtime.gemini import GeminiAgentRuntime
 from app.logfire.redaction import install_exception_redaction
-from tests.agent.running._harness import (
+from tests.agent.answering_runner._harness import (
     AllowAnswerGenerationStart,
     ScriptedAnswerGenerationRepository,
 )

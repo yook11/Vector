@@ -15,7 +15,7 @@ from app.agent.running.stop import StopReason
 from app.agent.running.types import AgentRunStatus
 from app.models.agent_run import AgentRun
 from app.models.agent_user_daily_quota import AgentUserDailyQuota
-from tests.agent.runs._seed import create_thread_message_run
+from tests.agent.running._seed import create_thread_message_run
 from tests.conftest import TEST_USER_ID
 
 pytestmark = pytest.mark.integration

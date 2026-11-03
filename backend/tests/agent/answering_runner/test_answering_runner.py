@@ -36,7 +36,7 @@ from app.agent.planning.contract import (
 )
 from app.agent.running.stop import AnswerGenerationStopped
 from app.agent.threads.contracts import ThreadMessageSnapshot
-from tests.agent.running._harness import (
+from tests.agent.answering_runner._harness import (
     THREAD_ID,
     USER_ID,
     PassThroughOrganizer,

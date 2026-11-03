@@ -54,7 +54,7 @@ from app.agent.runtime.contract import AgentResponseDefect, AgentResponseInvalid
 from app.agent.threads.contracts import ThreadMessageSnapshot
 from app.analysis.analyzed_article import InScopeAnalyzedArticle
 from app.analysis.assessment.domain.result import InScope, InScopeCategory
-from tests.agent.running._harness import (
+from tests.agent.answering_runner._harness import (
     ExternalScopes,
     PassThroughOrganizer,
     run_identity,
@@ -503,7 +503,7 @@ class FakeEvidenceAnswerer:
         self.calls: list[EvidenceAnswerInput] = []
 
     async def answer(self, input: EvidenceAnswerInput) -> EvidenceAnswerDraft:
-        # S5: review_missingの受け渡し検証はtests/agent/running/
+        # S5: review_missingの受け渡し検証はtests/agent/answering_runner/
         # test_retrieval_dispatch.pyが正本(条件7)。このfakeは既存の
         # request/evidence/target_time_window契約だけを追跡する。
         if self._timeline is not None:

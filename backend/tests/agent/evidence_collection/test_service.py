@@ -30,8 +30,8 @@ from app.agent.planning.contract import ResearchTask, SearchPlan, TargetTimeWind
 from app.agent.runtime.contract import AgentResponseDefect, AgentResponseInvalidError
 from app.analysis.analyzed_article import InScopeAnalyzedArticle
 from app.analysis.assessment.domain.result import InScope, InScopeCategory
+from tests.agent.answering_runner._harness import fixed_scope
 from tests.agent.recording._fakes import RecordingEvidenceCollectionRecorder
-from tests.agent.running._harness import fixed_scope
 from tests.agent.runtime._fakes import GoalKeyedAgentRuntime, ScriptedAgentRuntime
 from tests.logfire._metric_helpers import collected_metrics
 

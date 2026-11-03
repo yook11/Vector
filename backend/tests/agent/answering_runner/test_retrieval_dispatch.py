@@ -60,7 +60,7 @@ from app.agent.planning.contract import (
 from app.agent.runtime.contract import AgentResponseDefect, AgentResponseInvalidError
 from app.analysis.analyzed_article import InScopeAnalyzedArticle
 from app.analysis.assessment.domain.result import InScope, InScopeCategory
-from tests.agent.running._harness import (
+from tests.agent.answering_runner._harness import (
     ExternalScopes,
     PassThroughOrganizer,
     fixed_scope,

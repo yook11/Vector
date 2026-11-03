@@ -164,8 +164,8 @@ Direct AnswerとEvidence Answerの両方で、生成開始・再生成・工程�
 - [Evidence Answerの工程タイマーと内部再試行](../../backend/app/agent/answering/evidence_answer/service.py)
 - [ワーカーの保存・失敗処理・回収タスク](../../backend/app/queue/tasks/agent_run.py)
 - [定期回収のスケジュール](../../backend/app/queue/schedule.py)
-- [開始・完了の期限テスト](../../backend/tests/agent/runs/test_deadline_fence.py)
-- [継続判定テスト](../../backend/tests/agent/runs/test_execution_continuation.py)
+- [開始・完了の期限テスト](../../backend/tests/agent/running/test_deadline_fence.py)
+- [継続判定テスト](../../backend/tests/agent/running/test_execution_continuation.py)
 - [回収テスト](../../backend/tests/agent/run_deadline/test_deadline_sweep.py)
 
 これらは実装対象を特定する根拠であり、本書の受け入れ条件を実装済みであることを示さない。

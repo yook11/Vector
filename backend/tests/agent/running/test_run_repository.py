@@ -39,10 +39,10 @@ from app.models.agent_message import AgentMessage, AgentMessageSource
 from app.models.agent_run import AgentRun
 from app.models.agent_thread import AgentThread
 from app.shared.web_url import WebUrl
-from tests.agent.runs._seed import (
+from tests.agent.running._seed import (
     create_thread_message_run as _create_thread_message_run,
 )
-from tests.agent.runs._start_run_outcomes import (
+from tests.agent.running._start_run_outcomes import (
     assert_start_failure,
     started_attempt_epoch,
 )

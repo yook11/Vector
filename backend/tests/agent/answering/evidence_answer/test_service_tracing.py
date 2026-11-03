@@ -21,7 +21,7 @@ from app.agent.contract import ExternalUrlSource
 from app.agent.planning.contract import TargetTimeWindow
 from app.agent.runtime.contract import StreamingAgentRuntime
 from app.agent.runtime.gemini import GeminiAgentRuntime
-from tests.agent.running._harness import AllowAnswerGenerationStart
+from tests.agent.answering_runner._harness import AllowAnswerGenerationStart
 from tests.agent.runtime._helpers import FakeGeminiClient
 from tests.agent.runtime._tracing_helpers import span_text
 

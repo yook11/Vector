@@ -46,7 +46,7 @@ from app.agent.planning.contract import (
 from app.agent.research_handoff import ResearchHandoff, ResearchHandoffInput
 from app.agent.running.stop import AnswerGenerationStopped
 from app.agent.runtime.contract import AgentResponseDefect, AgentResponseInvalidError
-from tests.agent.running._harness import (
+from tests.agent.answering_runner._harness import (
     PassThroughOrganizer,
     fixed_scope,
     run_identity,

@@ -42,11 +42,11 @@ from app.http.failure import (
     HttpTransportFailureReason,
     HttpTransportStage,
 )
-from tests.agent.recording._fakes import RecordingDirectAnswerRecorder
-from tests.agent.running._harness import (
+from tests.agent.answering_runner._harness import (
     AllowAnswerGenerationStart,
     ScriptedAnswerGenerationRepository,
 )
+from tests.agent.recording._fakes import RecordingDirectAnswerRecorder
 from tests.agent.runtime._fakes import AgentRuntimeCall
 from tests.logfire._metric_helpers import collected_metrics
 

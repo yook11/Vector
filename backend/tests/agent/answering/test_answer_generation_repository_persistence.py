@@ -17,7 +17,7 @@ from app.agent.running.answer_generation import (
 )
 from app.agent.running.stop import AnswerGenerationStopped, StopReason
 from app.models.agent_run import AgentRun
-from tests.agent.runs._seed import create_thread_message_run
+from tests.agent.running._seed import create_thread_message_run
 
 pytestmark = pytest.mark.integration
 

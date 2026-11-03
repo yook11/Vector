@@ -41,6 +41,7 @@ from app.http.failure import (
     HttpTransportFailureReason,
     HttpTransportStage,
 )
+from tests.agent.answering_runner._harness import fixed_scope
 from tests.agent.evidence_review._builders import (
     AS_OF,
     collected_task,
@@ -48,7 +49,6 @@ from tests.agent.evidence_review._builders import (
     internal_hit,
 )
 from tests.agent.recording._fakes import RecordingEvidenceReviewRecorder
-from tests.agent.running._harness import fixed_scope
 from tests.agent.runtime._fakes import ScriptedAgentRuntime
 
 # 中身を見ないテスト用。空なのはどのtasksでも妥当なため。

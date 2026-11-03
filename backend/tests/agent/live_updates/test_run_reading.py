@@ -9,7 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.agent.live_updates.run_reading import AgentRunLiveRepository
 from app.agent.running.types import AgentRunStatus
-from tests.agent.runs._seed import (
+from tests.agent.running._seed import (
     create_thread_message_run as _create_thread_message_run,
 )
 from tests.conftest import TEST_ADMIN_ID, TEST_USER_ID

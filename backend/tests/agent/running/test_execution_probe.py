@@ -26,7 +26,7 @@ from app.agent.running.stop import AnswerGenerationStopped, StopReason
 from app.models.agent_message import AgentMessage
 from app.models.agent_run import AgentRun
 from app.models.agent_thread import AgentThread
-from tests.agent.runs._start_run_outcomes import started_attempt_epoch
+from tests.agent.running._start_run_outcomes import started_attempt_epoch
 from tests.conftest import TEST_USER_ID
 from tests.logfire._metric_helpers import collected_metrics
 

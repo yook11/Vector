@@ -39,7 +39,7 @@ from app.models.agent_run import AgentRun
 from app.models.agent_thread import AgentThread
 from app.models.agent_user_daily_quota import AgentUserDailyQuota
 from tests.agent.run_deadline.clock import sweep_deadline_exceeded_runs_at
-from tests.agent.runs._start_run_outcomes import (
+from tests.agent.running._start_run_outcomes import (
     assert_start_failure,
     started_attempt_epoch,
 )

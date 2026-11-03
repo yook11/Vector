@@ -10,12 +10,12 @@ from app.agent.running.deadline.scheduling import AgentDeadlineScheduler
 from app.agent.running.stop import AnswerGenerationStopped, StopReason
 from tests.agent.answering.direct_answer import test_service as direct
 from tests.agent.answering.evidence_answer import test_service as evidence
-from tests.agent.run_deadline.test_scheduling import RecordingSource
-from tests.agent.running._harness import (
+from tests.agent.answering_runner._harness import (
     AS_OF,
     RUN_ID,
     ScriptedAnswerGenerationRepository,
 )
+from tests.agent.run_deadline.test_scheduling import RecordingSource
 
 
 def make_service(kind, repository, schedule, retry=False):
