@@ -17,6 +17,7 @@ from sqlalchemy import select, text
 from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+import app.agent.run_execution as run_execution
 import app.queue.tasks.agent_run as agent_run_tasks
 from app.agent.running.attempt_start import (
     AgentRunAttemptStartRepository,
@@ -25,6 +26,7 @@ from app.agent.running.attempt_start import (
 from app.agent.running.cancellation import AgentRunCancellationRepository
 from app.agent.running.daily_quota.release import DailyQuotaReleaseOutcome
 from app.agent.running.deadline.policy import RUN_DEADLINE_SECONDS
+from app.agent.running.task_boundary import AgentRunTaskBoundaryError
 from app.models.agent_message import AgentMessage
 from app.models.agent_run import AgentRun
 from app.models.agent_thread import AgentThread
@@ -160,6 +162,9 @@ def _ctx(session_factory: async_sessionmaker[AsyncSession]) -> SimpleNamespace:
         state=SimpleNamespace(
             session_factory=session_factory,
             agent_live_redis=object(),
+            agent_deadline_scheduler=SimpleNamespace(
+                reserve_in_background=lambda *_: None
+            ),
         )
     )
 
@@ -180,7 +185,7 @@ def _assert_safe_start_error(
         repr(logs),
     )
 
-    assert error.__class__ is agent_run_tasks.AgentRunTaskBoundaryError
+    assert error.__class__ is AgentRunTaskBoundaryError
     assert error.args == ("agent run start failed",)
     assert error.__cause__ is None
     assert error.__context__ is None
@@ -503,22 +508,22 @@ async def test_expired_queued_task_skips_live_provider_and_emits_post_commit_tel
         return raise_if_called
 
     monkeypatch.setattr(
-        agent_run_tasks,
+        run_execution,
         "AgentRunLiveStreamPublisher",
         forbidden("live stream attempt"),
     )
     monkeypatch.setattr(
-        agent_run_tasks,
+        run_execution,
         "AgentRunLiveAnswerDeltaReporter",
         forbidden("answer delta reporter"),
     )
     monkeypatch.setattr(
-        agent_run_tasks,
+        run_execution,
         "AgentRunExecutionProbe",
         forbidden("execution probe"),
     )
     monkeypatch.setattr(
-        agent_run_tasks,
+        run_execution,
         "build_answering_runner",
         forbidden("answering runner"),
     )
@@ -589,7 +594,7 @@ async def test_queued_expiry_rollback_emits_neither_log_nor_quota_metric(
         return failing_session
 
     try:
-        with pytest.raises(agent_run_tasks.AgentRunTaskBoundaryError) as exc_info:
+        with pytest.raises(AgentRunTaskBoundaryError) as exc_info:
             await agent_run_tasks.run_agent_answer(
                 trigger=AgentRunTrigger(run_id=seeded.run_id),
                 ctx=_ctx(

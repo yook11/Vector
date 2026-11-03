@@ -16,13 +16,14 @@ from sqlalchemy import select
 from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+import app.agent.running.deadline.recovery as deadline_recovery
 import app.queue.tasks.agent_run as agent_run_tasks
 from app.agent.live_updates.stream import AgentRunLiveStreamTerminalEvent
 from app.agent.running.daily_quota import observability as daily_quota_observability
+from app.agent.running.task_boundary import AgentRunTaskBoundaryError
 from app.models.agent_run import AgentRun
 from app.models.agent_user_daily_quota import AgentUserDailyQuota
 from app.queue.messages.agent_run import AgentRunTrigger
-from app.queue.tasks.agent_run import AgentRunTaskBoundaryError
 from tests.agent.running._seed import (
     create_thread_message_run as _create_thread_message_run,
 )
@@ -212,7 +213,7 @@ async def test_sweep_task_observes_queued_release_and_running_reservation_after_
         observe_stale_reservations,
     )
     monkeypatch.setattr(
-        agent_run_tasks,
+        deadline_recovery,
         "AgentRunLiveStreamPublisher",
         FakeLiveStreamPublisher,
     )
@@ -533,7 +534,7 @@ async def test_sweep_task_batches_queued_quota_observability_after_commit(
     )
     FakeLiveStreamPublisher.instances = []
     monkeypatch.setattr(
-        agent_run_tasks,
+        deadline_recovery,
         "AgentRunLiveStreamPublisher",
         FakeLiveStreamPublisher,
     )
@@ -642,7 +643,7 @@ async def test_sweep_task_publishes_each_committed_running_attempt_despite_failu
     FakeLiveStreamPublisher.instances = []
     CommitCheckingPublisher.publish_outcomes = [RuntimeError("redis unavailable"), None]
     monkeypatch.setattr(
-        agent_run_tasks,
+        deadline_recovery,
         "AgentRunLiveStreamPublisher",
         CommitCheckingPublisher,
     )
@@ -834,7 +835,7 @@ async def test_single_run_task_checks_answering_recovery_deadline(
             attempt_epoch=7,
         )
     monkeypatch.setattr(
-        agent_run_tasks,
+        deadline_recovery,
         "AgentRunLiveStreamPublisher",
         MagicMock(return_value=MagicMock(publish=AsyncMock(return_value="terminal"))),
     )
@@ -868,7 +869,7 @@ async def test_single_run_task_notifies_current_epoch_after_commit(
 
     publisher = MagicMock(publish=AsyncMock(side_effect=observe_publish))
     factory = MagicMock(return_value=publisher)
-    monkeypatch.setattr(agent_run_tasks, "AgentRunLiveStreamPublisher", factory)
+    monkeypatch.setattr(deadline_recovery, "AgentRunLiveStreamPublisher", factory)
     ctx = _ctx(session_factory)
     await agent_run_tasks.check_agent_run_deadline(
         AgentRunTrigger(run_id=run.id), ctx=ctx
@@ -893,7 +894,7 @@ async def test_single_run_task_does_not_notify_queued_run(session_factory, monke
             deadline_at=at,
         )
     factory = MagicMock()
-    monkeypatch.setattr(agent_run_tasks, "AgentRunLiveStreamPublisher", factory)
+    monkeypatch.setattr(deadline_recovery, "AgentRunLiveStreamPublisher", factory)
     await agent_run_tasks.check_agent_run_deadline(
         AgentRunTrigger(run_id=run.id), ctx=_ctx(session_factory)
     )
@@ -916,7 +917,7 @@ async def test_repeated_deadline_checks_do_not_repeat_terminal_notification(
         )
     publisher = MagicMock(publish=AsyncMock(return_value="terminal"))
     monkeypatch.setattr(
-        agent_run_tasks,
+        deadline_recovery,
         "AgentRunLiveStreamPublisher",
         MagicMock(return_value=publisher),
     )
