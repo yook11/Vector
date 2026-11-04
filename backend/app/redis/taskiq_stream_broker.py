@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import AsyncGenerator
+from collections.abc import AsyncGenerator, Awaitable, Callable
 
 from redis.asyncio import Redis
 from taskiq import AckableMessage, AsyncBroker, SimpleRetryMiddleware
@@ -11,7 +11,11 @@ from taskiq import AckableMessage, AsyncBroker, SimpleRetryMiddleware
 from taskiq.middlewares.opentelemetry_middleware import OpenTelemetryMiddleware
 from taskiq_redis import RedisStreamBroker
 
+from app.log_policy.policies.process_runtime import PROCESS_RUNTIME_LOG_RULES
+from app.log_policy.runtime import create_policy_json_logger
 from app.redis.clients import TaskiqStreamConnection
+
+logger = create_policy_json_logger(__name__, PROCESS_RUNTIME_LOG_RULES)
 
 
 class _RedisStreamBroker(RedisStreamBroker):
@@ -36,10 +40,10 @@ class _RedisStreamBroker(RedisStreamBroker):
                 )
                 for stream, deliveries in new_deliveries or []:
                     for message_id, message in deliveries:
-                        yield AckableMessage(
-                            data=message[b"data"],
-                            ack=self._ack_generator(id=message_id, queue_name=stream),
-                        )
+                        data = message[b"data"]
+                        ack = self._ack_generator(id=message_id, queue_name=stream)
+                        if await self._accept_or_drop(data, ack):
+                            yield AckableMessage(data=data, ack=ack)
 
                 # 新着がない場合も回収へ進み、taskiq-redisと同じ排他・ACK契約を保つ。
                 for stream in [self.queue_name, *self.additional_streams.keys()]:
@@ -60,10 +64,31 @@ class _RedisStreamBroker(RedisStreamBroker):
                         results = await pipeline.execute()
                     recovered_deliveries = results[1][1]
                     for message_id, message in recovered_deliveries:
-                        yield AckableMessage(
-                            data=message[b"data"],
-                            ack=self._ack_generator(id=message_id, queue_name=stream),
-                        )
+                        data = message[b"data"]
+                        ack = self._ack_generator(id=message_id, queue_name=stream)
+                        if await self._accept_or_drop(data, ack):
+                            yield AckableMessage(data=data, ack=ack)
+
+    async def _accept_or_drop(
+        self, data: bytes, ack: Callable[[], Awaitable[None]]
+    ) -> bool:
+        """taskiqは実行できない配送をACKせずに飛ばし、期限ごとに回収され続けるので、ここでACKして捨てる。"""
+        try:
+            message = self.formatter.loads(data)
+            message.parse_labels()
+        except Exception as exc:
+            logger.error("taskiq_message_invalid", broker=self.queue_name, exc_info=exc)
+            await ack()
+            return False
+        if self.find_task(message.task_name) is None:
+            logger.error(
+                "taskiq_task_unknown",
+                broker=self.queue_name,
+                task_name=message.task_name,
+            )
+            await ack()
+            return False
+        return True
 
     async def shutdown(self) -> None:
         try:
