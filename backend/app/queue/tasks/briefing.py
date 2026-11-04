@@ -32,12 +32,12 @@ from app.insights.briefing.domain.ready import (
 )
 from app.insights.briefing.repository import BriefingRepository
 from app.insights.briefing.service import BriefingConflict, WeeklyBriefingService
+from app.insights.briefing.task_input import BriefingTaskInput
 from app.log_policy.policies.briefing import BRIEFING_LOG_RULES
 from app.log_policy.runtime import create_policy_json_logger
 from app.logfire.stage_span import pipeline_stage_span
 from app.models.category import Category
 from app.queue.brokers import broker_briefing
-from app.queue.messages.briefing import BriefingTaskInput
 from app.queue.schedule import CRON_WEEKLY_BRIEFING
 from app.shared.revalidate import FrontendRevalidateNotifier
 

@@ -18,6 +18,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 import app.agent.run_execution as run_execution
 import app.queue.tasks.agent_run as agent_run_tasks
+from app.agent.run_enqueuer import AgentRunTrigger
 from app.agent.running.daily_quota.release import DailyQuotaReleaseOutcome
 from app.agent.running.deadline.policy import RUN_DEADLINE_SECONDS
 from app.agent.running.state import (
@@ -32,7 +33,6 @@ from app.models.agent_message import AgentMessage
 from app.models.agent_run import AgentRun
 from app.models.agent_thread import AgentThread
 from app.models.agent_user_daily_quota import AgentUserDailyQuota
-from app.queue.messages.agent_run import AgentRunTrigger
 from tests.agent._sensitive_db_failure import assert_no_sensitive_marker
 from tests.conftest import TEST_USER_ID
 from tests.logfire._metric_helpers import collected_metrics

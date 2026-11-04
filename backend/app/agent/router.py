@@ -42,6 +42,7 @@ from app.agent.live_updates.transport import (
     AgentLiveTransport,
     get_agent_live_transport,
 )
+from app.agent.run_enqueuer import AgentRunEnqueuer, get_agent_run_enqueuer
 from app.agent.running.creation import (
     ActiveRunConflictError,
     AgentRunCreationRepository,
@@ -54,7 +55,6 @@ from app.agent.running.deadline.scheduling import (
     AgentDeadlineScheduler,
     get_agent_deadline_scheduler,
 )
-from app.agent.running.enqueuer import AgentRunEnqueuer, get_agent_run_enqueuer
 from app.agent.running.finish_notice import notify_run_finished
 from app.agent.running.state import (
     RunRejected,

@@ -10,6 +10,7 @@ from app.agent.evidence_collection.external_search.contract import (
     ExternalSearchFailureReason,
     ExternalSearchProviderError,
 )
+from app.agent.run_enqueuer import AgentRunTrigger
 from app.ai_providers.errors import (
     AIProviderTransportError,
 )
@@ -19,7 +20,6 @@ from app.http.failure import (
     HttpTransportFailureReason,
     HttpTransportStage,
 )
-from app.queue.messages.agent_run import AgentRunTrigger
 from app.queue.tasks.agent_run import run_agent_answer
 from local_tests.agent.support import (
     count_cached_query_embeddings,

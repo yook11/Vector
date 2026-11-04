@@ -17,10 +17,10 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 import app.agent.running.deadline.recovery as deadline_recovery
 import app.queue.tasks.agent_run as agent_run_tasks
 from app.agent.live_updates.stream import AgentRunLiveStreamTerminalEvent
+from app.agent.run_enqueuer import AgentRunTrigger
 from app.agent.running.daily_quota import observability as daily_quota_observability
 from app.models.agent_run import AgentRun
 from app.models.agent_user_daily_quota import AgentUserDailyQuota
-from app.queue.messages.agent_run import AgentRunTrigger
 from tests.agent._sensitive_db_failure import (
     SensitivePersistenceFailure,
     assert_no_sensitive_marker,

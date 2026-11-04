@@ -11,7 +11,7 @@ from app.insights.briefing.domain.briefing import (
     WeeklyBriefingContent,
 )
 from app.insights.briefing.errors import BriefingLlmError
-from app.queue.messages.briefing import BriefingTaskInput
+from app.insights.briefing.task_input import BriefingTaskInput
 from local_tests.insights.support import (
     JST,
     seed_analyzed_article,

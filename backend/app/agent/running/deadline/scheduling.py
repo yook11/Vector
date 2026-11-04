@@ -7,6 +7,7 @@ from uuid import UUID
 from fastapi import Request
 from taskiq import ScheduleSource
 
+from app.agent.run_enqueuer import AgentRunTrigger
 from app.log_policy.policies.research import RESEARCH_LOG_RULES
 from app.log_policy.runtime import create_policy_json_logger
 
@@ -67,7 +68,6 @@ class AgentDeadlineScheduler:
         )
 
     async def reserve(self, run_id: UUID, deadline_at: datetime) -> None:
-        from app.queue.messages.agent_run import AgentRunTrigger
         from app.queue.tasks.agent_run import check_agent_run_deadline
 
         try:

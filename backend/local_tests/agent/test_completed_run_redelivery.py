@@ -10,11 +10,11 @@ from app.agent.contract import (
     AnswerQuestionResult,
     ExternalUrlSource,
 )
+from app.agent.run_enqueuer import AgentRunTrigger
 from app.agent.running.creation import AgentRunCreationRepository
 from app.agent.running.state import RunRejected, RunRejectionReason
 from app.agent.running.state_repository import AgentRunStateRepository
 from app.agent.running.types import AgentRunStatus
-from app.queue.messages.agent_run import AgentRunTrigger
 from app.queue.tasks.agent_run import run_agent_answer
 from local_tests.agent.support import fetch_saved_run_result
 

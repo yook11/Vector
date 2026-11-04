@@ -51,6 +51,7 @@ from app.agent.research_handoff import (
     ResearchRunRecord,
     ResearchTaskRecord,
 )
+from app.agent.run_enqueuer import AgentRunTrigger
 from app.agent.running.daily_quota.release import DailyQuotaReleaseOutcome
 from app.agent.running.state import (
     AnswerGenerationStarted,
@@ -77,7 +78,6 @@ from app.models.agent_message import AgentMessage, AgentMessageSource
 from app.models.agent_run import AgentRun
 from app.models.agent_thread import AgentThread
 from app.models.agent_user_daily_quota import AgentUserDailyQuota
-from app.queue.messages.agent_run import AgentRunTrigger
 from app.shared.web_url import WebUrl
 from tests.agent._sensitive_db_failure import (
     SensitivePersistenceFailure,

@@ -18,7 +18,7 @@ from taskiq import AsyncTaskiqDecoratedTask, InMemoryBroker
 from taskiq.middlewares.opentelemetry_middleware import OpenTelemetryMiddleware
 
 import app.queue.tasks.agent_run as agent_run_tasks
-from app.queue.messages.agent_run import AgentRunTrigger
+from app.agent.run_enqueuer import AgentRunTrigger
 from tests.agent._sensitive_db_failure import (
     SensitivePersistenceFailure,
     assert_no_sensitive_marker,

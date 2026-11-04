@@ -24,6 +24,7 @@ from app.agent.live_updates.transport import (
     AgentLiveTransport,
     get_agent_live_transport,
 )
+from app.agent.run_enqueuer import get_agent_run_enqueuer
 from app.agent.running.creation import AgentRunCreationRepository
 from app.agent.running.daily_quota import observability as daily_quota_observability
 from app.agent.running.daily_quota.release import (
@@ -31,7 +32,6 @@ from app.agent.running.daily_quota.release import (
 )
 from app.agent.running.daily_quota.reservation import DailyRequestLimitExceededError
 from app.agent.running.deadline.scheduling import get_agent_deadline_scheduler
-from app.agent.running.enqueuer import get_agent_run_enqueuer
 from app.agent.running.state import RunFinished, RunRejected, RunRejectionReason
 from app.agent.running.state_repository import AgentRunStateRepository
 from app.agent.running.types import AgentRunErrorCode, AgentRunStatus

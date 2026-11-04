@@ -6,6 +6,7 @@ from opentelemetry import trace
 from opentelemetry.trace import Status, StatusCode
 from taskiq import Context, TaskiqDepends
 
+from app.agent.run_enqueuer import AgentRunTrigger
 from app.agent.run_execution import execute_run_attempt
 from app.agent.running.deadline.recovery import (
     check_and_report_run_deadline,
@@ -14,7 +15,6 @@ from app.agent.running.deadline.recovery import (
 from app.log_policy.policies.research import RESEARCH_LOG_RULES
 from app.log_policy.runtime import create_policy_json_logger
 from app.queue.brokers import broker_agent
-from app.queue.messages.agent_run import AgentRunTrigger
 from app.queue.schedule import CRON_AGENT_RUN_SWEEP
 
 logger = create_policy_json_logger(__name__, RESEARCH_LOG_RULES)
