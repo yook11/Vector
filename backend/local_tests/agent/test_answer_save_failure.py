@@ -2,7 +2,7 @@
 
 import pytest
 
-from app.queue.messages.agent_run import AgentRunTrigger
+from app.agent.run_enqueuer import AgentRunTrigger
 from app.queue.tasks.agent_run import run_agent_answer
 from local_tests.agent.support import (
     create_user_run,

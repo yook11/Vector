@@ -15,8 +15,8 @@ from sqlalchemy.ext.asyncio import create_async_engine
 
 from app.agent.answering.timing import answer_generation_recovery_window
 from app.agent.live_updates.stream import agent_run_live_stream_key
+from app.agent.run_enqueuer import AgentRunTrigger
 from app.db.session import caller_managed_session_factory
-from app.queue.messages.agent_run import AgentRunTrigger
 from app.queue.tasks.agent_run import run_agent_answer
 from app.redis.clients import taskiq_stream_connection
 from app.redis.taskiq_stream_broker import create_taskiq_stream_broker

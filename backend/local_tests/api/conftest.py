@@ -14,8 +14,8 @@ from app.agent.live_updates.transport import (
     AgentLiveTransport,
     get_agent_live_transport,
 )
+from app.agent.run_enqueuer import get_agent_run_enqueuer
 from app.agent.running.deadline.scheduling import get_agent_deadline_scheduler
-from app.agent.running.enqueuer import get_agent_run_enqueuer
 from app.db.engine import create_api_engine
 from app.db.session import caller_managed_session_factory
 from local_tests.api.research_boundaries import (
