@@ -36,7 +36,6 @@
 | `app/agent/running/creation.py` | 質問・queuedのRunの作成、利用枠予約、作成結果・例外 |
 | `app/agent/running/attempt_start.py` | Runの開始可否、実行世代の更新、開始結果・不成立理由 |
 | `app/agent/run_execution.py` | workerによる各回の実行(開始・質問と履歴の読み出し・回答・完了と失敗の記録・終了通知) |
-| `app/agent/running/task_boundary.py` | taskiqへ渡す、元の例外の詳細を落とした失敗 |
 | `app/agent/running/answer_generation.py` | 回答生成の開始記録・再生成許可 |
 | `app/agent/running/completion.py` | 回答・出典・申し送りの保存とRun完了の確定、完了の成功・失敗理由 |
 | `app/agent/running/stop.py` | Run実行を止める理由と停止の例外。`StopReason` / `AnswerGenerationStopped` |

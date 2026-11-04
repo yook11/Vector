@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import traceback
 from datetime import UTC, date, datetime, timedelta
 from types import SimpleNamespace
 from typing import Any, cast
@@ -13,87 +12,24 @@ import pytest
 from logfire.testing import CaptureLogfire
 from sqlalchemy import event as sa_event
 from sqlalchemy import select
-from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 import app.agent.running.deadline.recovery as deadline_recovery
 import app.queue.tasks.agent_run as agent_run_tasks
 from app.agent.live_updates.stream import AgentRunLiveStreamTerminalEvent
 from app.agent.running.daily_quota import observability as daily_quota_observability
-from app.agent.running.task_boundary import AgentRunTaskBoundaryError
 from app.models.agent_run import AgentRun
 from app.models.agent_user_daily_quota import AgentUserDailyQuota
 from app.queue.messages.agent_run import AgentRunTrigger
+from tests.agent._sensitive_db_failure import (
+    SensitivePersistenceFailure,
+    assert_no_sensitive_marker,
+)
 from tests.agent.running._seed import (
     create_thread_message_run as _create_thread_message_run,
 )
 from tests.conftest import TEST_USER_ID
 from tests.logfire._metric_helpers import collected_metrics
-
-SENSITIVE_TASK_BOUNDARY_MARKERS = (
-    TEST_USER_ID,
-    "SECRET_SQL_MARKER",
-    "SECRET_QUESTION_MARKER",
-    "SECRET_ANSWER_MARKER",
-    "SECRET_PROVIDER_RAW_MARKER",
-    "parameters:",
-)
-SENSITIVE_TASK_BOUNDARY_ERROR = (
-    "asyncpg failure\n"
-    "DETAIL:  Key (question)=(SECRET_QUESTION_MARKER) SECRET_SQL_MARKER"
-)
-
-
-class SensitivePersistenceFailure(DBAPIError):
-    """秘匿値をSQLのパラメータとDETAILに持つ、コミット時のDB例外。"""
-
-    def __init__(self) -> None:
-        super().__init__(
-            "UPDATE agent_runs SET status = $1 WHERE user_id = $2",
-            {
-                "user_id": TEST_USER_ID,
-                "question": "SECRET_QUESTION_MARKER",
-                "answer": "SECRET_ANSWER_MARKER",
-                "provider_raw": "SECRET_PROVIDER_RAW_MARKER",
-            },
-            RuntimeError(SENSITIVE_TASK_BOUNDARY_ERROR),
-        )
-
-
-def _assert_safe_task_boundary_error(
-    error: BaseException,
-    *,
-    expected_message: str,
-) -> None:
-    rendered_traceback = "".join(
-        traceback.format_exception(type(error), error, error.__traceback__)
-    )
-
-    assert error.__class__ is AgentRunTaskBoundaryError
-    assert str(error) == expected_message
-    assert error.args == (expected_message,)
-    assert error.__cause__ is None
-    assert error.__context__ is None
-    assert error.__suppress_context__ is True
-    assert not hasattr(error, "params")
-    assert all(marker not in str(error) for marker in SENSITIVE_TASK_BOUNDARY_MARKERS)
-    assert all(
-        marker not in repr(vars(error)) for marker in SENSITIVE_TASK_BOUNDARY_MARKERS
-    )
-    assert all(
-        marker not in rendered_traceback for marker in SENSITIVE_TASK_BOUNDARY_MARKERS
-    )
-    assert all(
-        marker not in repr(error.__cause__)
-        for marker in SENSITIVE_TASK_BOUNDARY_MARKERS
-    )
-
-
-def _assert_sensitive_task_context_not_logged(logs: object) -> None:
-    serialized_logs = repr(logs)
-    assert all(
-        marker not in serialized_logs for marker in SENSITIVE_TASK_BOUNDARY_MARKERS
-    )
 
 
 class FakeLiveStreamPublisher:
@@ -335,6 +271,7 @@ async def test_sweep_task_does_not_observe_quota_results_when_transaction_rolls_
     session_factory: async_sessionmaker[AsyncSession],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """回収のcommitが秘匿値つきのDB例外で落ちると、taskは例外を出さずログに秘匿値を残さず、利用枠の観測も回収のログも出さない。"""
     deadline_at = datetime.now(UTC) - timedelta(seconds=1)
     async with session_factory() as setup_session:
         _thread, _message, expired_run = await _create_thread_message_run(
@@ -376,22 +313,17 @@ async def test_sweep_task_does_not_observe_quota_results_when_transaction_rolls_
     def failing_session_factory() -> AsyncSession:
         return failing_session
 
-    with pytest.raises(Exception) as exc_info:
-        await agent_run_tasks.sweep_deadline_exceeded_agent_runs(
-            ctx=_ctx(
-                cast(
-                    async_sessionmaker[AsyncSession],
-                    failing_session_factory,
-                )
+    await agent_run_tasks.sweep_deadline_exceeded_agent_runs(
+        ctx=_ctx(
+            cast(
+                async_sessionmaker[AsyncSession],
+                failing_session_factory,
             )
         )
+    )
     logs = read_logs()
 
-    _assert_safe_task_boundary_error(
-        exc_info.value,
-        expected_message="agent run deadline sweep failed",
-    )
-    _assert_sensitive_task_context_not_logged(logs)
+    assert_no_sensitive_marker(logs)
     assert commit_attempted is True
     assert calls == []
     assert not [
@@ -713,6 +645,7 @@ async def test_sweep_task_emits_no_queued_result_or_event_when_commit_rolls_back
     session_factory: async_sessionmaker[AsyncSession],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """回収のcommitが秘匿値つきのDB例外で落ちると、taskは例外を出さずログに秘匿値を残さず、待機中のRunの回収結果も利用枠の指標も出さない。"""
     deadline_at = datetime.now(UTC) - timedelta(seconds=1)
     usage_date = date(2026, 7, 22)
     async with session_factory() as setup_session:
@@ -757,24 +690,19 @@ async def test_sweep_task_emits_no_queued_result_or_event_when_commit_rolls_back
         return failing_session
 
     try:
-        with pytest.raises(Exception) as exc_info:
-            await agent_run_tasks.sweep_deadline_exceeded_agent_runs(
-                ctx=_ctx(
-                    cast(
-                        async_sessionmaker[AsyncSession],
-                        failing_session_factory,
-                    )
+        await agent_run_tasks.sweep_deadline_exceeded_agent_runs(
+            ctx=_ctx(
+                cast(
+                    async_sessionmaker[AsyncSession],
+                    failing_session_factory,
                 )
             )
+        )
     finally:
         await failing_session.close()
     logs = read_logs()
 
-    _assert_safe_task_boundary_error(
-        exc_info.value,
-        expected_message="agent run deadline sweep failed",
-    )
-    _assert_sensitive_task_context_not_logged(logs)
+    assert_no_sensitive_marker(logs)
     assert metric_calls == []
     assert not [
         entry

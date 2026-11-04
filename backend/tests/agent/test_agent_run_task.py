@@ -1,13 +1,11 @@
 """Agent run worker の1回の実行の契約。
 
 実DBのRunを、差し替えた回答工程と live stream publisher で実行する。
-taskiq の宣言と、receiver から見た開始失敗のテストだけはDBを使わない。
+taskiq の宣言のテストだけはDBを使わない。
 """
 
 from __future__ import annotations
 
-import logging
-import traceback
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
 from types import SimpleNamespace
@@ -17,12 +15,8 @@ from uuid import UUID
 import pytest
 from sqlalchemy import event as sa_event
 from sqlalchemy import func, select, update
-from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from sqlalchemy.orm import Session
-from taskiq import InMemoryBroker
-from taskiq.message import TaskiqMessage
-from taskiq.receiver import Receiver
 
 import app.agent.run_execution as run_execution
 import app.queue.tasks.agent_run as agent_run_tasks
@@ -66,7 +60,6 @@ from app.agent.running.state import (
 )
 from app.agent.running.state_repository import AgentRunStateRepository
 from app.agent.running.stop import AnswerGenerationStopped
-from app.agent.running.task_boundary import AgentRunTaskBoundaryError
 from app.agent.running.types import AgentRunErrorCode, AgentRunStatus
 from app.agent.runtime.contract import AgentResponseDefect, AgentResponseInvalidError
 from app.agent.threads.contracts import ThreadMessageSnapshot
@@ -86,6 +79,10 @@ from app.models.agent_thread import AgentThread
 from app.models.agent_user_daily_quota import AgentUserDailyQuota
 from app.queue.messages.agent_run import AgentRunTrigger
 from app.shared.web_url import WebUrl
+from tests.agent._sensitive_db_failure import (
+    SensitivePersistenceFailure,
+    assert_no_sensitive_marker,
+)
 from tests.agent.running._seed import (
     create_thread_message_run as _create_thread_message_run,
 )
@@ -95,71 +92,6 @@ from tests.agent.running._start_run_outcomes import (
 from tests.conftest import TEST_USER_ID
 
 _RECEIVED_AT = datetime(2026, 1, 1, tzinfo=UTC)
-
-SENSITIVE_TASK_BOUNDARY_MARKERS = (
-    TEST_USER_ID,
-    "SECRET_SQL_MARKER",
-    "SECRET_QUESTION_MARKER",
-    "SECRET_ANSWER_MARKER",
-    "SECRET_PROVIDER_RAW_MARKER",
-    "parameters:",
-)
-SENSITIVE_TASK_BOUNDARY_ERROR = (
-    "asyncpg failure\n"
-    "DETAIL:  Key (question)=(SECRET_QUESTION_MARKER) SECRET_SQL_MARKER"
-)
-
-
-class SensitivePersistenceFailure(DBAPIError):
-    """秘匿値をSQLのパラメータとDETAILに持つ、コミット時のDB例外。"""
-
-    def __init__(self) -> None:
-        super().__init__(
-            "UPDATE agent_runs SET status = $1 WHERE user_id = $2",
-            {
-                "user_id": TEST_USER_ID,
-                "question": "SECRET_QUESTION_MARKER",
-                "answer": "SECRET_ANSWER_MARKER",
-                "provider_raw": "SECRET_PROVIDER_RAW_MARKER",
-            },
-            RuntimeError(SENSITIVE_TASK_BOUNDARY_ERROR),
-        )
-
-
-def _assert_safe_task_boundary_error(
-    error: BaseException,
-    *,
-    expected_message: str,
-) -> None:
-    rendered_traceback = "".join(
-        traceback.format_exception(type(error), error, error.__traceback__)
-    )
-
-    assert error.__class__ is AgentRunTaskBoundaryError
-    assert str(error) == expected_message
-    assert error.args == (expected_message,)
-    assert error.__cause__ is None
-    assert error.__context__ is None
-    assert error.__suppress_context__ is True
-    assert not hasattr(error, "params")
-    assert all(marker not in str(error) for marker in SENSITIVE_TASK_BOUNDARY_MARKERS)
-    assert all(
-        marker not in repr(vars(error)) for marker in SENSITIVE_TASK_BOUNDARY_MARKERS
-    )
-    assert all(
-        marker not in rendered_traceback for marker in SENSITIVE_TASK_BOUNDARY_MARKERS
-    )
-    assert all(
-        marker not in repr(error.__cause__)
-        for marker in SENSITIVE_TASK_BOUNDARY_MARKERS
-    )
-
-
-def _assert_sensitive_task_context_not_logged(logs: object) -> None:
-    serialized_logs = repr(logs)
-    assert all(
-        marker not in serialized_logs for marker in SENSITIVE_TASK_BOUNDARY_MARKERS
-    )
 
 
 class FakeAgent:
@@ -2808,63 +2740,14 @@ def test_run_agent_answer_declares_taskiq_timeout_without_application_timeout() 
     assert not hasattr(agent_run_tasks, "RESEARCH_APPLICATION_TIMEOUT_SECONDS")
 
 
-@pytest.mark.asyncio
-async def test_taskiq_receiver_result_and_log_expose_only_safe_start_error(
-    monkeypatch: pytest.MonkeyPatch,
-    caplog: pytest.LogCaptureFixture,
-) -> None:
-    async def fail_start(*_args: object, **_kwargs: object) -> object:
-        raise SensitivePersistenceFailure
-
-    monkeypatch.setattr(run_execution, "_start_run", fail_start)
-    broker = InMemoryBroker()
-    broker.state.session_factory = object()
-    broker.state.agent_live_redis = object()
-    broker.state.agent_deadline_scheduler = SimpleNamespace(
-        reserve_in_background=lambda *_: None
-    )
-    receiver = Receiver(
-        broker,
-        max_async_tasks=1,
-        run_startup=False,
-    )
-    message = TaskiqMessage(
-        task_id="safe-boundary-test",
-        task_name="run_agent_answer",
-        labels={},
-        args=[],
-        kwargs={
-            "trigger": AgentRunTrigger(
-                run_id=UUID("00000000-0000-4000-a000-000000000010")
-            )
-        },
-    )
-
-    with caplog.at_level(logging.ERROR, logger="taskiq.receiver.receiver"):
-        result = await receiver.run_task(
-            agent_run_tasks.run_agent_answer.original_func,
-            message,
-        )
-
-    assert result.is_err is True
-    assert result.error is not None
-    _assert_safe_task_boundary_error(
-        result.error,
-        expected_message="agent run start failed",
-    )
-    receiver_output = f"{result!r}\n{caplog.text}"
-    assert all(
-        marker not in receiver_output for marker in SENSITIVE_TASK_BOUNDARY_MARKERS
-    )
-
-
 @pytest.mark.integration
 @pytest.mark.asyncio
-async def test_start_commit_failure_raises_sanitized_task_boundary_error(
+async def test_start_commit_failure_leaves_queued_run_for_deadline_recovery(
     read_logs,
     session_factory: async_sessionmaker[AsyncSession],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """開始のcommitが秘匿値つきのDB例外で落ちても、taskは例外を出さずログに秘匿値を残さず、Runと利用枠はqueuedのまま期限切れの回収に任せる。"""
     usage_date = date(2026, 7, 22)
     async with session_factory() as setup_session:
         setup_session.add(
@@ -2904,25 +2787,20 @@ async def test_start_commit_failure_raises_sanitized_task_boundary_error(
     )
 
     try:
-        with pytest.raises(Exception) as exc_info:
-            await agent_run_tasks.run_agent_answer(
-                trigger=AgentRunTrigger(run_id=run.id),
-                ctx=_ctx(
-                    cast(
-                        async_sessionmaker[AsyncSession],
-                        failing_session_factory,
-                    )
-                ),
-            )
+        await agent_run_tasks.run_agent_answer(
+            trigger=AgentRunTrigger(run_id=run.id),
+            ctx=_ctx(
+                cast(
+                    async_sessionmaker[AsyncSession],
+                    failing_session_factory,
+                )
+            ),
+        )
     finally:
         await failing_session.close()
     logs = read_logs()
 
-    _assert_safe_task_boundary_error(
-        exc_info.value,
-        expected_message="agent run start failed",
-    )
-    _assert_sensitive_task_context_not_logged(logs)
+    assert_no_sensitive_marker(logs)
     assert FakeLiveStreamPublisher.instances == []
     async with session_factory() as verification:
         persisted = await verification.get(AgentRun, run.id)
@@ -2938,6 +2816,64 @@ async def test_start_commit_failure_raises_sanitized_task_boundary_error(
         None,
         1,
     )
+
+
+@pytest.mark.asyncio
+async def test_unrecorded_failure_leaves_running_run_for_deadline_recovery(
+    read_logs,
+    session_factory: async_sessionmaker[AsyncSession],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """工程の失敗を記録するcommitが秘匿値つきのDB例外で落ちても、taskは例外を出さずログに秘匿値を残さず、Runはrunningのまま期限切れの回収に任せる。"""
+    async with session_factory() as session:
+        _thread, _message, run = await _create_thread_message_run(
+            session, question="SECRET_QUESTION_MARKER"
+        )
+        run_id = run.id
+    injected = False
+
+    def fail_failure_commit(session: Session) -> None:
+        nonlocal injected
+        if injected:
+            return
+        status = session.connection().scalar(
+            select(AgentRun.status).where(AgentRun.id == run_id)
+        )
+        if status == "failed":
+            injected = True
+            raise SensitivePersistenceFailure
+
+    _patch_worker_execution(
+        monkeypatch,
+        lambda **_kwargs: FakeAgent(),
+        answering_runner=FakeAnsweringRunner(
+            exc=AnsweringRunError(cause=PlanningError(cause=TimeoutError()))
+        ),
+    )
+    FakeLiveStreamPublisher.instances = []
+    monkeypatch.setattr(
+        run_execution, "AgentRunLiveStreamPublisher", FakeLiveStreamPublisher
+    )
+    sa_event.listen(Session, "before_commit", fail_failure_commit)
+    try:
+        await agent_run_tasks.run_agent_answer(
+            trigger=AgentRunTrigger(run_id=run_id), ctx=_ctx(session_factory)
+        )
+    finally:
+        sa_event.remove(Session, "before_commit", fail_failure_commit)
+    logs = read_logs()
+
+    assert injected
+    assert_no_sensitive_marker(logs)
+    async with session_factory() as session:
+        persisted = await session.get(AgentRun, run_id)
+    assert persisted is not None
+    assert (persisted.status, persisted.error_code) == ("running", None)
+    assert [
+        event
+        for event in FakeLiveStreamPublisher.instances[0].published
+        if isinstance(event, AgentRunLiveStreamTerminalEvent)
+    ] == []
 
 
 @pytest.mark.integration

@@ -18,7 +18,6 @@ from app.agent.running.deadline.deadline_exceeded import (
     check_agent_run_deadline,
     sweep_deadline_exceeded_runs,
 )
-from app.agent.running.task_boundary import AgentRunTaskBoundaryError
 from app.log_policy.policies.research import RESEARCH_LOG_RULES
 from app.log_policy.runtime import create_policy_json_logger
 
@@ -30,20 +29,9 @@ async def sweep_and_report_deadline_exceeded_runs(
     session_factory: async_sessionmaker[AsyncSession],
     live_redis: aioredis.Redis,
 ) -> None:
-    sweep_error: AgentRunTaskBoundaryError | None = None
-    try:
-        async with session_factory() as session:
-            async with session.begin():
-                result = await sweep_deadline_exceeded_runs(session)
-    except Exception as exc:
-        logger.error(
-            "agent_run_deadline_sweep_failed",
-            exc_info=exc,
-        )
-        sweep_error = AgentRunTaskBoundaryError("agent run deadline sweep failed")
-    if sweep_error is not None:
-        sweep_error.__suppress_context__ = True
-        raise sweep_error
+    async with session_factory() as session:
+        async with session.begin():
+            result = await sweep_deadline_exceeded_runs(session)
     await _report_deadline_recovery(live_redis, result)
 
 
@@ -53,21 +41,9 @@ async def check_and_report_run_deadline(
     session_factory: async_sessionmaker[AsyncSession],
     live_redis: aioredis.Redis,
 ) -> None:
-    failure = None
-    try:
-        async with session_factory() as session:
-            async with session.begin():
-                result = await check_agent_run_deadline(session, run_id=run_id)
-    except Exception as exc:
-        logger.error(
-            "agent_run_deadline_check_failed",
-            run_id=str(run_id),
-            exc_info=exc,
-        )
-        failure = AgentRunTaskBoundaryError("agent run deadline check failed")
-    if failure is not None:
-        failure.__suppress_context__ = True
-        raise failure
+    async with session_factory() as session:
+        async with session.begin():
+            result = await check_agent_run_deadline(session, run_id=run_id)
     await _report_deadline_recovery(live_redis, result)
 
 
