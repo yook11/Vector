@@ -38,7 +38,6 @@ from app.agent.running.state import (
 )
 from app.agent.running.state_repository import AgentRunStateRepository
 from app.agent.running.stop import AnswerGenerationStopped
-from app.agent.running.task_boundary import AgentRunTaskBoundaryError
 from app.agent.running.types import AgentRunErrorCode
 from app.agent.threads.contracts import ThreadMessageSnapshot
 from app.agent.threads.history import HISTORY_MESSAGE_LIMIT, normalize_run_history
@@ -58,18 +57,7 @@ async def execute_run_attempt(
 ) -> None:
     result: AnswerQuestionResult | None = None
     research_handoff: ResearchHandoff | None = None
-    start_error: AgentRunTaskBoundaryError | None = None
-    try:
-        started = await _start_run(session_factory, run_id)
-    except Exception as exc:
-        logger.error(
-            "agent_run_start_failed",
-            exc_info=exc,
-        )
-        start_error = AgentRunTaskBoundaryError("agent run start failed")
-    if start_error is not None:
-        start_error.__suppress_context__ = True
-        raise start_error
+    started = await _start_run(session_factory, run_id)
     if isinstance(started, RunFinished):
         logger.info("agent_run_start_deadline_exceeded")
         await notify_run_finished(

@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import traceback
 import uuid
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
@@ -28,27 +27,19 @@ from app.agent.running.state import (
     RunRejectionReason,
 )
 from app.agent.running.state_repository import AgentRunStateRepository
-from app.agent.running.task_boundary import AgentRunTaskBoundaryError
 from app.agent.running.types import AgentRunErrorCode, AgentRunStatus
 from app.models.agent_message import AgentMessage
 from app.models.agent_run import AgentRun
 from app.models.agent_thread import AgentThread
 from app.models.agent_user_daily_quota import AgentUserDailyQuota
 from app.queue.messages.agent_run import AgentRunTrigger
+from tests.agent._sensitive_db_failure import assert_no_sensitive_marker
 from tests.conftest import TEST_USER_ID
 from tests.logfire._metric_helpers import collected_metrics
 
 _USER_ID = uuid.UUID(TEST_USER_ID)
 _USAGE_DATE = date(2026, 7, 22)
 _DB_NOW = datetime(2026, 7, 22, 12, 0, tzinfo=UTC)
-_SENSITIVE_START_MARKERS = (
-    str(_USER_ID),
-    "SECRET_SQL_MARKER",
-    "SECRET_QUESTION_MARKER",
-    "SECRET_ANSWER_MARKER",
-    "SECRET_PROVIDER_RAW_MARKER",
-    "parameters:",
-)
 _SENSITIVE_START_ERROR = (
     "asyncpg failure\n"
     "DETAIL:  Key (question)=(SECRET_QUESTION_MARKER) SECRET_SQL_MARKER"
@@ -165,35 +156,6 @@ def _ctx(session_factory: async_sessionmaker[AsyncSession]) -> SimpleNamespace:
                 reserve_in_background=lambda *_: None
             ),
         )
-    )
-
-
-def _assert_safe_start_error(
-    error: BaseException,
-    logs: object,
-) -> None:
-    rendered_traceback = "".join(
-        traceback.format_exception(type(error), error, error.__traceback__)
-    )
-    exposed_surfaces = (
-        str(error),
-        rendered_traceback,
-        repr(error.__cause__),
-        repr(error.__context__),
-        repr(vars(error)),
-        repr(logs),
-    )
-
-    assert error.__class__ is AgentRunTaskBoundaryError
-    assert error.args == ("agent run start failed",)
-    assert error.__cause__ is None
-    assert error.__context__ is None
-    assert error.__suppress_context__ is True
-    assert not hasattr(error, "params")
-    assert all(
-        marker not in surface
-        for marker in _SENSITIVE_START_MARKERS
-        for surface in exposed_surfaces
     )
 
 
@@ -601,6 +563,7 @@ async def test_queued_expiry_rollback_emits_neither_log_nor_quota_metric(
     capfire: CaptureLogfire,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """期限切れの確定が利用枠の更新の秘匿値つきDB例外で戻ると、taskは例外を出さずログに秘匿値を残さず、Runと利用枠はqueuedのまま残る。"""
     seeded = await _seed_queued_run(
         session_factory,
         created_at=datetime.now(UTC) - timedelta(seconds=RUN_DEADLINE_SECONDS + 1),
@@ -628,16 +591,15 @@ async def test_queued_expiry_rollback_emits_neither_log_nor_quota_metric(
         return failing_session
 
     try:
-        with pytest.raises(AgentRunTaskBoundaryError) as exc_info:
-            await agent_run_tasks.run_agent_answer(
-                trigger=AgentRunTrigger(run_id=seeded.run_id),
-                ctx=_ctx(
-                    cast(
-                        async_sessionmaker[AsyncSession],
-                        failing_session_factory,
-                    )
-                ),
-            )
+        await agent_run_tasks.run_agent_answer(
+            trigger=AgentRunTrigger(run_id=seeded.run_id),
+            ctx=_ctx(
+                cast(
+                    async_sessionmaker[AsyncSession],
+                    failing_session_factory,
+                )
+            ),
+        )
     finally:
         sa_event.remove(
             failing_session.sync_session.bind,
@@ -647,7 +609,7 @@ async def test_queued_expiry_rollback_emits_neither_log_nor_quota_metric(
         await failing_session.close()
     logs = read_logs()
 
-    _assert_safe_start_error(exc_info.value, logs)
+    assert_no_sensitive_marker(logs)
     assert not [
         entry
         for entry in logs
