@@ -7,6 +7,7 @@ PROCESS_RUNTIME_LOG_RULES = LogPolicyRules(
     allow=frozenset(
         {
             "broker",
+            "task_name",
             "service",
             "pool_size",
             "max_overflow",
