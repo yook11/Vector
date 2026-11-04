@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Callable
-from dataclasses import replace
 from datetime import datetime
 from uuid import UUID
 
@@ -16,7 +15,6 @@ from app.agent.answering.direct_answer.contract import (
     DirectAnswerInvalidError,
 )
 from app.agent.answering.direct_answer.failure import DirectAnswerError
-from app.agent.answering.failure import is_output_truncated
 from app.agent.answering.live_delivery import (
     BestEffortAnswerDeltaReporter,
     close_answer_stream,
@@ -33,6 +31,7 @@ from app.agent.recording.direct_answer import (
     DirectAnswerSucceeded,
     logfire_direct_answer_recorder,
 )
+from app.agent.retry_prospect import is_resolvable_by_retry
 from app.agent.running.answer_generation import (
     AnswerGenerationRepository,
 )
@@ -75,7 +74,7 @@ class DirectAnswerService:
         self._recorder = recorder
 
     async def answer(self, input: DirectAnswerInput) -> DirectAnswerDraft:
-        """Return a valid direct draft, retrying only blank response defects."""
+        """完成した回答を返す。空の回答と、呼び直せば解消しうる失敗だけ再試行する。"""
 
         result = await self._repository.start_answer_generation()
 
@@ -105,16 +104,12 @@ class DirectAnswerService:
                                         attempt_number=attempt_number,
                                     )
                                 except _DIRECT_ANSWER_SOURCE_ERRORS as cause:
-                                    # 打ち切りと空の回答は書き方次第で収まる。
+                                    # 空の回答は生成し直せば解消しうる。
                                     retriable = (
-                                        is_output_truncated(cause)
-                                        or isinstance(cause, DirectAnswerInvalidError)
+                                        isinstance(cause, DirectAnswerInvalidError)
+                                        or is_resolvable_by_retry(cause)
                                     ) and attempt_number < _MAX_ATTEMPTS
                                     if retriable:
-                                        if is_output_truncated(cause):
-                                            input = replace(
-                                                input, previous_output_truncated=True
-                                            )
                                         continue
                                     raise DirectAnswerError(cause=cause) from cause
                                 break

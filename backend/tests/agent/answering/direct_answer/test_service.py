@@ -391,13 +391,15 @@ async def test_blank_twice_raises_invalid_after_observation(
 
 
 @pytest.mark.asyncio
-async def test_ai_provider_error_becomes_direct_answer_error_without_retry(
+async def test_unresolvable_ai_provider_error_becomes_direct_answer_error_without_retry(
     capfire: CaptureLogfire,
 ) -> None:
+    """呼び直しても解消しないAIの失敗は再試行せず、下書きを中断して回答の失敗にする。"""
     provider_exc = AIProviderTransportError(
         http_error=HttpTransportError(
             failure=HttpTransportFailure(
-                HttpTransportStage.RECEIVE, HttpTransportFailureReason.TIMEOUT
+                HttpTransportStage.CONNECT,
+                HttpTransportFailureReason.CERTIFICATE_VERIFICATION,
             )
         )
     )
@@ -451,35 +453,14 @@ async def test_second_truncation_raises_classified_truncation_error_after_retry(
 
 
 @pytest.mark.asyncio
-async def test_truncated_first_attempt_retries_with_truncation_flag() -> None:
-    """R2条件6(flow層): 打ち切りはrequest内でretryされ、2回目の入力に
-
-    previous_output_truncated=Trueが立つ (Evidence側S2と同じ受け渡し)。
-    """
+async def test_resolvable_ai_failure_retries_once_with_the_same_input() -> None:
+    """呼び直せば解消しうるAIの失敗(出力の打ち切り)は同じ入力で1回だけ再試行し、2回目の回答を返す。"""
     runtime = ScriptedStreamingRuntime([_truncated_error(), "再試行後の回答です。"])
 
     draft = await _service(runtime).answer(_input())
 
     assert len(runtime.calls) == 2
-    assert runtime.calls[0].input.previous_output_truncated is False
-    assert runtime.calls[1].input.previous_output_truncated is True
-    assert draft.answer == "再試行後の回答です。"
-
-
-@pytest.mark.asyncio
-async def test_blank_retry_does_not_carry_truncation_flag() -> None:
-    """R2条件7(flow層): 打ち切り以外(空回答)が原因のretryでは
-
-    previous_output_truncatedを立てない。
-    """
-    runtime = ScriptedStreamingRuntime([" \n\t", "再試行後の回答です。"])
-
-    draft = await _service(runtime).answer(_input())
-
-    assert len(runtime.calls) == 2
     assert runtime.calls[0].input is runtime.calls[1].input
-    assert runtime.calls[0].input.previous_output_truncated is False
-    assert runtime.calls[1].input.previous_output_truncated is False
     assert draft.answer == "再試行後の回答です。"
 
 
@@ -578,7 +559,8 @@ async def test_runtime_scope_exit_failure_replaces_terminal_failure_without_outc
     source_error = AIProviderTransportError(
         http_error=HttpTransportError(
             failure=HttpTransportFailure(
-                HttpTransportStage.RECEIVE, HttpTransportFailureReason.TIMEOUT
+                HttpTransportStage.CONNECT,
+                HttpTransportFailureReason.CERTIFICATE_VERIFICATION,
             )
         )
     )
@@ -678,7 +660,8 @@ async def test_reporter_abort_failure_does_not_mask_provider_error() -> None:
     provider_exc = AIProviderTransportError(
         http_error=HttpTransportError(
             failure=HttpTransportFailure(
-                HttpTransportStage.RECEIVE, HttpTransportFailureReason.TIMEOUT
+                HttpTransportStage.CONNECT,
+                HttpTransportFailureReason.CERTIFICATE_VERIFICATION,
             )
         )
     )
@@ -710,7 +693,8 @@ async def test_classified_failure_records_failed_outcome() -> None:
     error = AIProviderTransportError(
         http_error=HttpTransportError(
             failure=HttpTransportFailure(
-                HttpTransportStage.RECEIVE, HttpTransportFailureReason.TIMEOUT
+                HttpTransportStage.CONNECT,
+                HttpTransportFailureReason.CERTIFICATE_VERIFICATION,
             )
         )
     )

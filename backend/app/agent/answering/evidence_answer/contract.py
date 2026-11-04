@@ -29,7 +29,6 @@ class EvidenceAnswerInput:
     evidence: tuple[AnswerInputEvidence, ...]
     target_time_window: TargetTimeWindow | None
     review_missing: tuple[str, ...]
-    previous_output_truncated: bool = False
 
 
 class EvidenceAnswerDraft(BaseModel):

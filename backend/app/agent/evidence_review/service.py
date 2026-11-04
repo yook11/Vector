@@ -36,6 +36,7 @@ from app.agent.recording.evidence_review import (
     EvidenceReviewSucceeded,
     logfire_evidence_review_recorder,
 )
+from app.agent.retry_prospect import is_resolvable_by_retry
 from app.agent.runtime.contract import (
     AgentResponseInvalidError,
     AgentRuntime,
@@ -43,6 +44,7 @@ from app.agent.runtime.contract import (
 )
 from app.ai_providers.errors import (
     CLASSIFIED_AI_PROVIDER_ERRORS,
+    AIProviderError,
 )
 
 __all__ = ["EvidenceReviewer", "EvidenceReviewService"]
@@ -113,8 +115,14 @@ class EvidenceReviewService:
                                     ),
                                     review_missing=reviewer_response.missing,
                                 )
-                            except EvidenceReviewError:
-                                if attempt_number < _MAX_REVIEW_ATTEMPTS:
+                            except EvidenceReviewError as error:
+                                # AIの失敗だけを共通の判定に掛け、
+                                # 時間切れと選択の検証の失敗は精査し直す。
+                                cause = error.cause
+                                retriable = not isinstance(
+                                    cause, AIProviderError | AgentResponseInvalidError
+                                ) or is_resolvable_by_retry(cause)
+                                if retriable and attempt_number < _MAX_REVIEW_ATTEMPTS:
                                     continue
                                 raise
                             break

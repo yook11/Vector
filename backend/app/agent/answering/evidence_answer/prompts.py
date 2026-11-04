@@ -11,7 +11,7 @@ from app.agent.planning.contract import render_target_time_window
 from app.agent.threads.contracts import ThreadMessageSnapshot
 from app.analysis.prompt_safety import sanitize_for_untrusted_block
 
-EVIDENCE_ANSWER_PROMPT_VERSION: Final[str] = "v10"
+EVIDENCE_ANSWER_PROMPT_VERSION: Final[str] = "v11"
 
 EVIDENCE_ANSWER_INSTRUCTIONS: Final[str] = """\
 ユーザーの質問に、与えられたevidenceを根拠として日本語で回答してください。
@@ -64,16 +64,8 @@ target_time_window: {target_time_window}
 {evidence}
 """
 
-# runtimeが観測した機械的事実であり、model出力由来ではないためtrusted (sanitize不要)。
-_TRUNCATION_REPAIR_BLOCK: Final[str] = """
-
-# Output Length
-前回の生成は文字数上限に達して途中で打ち切られました。
-今回は上限内に収まる長さで、要点を絞って最初から結論まで書き切ってください。
-"""
-
 # 精査工程からの生成物であり信頼済みテキストではないため、項目ごとに
-# <untrusted_input>境界の内側へ置く(runtime観測のTRUNCATION_REPAIR_BLOCKとは逆)。
+# <untrusted_input>境界の内側へ置く。
 _REVIEW_MISSING_TEMPLATE: Final[str] = """
 
 # Review Notes
@@ -107,8 +99,6 @@ def render_evidence_answer_input(input: EvidenceAnswerInput) -> str:
         rendered += _REVIEW_MISSING_TEMPLATE.format(
             items=_render_review_missing(input.review_missing)
         )
-    if input.previous_output_truncated:
-        rendered += _TRUNCATION_REPAIR_BLOCK
     return rendered
 
 

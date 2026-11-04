@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import re
 from datetime import UTC, datetime
 
 import pytest
@@ -10,10 +9,7 @@ import pytest
 from app.agent.answering.contract import AnsweringRequest
 from app.agent.answering.direct_answer.agent import DIRECT_ANSWER_AGENT
 from app.agent.answering.direct_answer.contract import DirectAnswerInput
-from app.agent.answering.direct_answer.prompts import (
-    _TRUNCATION_REPAIR_BLOCK,
-    render_direct_answer_input,
-)
+from app.agent.answering.direct_answer.prompts import render_direct_answer_input
 from app.agent.threads.contracts import ThreadMessageSnapshot
 
 
@@ -40,24 +36,6 @@ def _render(
             previous_answer=previous_answer,
         )
     )
-
-
-def _untrusted_spans(rendered: str) -> list[tuple[int, int]]:
-    return [
-        (match.start(), match.end())
-        for match in re.finditer(
-            r"<untrusted_input>.*?</untrusted_input>", rendered, re.DOTALL
-        )
-    ]
-
-
-def _render_with_truncation_state(*, previous_output_truncated: bool) -> str:
-    input = DirectAnswerInput(
-        request=_request(),
-        previous_answer="",
-        previous_output_truncated=previous_output_truncated,
-    )
-    return render_direct_answer_input(input)
 
 
 def test_prompt_sanitizes_question_boundary_tags() -> None:
@@ -91,39 +69,6 @@ def test_prompt_does_not_include_evidence_or_citation_contract() -> None:
     assert "cited_refs" not in prompt
     assert "missing_aspects" not in prompt
     assert "引用できる根拠" not in prompt
-
-
-def test_truncated_retry_shows_truncation_wording() -> None:
-    """打ち切りが原因のretryでは、打ち切り用の文言が現れる。"""
-    truncation_block = _TRUNCATION_REPAIR_BLOCK
-
-    prompt = _render_with_truncation_state(previous_output_truncated=True)
-
-    assert truncation_block in prompt
-
-
-def test_truncation_notice_is_trusted_and_outside_untrusted_blocks() -> None:
-    """条件8: 打ち切りの通知はtrusted(<untrusted_input>の外側)。Evidence側S2と
-
-    同じ扱い(runtimeが観測した機械的事実であり、model出力由来ではないため)。
-    """
-    truncation_block = _TRUNCATION_REPAIR_BLOCK
-
-    prompt = _render_with_truncation_state(previous_output_truncated=True)
-
-    block_start = prompt.index(truncation_block)
-    block_end = block_start + len(truncation_block)
-    assert all(
-        block_end <= span_start or span_end <= block_start
-        for span_start, span_end in _untrusted_spans(prompt)
-    )
-
-
-def test_first_attempt_does_not_show_truncation_wording() -> None:
-    """初回attemptでは打ち切り用の文言が現れない。"""
-    prompt = _render_with_truncation_state(previous_output_truncated=False)
-
-    assert _TRUNCATION_REPAIR_BLOCK not in prompt
 
 
 def test_prompt_uses_all_context_fields_without_treating_them_as_facts() -> None:

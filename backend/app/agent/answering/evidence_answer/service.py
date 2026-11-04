@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Callable
-from dataclasses import replace
 from datetime import datetime
 from uuid import UUID
 
@@ -19,7 +18,6 @@ from app.agent.answering.evidence_answer.failure import EvidenceAnswerError
 from app.agent.answering.evidence_answer.validation import (
     finalize_evidence_answer_draft,
 )
-from app.agent.answering.failure import is_output_truncated
 from app.agent.answering.live_delivery import (
     BestEffortAnswerDeltaReporter,
     close_answer_stream,
@@ -35,6 +33,7 @@ from app.agent.recording.evidence_answer import (
     EvidenceAnswerSucceeded,
     logfire_evidence_answer_recorder,
 )
+from app.agent.retry_prospect import is_resolvable_by_retry
 from app.agent.running.answer_generation import (
     AnswerGenerationRepository,
 )
@@ -103,22 +102,16 @@ class EvidenceAnswerService:
                                         attempt_number=attempt_number,
                                     )
                                 except _EVIDENCE_ANSWER_CLASSIFIED_ERRORS as exc:
-                                    # 打ち切りと接地違反は書き方次第で収まる。
+                                    # 接地違反は生成し直せば解消しうる。
                                     retriable = (
-                                        is_output_truncated(exc)
-                                        or isinstance(
-                                            exc, EvidenceAnswerDraftInvalidError
-                                        )
+                                        isinstance(exc, EvidenceAnswerDraftInvalidError)
+                                        or is_resolvable_by_retry(exc)
                                     ) and attempt_number < _MAX_ATTEMPTS
                                     if not retriable:
                                         raise EvidenceAnswerError(cause=exc) from exc
                                     await self._start_revision(
                                         generation=attempt_number + 1
                                     )
-                                    if is_output_truncated(exc):
-                                        input = replace(
-                                            input, previous_output_truncated=True
-                                        )
                                     continue
                                 break
                             else:

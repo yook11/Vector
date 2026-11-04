@@ -32,6 +32,7 @@ from app.agent.recording.evidence_review import (
 from app.agent.runtime.contract import AgentResponseDefect, AgentResponseInvalidError
 from app.ai_providers.errors import (
     AIProviderError,
+    AIProviderResultError,
     AIProviderResultReason,
     AIProviderTransportError,
 )
@@ -381,6 +382,19 @@ async def test_review_uses_the_last_failure_code_when_attempt_codes_differ() -> 
             attempt_count=2,
         ),
     )
+
+
+@pytest.mark.asyncio
+async def test_review_does_not_retry_an_unresolvable_provider_failure() -> None:
+    """呼び直しても解消しないAIの失敗(出力のブロック)は再試行せず、その理由を種別とする精査の失敗を返す。"""
+    runtime = ScriptedAgentRuntime(
+        [AIProviderResultError(reason=AIProviderResultReason.OUTPUT_BLOCKED_SAFETY)]
+    )
+
+    result = await _review(tasks=[_internal_task()], reviewer_runtime=runtime)
+
+    assert result == EvidenceRunFailed(failure_code="output_blocked_safety")
+    assert [call.attempt_number for call in runtime.calls] == [1]
 
 
 class _UnregisteredProviderError(AIProviderError):

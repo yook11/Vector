@@ -293,6 +293,29 @@ async def test_semantic_response_defect_retries_once() -> None:
     assert runtime.calls[0].input is runtime.calls[1].input
 
 
+async def test_resolvable_provider_failure_retries_once_with_the_same_input() -> None:
+    """呼び直せば解消しうるAIの失敗(通信の待ち切れ)は同じ入力で1回だけ再試行し、2回目の計画を返す。"""
+    runtime = ScriptedAgentRuntime(
+        [
+            AIProviderTransportError(
+                http_error=HttpTransportError(
+                    failure=HttpTransportFailure(
+                        HttpTransportStage.RECEIVE, HttpTransportFailureReason.TIMEOUT
+                    )
+                )
+            ),
+            _draft(plan_type="direct_answer"),
+        ]
+    )
+    service, _factory = _service(runtime)
+
+    plan = await service.plan(_input())
+
+    assert plan.plan_type == "direct_answer"
+    assert [call.attempt_number for call in runtime.calls] == [1, 2]
+    assert runtime.calls[0].input is runtime.calls[1].input
+
+
 async def test_two_response_defects_propagate_second_error_and_record_not_created(
     capfire: CaptureLogfire,
 ) -> None:
@@ -341,13 +364,15 @@ async def test_terminal_response_defect_records_failed_outcome() -> None:
     )
 
 
-async def test_classified_provider_failure_does_not_retry_and_records_not_created(
+async def test_unresolvable_provider_failure_does_not_retry_and_records_not_created(
     capfire: CaptureLogfire,
 ) -> None:
+    """呼び直しても解消しないAIの失敗(証明書の検証の失敗)は再試行せず、計画なしの失敗として記録する。"""
     error = AIProviderTransportError(
         http_error=HttpTransportError(
             failure=HttpTransportFailure(
-                HttpTransportStage.RECEIVE, HttpTransportFailureReason.TIMEOUT
+                HttpTransportStage.CONNECT,
+                HttpTransportFailureReason.CERTIFICATE_VERIFICATION,
             )
         )
     )
@@ -377,7 +402,8 @@ async def test_classified_provider_failure_records_failed_outcome() -> None:
     error = AIProviderTransportError(
         http_error=HttpTransportError(
             failure=HttpTransportFailure(
-                HttpTransportStage.RECEIVE, HttpTransportFailureReason.TIMEOUT
+                HttpTransportStage.CONNECT,
+                HttpTransportFailureReason.CERTIFICATE_VERIFICATION,
             )
         )
     )
@@ -548,7 +574,8 @@ async def test_close_error_replaces_terminal_response_defect_without_metric(
                 "RAW_PROVIDER_MESSAGE_MUST_NOT_ENTER_METRICS_26e9",
                 http_error=HttpTransportError(
                     failure=HttpTransportFailure(
-                        HttpTransportStage.RECEIVE, HttpTransportFailureReason.TIMEOUT
+                        HttpTransportStage.CONNECT,
+                        HttpTransportFailureReason.CERTIFICATE_VERIFICATION,
                     )
                 ),
             ),
@@ -562,11 +589,12 @@ async def test_close_error_replaces_terminal_response_defect_without_metric(
         ),
     ],
 )
-async def test_classified_non_response_error_propagates_without_retry(
+async def test_unresolvable_provider_error_propagates_without_retry(
     error: BaseException,
     expected_failure_code: str,
     capfire: CaptureLogfire,
 ) -> None:
+    """呼び直しても解消しないAIの失敗は再試行せず、入力や原文を含めずに失敗を記録する。"""
     question_sentinel = "PLANNER_QUESTION_MUST_NOT_ENTER_METRICS_7f0a"
     runtime = ScriptedAgentRuntime([error])
     metrics_at_scope_exit: list[dict[str, Any]] = []

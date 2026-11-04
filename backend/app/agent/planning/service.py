@@ -18,6 +18,7 @@ from app.agent.recording.planning import (
     PlanningSucceeded,
     logfire_planning_recorder,
 )
+from app.agent.retry_prospect import is_resolvable_by_retry
 from app.agent.runtime.contract import (
     AgentResponseInvalidError,
     AgentRuntimeScopeFactory,
@@ -49,7 +50,7 @@ class QuestionPlanningService:
         self._recorder = recorder
 
     async def plan(self, input: PlanningInput) -> QuestionPlan:
-        """完成した計画を返す。応答形状の失敗だけ再試行する。"""
+        """完成した計画を返す。呼び直せば解消しうる失敗だけ再試行する。"""
 
         async with self._recorder.record(agent_name=self._agent.name) as recording:
             attempt_number = 0
@@ -67,7 +68,7 @@ class QuestionPlanningService:
                                 plan = plan_from_draft(draft)
                             except _PLANNING_SOURCE_ERRORS as cause:
                                 if (
-                                    isinstance(cause, AgentResponseInvalidError)
+                                    is_resolvable_by_retry(cause)
                                     and attempt_number < _MAX_ATTEMPTS
                                 ):
                                     continue
