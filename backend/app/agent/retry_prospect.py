@@ -18,6 +18,9 @@ from app.http import retry_prospect as http_retry_prospect
 def is_resolvable_by_retry(error: AIProviderError | AgentResponseInvalidError) -> bool:
     """同じ入力で呼び直すだけで解消しうる失敗かを返す。"""
     match error:
+        # モデルの生成は呼ぶたびに変わるので、呼び直せば契約を満たす応答が返りうる。
+        case AgentResponseInvalidError():
+            return True
         case AIProviderTransportError():
             return http_retry_prospect.is_resolvable_by_retry(error.http_error.failure)
         # 設定・権限・日あたりの利用枠・入力や出力の内容は、直すまで同じ結果になる。

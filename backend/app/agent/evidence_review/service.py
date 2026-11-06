@@ -116,7 +116,8 @@ class EvidenceReviewService:
                                     review_missing=reviewer_response.missing,
                                 )
                             except EvidenceReviewError as error:
-                                # AIの失敗だけを共通の判定に掛け、
+                                # AIプロバイダーの失敗と応答の契約違反を
+                                # 共通の判定に掛け、
                                 # 時間切れと選択の検証の失敗は精査し直す。
                                 cause = error.cause
                                 retriable = not isinstance(
