@@ -9,6 +9,7 @@ from typing import Any, get_args
 from pydantic import BaseModel, TypeAdapter, ValidationError
 
 from app.agent.agent import Agent
+from app.shared.errors import ApplicationError
 
 __all__ = ["AgentOutputDefect", "AgentOutputInvalidError", "validate_output"]
 
@@ -31,7 +32,7 @@ class AgentOutputDefect(StrEnum):
     OUTPUT_SCHEMA_MISMATCH = "output_schema_mismatch"
 
 
-class AgentOutputInvalidError(ValueError):
+class AgentOutputInvalidError(ApplicationError):
     """Agentの出力を、宣言されたPythonの契約へ変換できない。"""
 
     def __init__(
@@ -42,10 +43,10 @@ class AgentOutputInvalidError(ValueError):
     ) -> None:
         self.defect = defect
         self.repair_hint = repair_hint
-        message = defect.value
-        if repair_hint is not None:
-            message = f"{message}: {repair_hint}"
-        super().__init__(message)
+        message = self.defect.value
+        if self.repair_hint is not None:
+            message = f"{message}: {self.repair_hint}"
+        super().__init__(message, details={"defect": self.defect.value})
 
 
 def validate_output[InputT, OutputT](

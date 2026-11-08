@@ -11,6 +11,7 @@ from app.agent.output import (
     AgentOutputInvalidError,
     validate_output,
 )
+from app.shared.errors import ApplicationError
 from tests.agent.runtime._helpers import (
     RuntimeOutput,
     ValidationProbeOutput,
@@ -43,6 +44,17 @@ def test_agent_output_invalid_error_string_uses_defect_and_repair_hint() -> None
     assert error.repair_hint == repair_hint
     assert AgentOutputDefect.OUTPUT_SCHEMA_MISMATCH.value in str(error)
     assert repair_hint in str(error)
+
+
+def test_agent_output_invalid_error_is_application_error_with_defect_details() -> None:
+    """出力の契約違反はアプリの例外として、種類をログに出せる診断情報に持つ。"""
+    error = AgentOutputInvalidError(
+        AgentOutputDefect.OUTPUT_SCHEMA_MISMATCH,
+        repair_hint="field=score type=greater_than_equal ge=1",
+    )
+
+    assert isinstance(error, ApplicationError)
+    assert error.details == {"defect": "output_schema_mismatch"}
 
 
 def test_validate_output_returns_the_declared_model() -> None:
