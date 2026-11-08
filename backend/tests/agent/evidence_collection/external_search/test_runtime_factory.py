@@ -9,7 +9,7 @@ from pydantic import SecretStr
 
 from app.agent import composition
 from app.agent.composition import activate_external_search
-from app.agent.runtime.contract import AgentResponseDefect, AgentResponseInvalidError
+from app.agent.output import AgentOutputDefect, AgentOutputInvalidError
 from app.ai_providers.gemini.settings import GeminiConnectionSettings
 
 
@@ -240,7 +240,7 @@ async def test_external_search_scope_is_lazy_and_closes_each_client_once(
     [
         pytest.param(None, id="normal"),
         pytest.param(
-            AgentResponseInvalidError(AgentResponseDefect.RESPONSE_NOT_JSON),
+            AgentOutputInvalidError(AgentOutputDefect.OUTPUT_SCHEMA_MISMATCH),
             id="classified-failure",
         ),
         pytest.param(RuntimeError("unclassified body failure"), id="unexpected"),

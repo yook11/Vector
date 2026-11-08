@@ -30,6 +30,7 @@ from app.agent.evidence_review.selection import (
     EvidenceReviewerDraft,
     EvidenceReviewerResponse,
 )
+from app.agent.output import AgentOutputInvalidError, validate_output
 from app.agent.recording.evidence_review import (
     EvidenceReviewFailed,
     EvidenceReviewRecorder,
@@ -38,7 +39,6 @@ from app.agent.recording.evidence_review import (
 )
 from app.agent.retry_prospect import is_resolvable_by_retry
 from app.agent.runtime.contract import (
-    AgentResponseInvalidError,
     AgentRuntime,
     AgentRuntimeScopeFactory,
 )
@@ -52,7 +52,7 @@ __all__ = ["EvidenceReviewer", "EvidenceReviewService"]
 _MAX_REVIEW_ATTEMPTS = 2
 _REVIEW_TIMEOUT_SECONDS = 15
 _REVIEW_SOURCE_ERRORS = (
-    AgentResponseInvalidError,
+    AgentOutputInvalidError,
     *CLASSIFIED_AI_PROVIDER_ERRORS,
     TimeoutError,
 )
@@ -121,7 +121,7 @@ class EvidenceReviewService:
                                 # 時間切れと選択の検証の失敗は精査し直す。
                                 cause = error.cause
                                 retriable = not isinstance(
-                                    cause, AIProviderError | AgentResponseInvalidError
+                                    cause, AIProviderError | AgentOutputInvalidError
                                 ) or is_resolvable_by_retry(cause)
                                 if retriable and attempt_number < _MAX_REVIEW_ATTEMPTS:
                                     continue
@@ -165,11 +165,12 @@ async def _review_attempt(
     attempt_number: int,
 ) -> EvidenceReviewerResponse:
     try:
-        draft = await reviewer_runtime.call(
+        payload = await reviewer_runtime.call(
             agent,
             review_input,
             attempt_number=attempt_number,
         )
+        draft = validate_output(agent, payload)
     except _REVIEW_SOURCE_ERRORS as cause:
         raise EvidenceReviewError(cause=cause) from cause
 

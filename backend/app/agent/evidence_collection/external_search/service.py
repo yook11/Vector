@@ -35,6 +35,7 @@ from app.agent.evidence_collection.external_search.time_filter import (
     ExternalSearchDateFilterResolutionError,
     resolve_external_search_date_filter,
 )
+from app.agent.output import AgentOutputInvalidError, validate_output
 from app.agent.planning.contract import ExternalResearchTask, TargetTimeWindow
 from app.agent.recording.external_search import (
     ExternalSearchFailed,
@@ -43,7 +44,7 @@ from app.agent.recording.external_search import (
     ExternalSearchSucceeded,
     logfire_external_search_recorder,
 )
-from app.agent.runtime.contract import AgentResponseInvalidError, AgentRuntime
+from app.agent.runtime.contract import AgentRuntime
 from app.ai_providers.errors import AIProviderError
 
 __all__ = ["ExternalSearchService"]
@@ -144,7 +145,7 @@ class ExternalSearchService:
             target_time_window=target_time_window,
         )
         try:
-            draft = await asyncio.wait_for(
+            payload = await asyncio.wait_for(
                 self.query_runtime.call(
                     EXTERNAL_QUERY_AGENT,
                     query_input,
@@ -152,7 +153,8 @@ class ExternalSearchService:
                 ),
                 timeout=QUERY_GENERATE_TIMEOUT_SECONDS,
             )
-        except (AgentResponseInvalidError, AIProviderError, TimeoutError) as cause:
+            draft = validate_output(EXTERNAL_QUERY_AGENT, payload)
+        except (AgentOutputInvalidError, AIProviderError, TimeoutError) as cause:
             raise ExternalQueryGenerationError(cause=cause) from cause
         return clean_generated_queries(draft.queries)
 

@@ -55,7 +55,6 @@ from app.agent.planning.contract import (
     SearchPlan,
     TargetTimeWindow,
 )
-from app.agent.runtime.contract import AgentResponseDefect, AgentResponseInvalidError
 from app.analysis.analyzed_article import InScopeAnalyzedArticle
 from app.analysis.assessment.domain.result import InScope, InScopeCategory
 from tests.agent.answering_runner._harness import (
@@ -65,7 +64,11 @@ from tests.agent.answering_runner._harness import (
     run_identity,
 )
 from tests.agent.evidence_collection._failures import article_search_failed
-from tests.agent.runtime._fakes import GoalKeyedAgentRuntime, ScriptedAgentRuntime
+from tests.agent.runtime._fakes import (
+    GoalKeyedAgentRuntime,
+    ScriptedAgentRuntime,
+    runtime_payload,
+)
 from tests.logfire._metric_helpers import collected_metrics
 
 RUN_IDENTITY = run_identity(
@@ -307,7 +310,7 @@ class _ControlledQueryRuntime:
                     self._raised.set()
                 raise self._error
             self.completed = True
-            return self._result
+            return runtime_payload(self._result)
         except asyncio.CancelledError as exc:
             self.cancelled_error = exc
             raise
@@ -970,21 +973,10 @@ async def test_pre_dispatch_failure_does_not_activate_external_scope(
 async def test_classified_external_failure_is_an_outcome_and_scope_closes_once(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from app.agent.runtime.contract import (
-        AgentResponseDefect,
-        AgentResponseInvalidError,
-    )
-
     timeline: list[str] = []
     captured = _capture_external_outcome(monkeypatch)
     factory = _Factory(
-        [
-            _runtime(
-                ScriptedAgentRuntime(
-                    [AgentResponseInvalidError(AgentResponseDefect.RESPONSE_NOT_JSON)]
-                )
-            )
-        ],
+        [_runtime(ScriptedAgentRuntime([{}]))],
         timeline,
     )
     runner = _runner(
@@ -1534,14 +1526,8 @@ async def test_scope_closes_after_reviewer_failure_exhausts_attempts() -> None:
     external scopeが正常に解放される
     (収集失敗・想定外例外・cancelの解放経路は他テストが既に覆う)。
     """
-    from app.agent.runtime.contract import (
-        AgentResponseDefect,
-        AgentResponseInvalidError,
-    )
-
     timeline: list[str] = []
-    reviewer_error = AgentResponseInvalidError(AgentResponseDefect.RESPONSE_NOT_JSON)
-    reviewer_runtime = ScriptedAgentRuntime([reviewer_error, reviewer_error])
+    reviewer_runtime = ScriptedAgentRuntime([{}, {}])
     gateway = _FakeExternalSearchGateway(
         {"NVIDIA supply": [_external_hit("https://example.com/ext", title="ext title")]}
     )
@@ -1699,9 +1685,7 @@ async def test_time_filter_failure_still_collects_internal_hits_for_every_task(
     # S1: reviewerはRun単位1回。統合index空間(仮定: task昇順)ではtask0の唯一の
     # 内部ヒットが0、task1の唯一の内部ヒットが1。
     reviewer_runtime = ScriptedAgentRuntime([_review_draft_selecting([0, 1])])
-    query_failure = AgentResponseInvalidError(
-        AgentResponseDefect.OUTPUT_SCHEMA_MISMATCH
-    )
+    query_failure: dict[str, object] = {}
     factory = _Factory(
         [
             _runtime(
@@ -1742,9 +1726,7 @@ async def test_runner_routes_each_tasks_queries_to_only_that_tasks_search() -> N
         ("goal1", ["q-c"]),
         target_time_window=TargetTimeWindow(kind="unsupported_explicit_window"),
     )
-    query_failure = AgentResponseInvalidError(
-        AgentResponseDefect.OUTPUT_SCHEMA_MISMATCH
-    )
+    query_failure: dict[str, object] = {}
     runner = _runner(
         plan=plan,
         internal=internal,
@@ -1785,9 +1767,7 @@ async def test_runner_isolates_one_tasks_total_failure_from_sibling_evidence() -
         target_time_window=TargetTimeWindow(kind="unsupported_explicit_window"),
     )
     reviewer_runtime = ScriptedAgentRuntime([_review_draft_selecting([0])])
-    query_failure = AgentResponseInvalidError(
-        AgentResponseDefect.OUTPUT_SCHEMA_MISMATCH
-    )
+    query_failure: dict[str, object] = {}
     factory = _Factory(
         [
             _runtime(
@@ -1870,9 +1850,7 @@ async def test_internal_hits_are_kept_per_task_when_the_same_article_appears(
     reviewer_runtime = ScriptedAgentRuntime(
         [_review_draft_selecting([0, 1, 2, 3]), _review_draft_selecting([])]
     )
-    query_failure = AgentResponseInvalidError(
-        AgentResponseDefect.OUTPUT_SCHEMA_MISMATCH
-    )
+    query_failure: dict[str, object] = {}
     runner = _runner(
         plan=plan,
         internal=_RaceControlledInternalSearch(),
@@ -1927,20 +1905,7 @@ async def test_all_tasks_incomplete_adds_the_fixed_incomplete_phrase_once(
         plan=plan,
         internal=internal,
         factory=_Factory(
-            [
-                _runtime(
-                    ScriptedAgentRuntime(
-                        [
-                            AgentResponseInvalidError(
-                                AgentResponseDefect.OUTPUT_SCHEMA_MISMATCH
-                            ),
-                            AgentResponseInvalidError(
-                                AgentResponseDefect.OUTPUT_SCHEMA_MISMATCH
-                            ),
-                        ]
-                    )
-                )
-            ],
+            [_runtime(ScriptedAgentRuntime([{}, {}]))],
             [],
         ),
         timeline=[],
@@ -1983,9 +1948,7 @@ async def test_some_tasks_incomplete_keeps_the_phrase_to_one_line_and_keeps_sour
         target_time_window=TargetTimeWindow(kind="unsupported_explicit_window"),
     )
     reviewer_runtime = ScriptedAgentRuntime([_review_draft_selecting([0])])
-    query_failure = AgentResponseInvalidError(
-        AgentResponseDefect.OUTPUT_SCHEMA_MISMATCH
-    )
+    query_failure: dict[str, object] = {}
     runner = _runner(
         plan=plan,
         internal=internal,

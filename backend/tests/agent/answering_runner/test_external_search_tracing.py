@@ -50,7 +50,6 @@ from app.agent.planning.contract import (
     SearchPlan,
     TargetTimeWindow,
 )
-from app.agent.runtime.contract import AgentResponseDefect, AgentResponseInvalidError
 from app.agent.runtime.gemini import GeminiAgentRuntime
 from app.analysis.analyzed_article import InScopeAnalyzedArticle
 from app.analysis.assessment.domain.result import InScope, InScopeCategory
@@ -360,7 +359,7 @@ async def test_external_phase_spans_keep_attributes_parentage_and_no_sensitive_t
     ]
     assert [provider["attributes"].get("error.type") for provider in providers] == [
         None,
-        "response_not_json",
+        "ai_provider_result_error",
         None,
     ]
     assert (
@@ -616,10 +615,9 @@ def _two_task_query_failing_runtime() -> ExternalScopes:
     S1: reviewerはRun単位1回のため script は1件だけ渡す (2回目の呼び出しは
     枯渇の AssertionError で即 red になる)。
     """
-    query_failure = AgentResponseInvalidError(AgentResponseDefect.RESPONSE_NOT_JSON)
     return ExternalScopes(
         external_search=ExternalSearchService(
-            query_runtime=ScriptedAgentRuntime([query_failure, query_failure]),
+            query_runtime=ScriptedAgentRuntime([{}, {}]),
             search_gateway=_FakeExternalSearchGateway(),
         ),
         reviewer_runtime=ScriptedAgentRuntime(

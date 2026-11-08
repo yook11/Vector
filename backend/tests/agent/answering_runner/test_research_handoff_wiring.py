@@ -53,7 +53,6 @@ from app.agent.research_handoff import ResearchHandoff, ResearchHandoffInput
 from app.agent.running.state import RunRejected, RunRejectionReason
 from app.agent.running.stop import AnswerGenerationStopped
 from app.agent.running.types import AgentRunStatus
-from app.agent.runtime.contract import AgentResponseDefect, AgentResponseInvalidError
 from tests.agent.answering_runner._harness import (
     PassThroughOrganizer,
     fixed_scope,
@@ -276,11 +275,10 @@ async def test_evidence_review_failure_leaves_handoff_none() -> None:
     gateway = _FakeExternalSearchGateway(
         results_by_query={"q": [_external_hit("https://example.com/a")]}
     )
-    failure = AgentResponseInvalidError(AgentResponseDefect.OUTPUT_SCHEMA_MISMATCH)
     runner = _search_runner(
         plan=_plan(research_goal="調査目標"),
         query_runtime=ScriptedAgentRuntime([_query_draft(["q"])]),
-        reviewer_runtime=ScriptedAgentRuntime([failure, failure]),
+        reviewer_runtime=ScriptedAgentRuntime([{}, {}]),
         gateway=gateway,
     )
 

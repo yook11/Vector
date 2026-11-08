@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
+from typing import Any
 from uuid import UUID
 
 from app.agent.answering.contract import AnsweringRequest
@@ -36,6 +37,7 @@ from tests.agent.answering_runner._harness import (
     fixed_scope,
     run_identity,
 )
+from tests.agent.runtime._fakes import runtime_payload
 
 RUN_ID = UUID("019bd239-1ed4-7fbb-a336-04fe3c197650")
 AS_OF = datetime(2026, 7, 19, 9, 30, tzinfo=UTC)
@@ -82,9 +84,9 @@ def _search_plan() -> SearchPlan:
 class _EmptyExternalQueryRuntime:
     async def call(
         self, agent: object, input: object, *, attempt_number: int
-    ) -> ExternalQueryDraft:
+    ) -> dict[str, Any]:
         del agent, input, attempt_number
-        return ExternalQueryDraft(queries=[])
+        return runtime_payload(ExternalQueryDraft(queries=[]))
 
 
 class _EmptyExternalSearchScope:

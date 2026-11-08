@@ -13,6 +13,7 @@ import pytest
 from logfire.testing import CaptureLogfire
 from opentelemetry.trace import StatusCode
 
+from app.agent.output import AgentOutputDefect, AgentOutputInvalidError
 from app.agent.planning.agent import QUESTION_PLANNER_AGENT
 from app.agent.planning.contract import (
     PlanningInput,
@@ -27,7 +28,6 @@ from app.agent.recording.planning import (
     PlanningOutcome,
     PlanningSucceeded,
 )
-from app.agent.runtime.contract import AgentResponseDefect, AgentResponseInvalidError
 from app.ai_providers.errors import (
     AIProviderError,
     AIProviderResultError,
@@ -76,12 +76,8 @@ def _task_draft(
     )
 
 
-def _response_invalid(
-    defect: AgentResponseDefect = AgentResponseDefect.RESPONSE_NOT_JSON,
-    *,
-    repair_hint: str | None = "use the declared JSON object schema",
-) -> AgentResponseInvalidError:
-    return AgentResponseInvalidError(defect, repair_hint=repair_hint)
+def _unparseable_response() -> AIProviderResultError:
+    return AIProviderResultError(reason=AIProviderResultReason.RESPONSE_UNPARSEABLE)
 
 
 class _RecordingPlannerRuntimeScope:
@@ -319,16 +315,14 @@ async def test_resolvable_provider_failure_retries_once_with_the_same_input() ->
 async def test_two_response_defects_propagate_second_error_and_record_not_created(
     capfire: CaptureLogfire,
 ) -> None:
-    first_error = _response_invalid(AgentResponseDefect.RESPONSE_NOT_OBJECT)
-    terminal_error = _response_invalid(AgentResponseDefect.OUTPUT_SCHEMA_MISMATCH)
-    runtime = ScriptedAgentRuntime([first_error, terminal_error])
+    runtime = ScriptedAgentRuntime([_unparseable_response(), {}])
     service, factory = _service(runtime)
 
     with pytest.raises(PlanningError) as raised:
         await service.plan(_input())
 
-    assert raised.value.__cause__ is terminal_error
-    assert raised.value.code == AgentResponseDefect.OUTPUT_SCHEMA_MISMATCH.value
+    assert isinstance(raised.value.__cause__, AgentOutputInvalidError)
+    assert raised.value.code == AgentOutputDefect.OUTPUT_SCHEMA_MISMATCH.value
     assert [call.attempt_number for call in runtime.calls] == [1, 2]
     assert factory.exits[0][2] is raised.value
     metrics = collected_metrics(capfire)
@@ -338,7 +332,7 @@ async def test_two_response_defects_propagate_second_error_and_record_not_create
             "result": "failed",
             "attempt_count": 2,
             "plan_type": "not_created",
-            "failure_code": AgentResponseDefect.OUTPUT_SCHEMA_MISMATCH.value,
+            "failure_code": AgentOutputDefect.OUTPUT_SCHEMA_MISMATCH.value,
         }
     ]
 
@@ -346,9 +340,7 @@ async def test_two_response_defects_propagate_second_error_and_record_not_create
 async def test_terminal_response_defect_records_failed_outcome() -> None:
     """分類済み終端は recorder へ failed を1回渡す。"""
 
-    first_error = _response_invalid(AgentResponseDefect.RESPONSE_NOT_OBJECT)
-    terminal_error = _response_invalid(AgentResponseDefect.OUTPUT_SCHEMA_MISMATCH)
-    runtime = ScriptedAgentRuntime([first_error, terminal_error])
+    runtime = ScriptedAgentRuntime([_unparseable_response(), {}])
     recorder = RecordingPlanningRecorder()
     service, _factory = _service(runtime, recorder=recorder)
 
@@ -358,7 +350,7 @@ async def test_terminal_response_defect_records_failed_outcome() -> None:
     _assert_recorded(
         recorder,
         outcome=PlanningFailed(
-            failure_code=AgentResponseDefect.OUTPUT_SCHEMA_MISMATCH.value,
+            failure_code=AgentOutputDefect.OUTPUT_SCHEMA_MISMATCH.value,
             attempt_count=2,
         ),
     )
@@ -495,14 +487,20 @@ async def test_search_plan_preserves_typed_time_window_through_service() -> None
     assert plan.target_time_window == target_time_window
 
 
-@pytest.mark.parametrize("defect", list(AgentResponseDefect))
+@pytest.mark.parametrize(
+    "first_outcome",
+    [
+        pytest.param(_unparseable_response(), id="unparseable-response"),
+        pytest.param({}, id="output-defect"),
+    ],
+)
 async def test_each_response_defect_retries_once_in_the_same_runtime(
-    defect: AgentResponseDefect,
+    first_outcome: object,
 ) -> None:
-    first_error = _response_invalid(defect)
+    """JSONとして読めない応答と、出力の契約を満たさない応答は、同じruntimeで1回だけ呼び直す。"""
     runtime = ScriptedAgentRuntime(
         [
-            first_error,
+            first_outcome,
             _draft(
                 plan_type="search",
                 research_tasks=[_task_draft("NVIDIA の発表根拠を確認する", ["NVIDIA"])],
@@ -527,8 +525,6 @@ async def test_each_response_defect_retries_once_in_the_same_runtime(
 async def test_close_error_replaces_terminal_response_defect_without_metric(
     capfire: CaptureLogfire,
 ) -> None:
-    first_error = _response_invalid(AgentResponseDefect.RESPONSE_NOT_OBJECT)
-    terminal_error = _response_invalid(AgentResponseDefect.OUTPUT_SCHEMA_MISMATCH)
     close_error = AIProviderTransportError(
         http_error=HttpTransportError(
             failure=HttpTransportFailure(
@@ -536,7 +532,7 @@ async def test_close_error_replaces_terminal_response_defect_without_metric(
             )
         )
     )
-    runtime = ScriptedAgentRuntime([first_error, terminal_error])
+    runtime = ScriptedAgentRuntime([_unparseable_response(), {}])
     factory = RecordingPlannerRuntimeScopeFactory(
         [runtime],
         exit_error=close_error,
@@ -554,7 +550,7 @@ async def test_close_error_replaces_terminal_response_defect_without_metric(
     assert raised.value is close_error
     planning_error = close_error.__context__
     assert isinstance(planning_error, PlanningError)
-    assert planning_error.__cause__ is terminal_error
+    assert isinstance(planning_error.__cause__, AgentOutputInvalidError)
     assert [call.attempt_number for call in runtime.calls] == [1, 2]
     assert (
         factory.exits[0][0] is runtime,
@@ -772,10 +768,10 @@ async def test_two_plan_calls_activate_fresh_runtime_scopes() -> None:
 async def test_retry_success_metric_records_after_scope_exit_without_repair_detail(
     capfire: CaptureLogfire,
 ) -> None:
-    invalid = _response_invalid(
-        AgentResponseDefect.RESPONSE_NOT_JSON,
-        repair_hint="REPAIR_HINT_MUST_NOT_ENTER_METRICS_4d7f",
-    )
+    invalid = {
+        "plan_type": "REPAIR_HINT_MUST_NOT_ENTER_METRICS_4d7f",
+        "research_tasks": [],
+    }
     runtime = ScriptedAgentRuntime(
         [
             invalid,
@@ -817,7 +813,7 @@ async def test_retry_success_metric_records_after_scope_exit_without_repair_deta
 async def test_retry_success_records_attempt_count() -> None:
     """retry 成功は recorder へ実際の試行回数を渡す。"""
 
-    invalid = _response_invalid(AgentResponseDefect.RESPONSE_NOT_JSON)
+    invalid = _unparseable_response()
     runtime = ScriptedAgentRuntime(
         [
             invalid,
@@ -852,7 +848,7 @@ async def test_retry_success_records_attempt_count() -> None:
         ),
         pytest.param(
             lambda: [
-                _response_invalid(),
+                _unparseable_response(),
                 _draft(
                     plan_type="search",
                     research_tasks=[

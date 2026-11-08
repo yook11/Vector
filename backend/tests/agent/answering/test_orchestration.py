@@ -50,8 +50,8 @@ from app.agent.planning.contract import (
     SearchPlan,
     TargetTimeWindow,
 )
-from app.agent.runtime.contract import AgentResponseDefect, AgentResponseInvalidError
 from app.agent.threads.contracts import ThreadMessageSnapshot
+from app.ai_providers.errors import AIProviderResultError, AIProviderResultReason
 from app.analysis.analyzed_article import InScopeAnalyzedArticle
 from app.analysis.assessment.domain.result import InScope, InScopeCategory
 from tests.agent.answering_runner._harness import (
@@ -59,6 +59,7 @@ from tests.agent.answering_runner._harness import (
     PassThroughOrganizer,
     run_identity,
 )
+from tests.agent.runtime._fakes import runtime_payload
 
 
 def _as_of() -> datetime:
@@ -327,10 +328,12 @@ class FakeExternalQueryRuntime:
 
     async def call(
         self, agent: object, input: object, *, attempt_number: int
-    ) -> ExternalQueryDraft:
+    ) -> dict[str, Any]:
         del agent, attempt_number
-        return ExternalQueryDraft(
-            queries=[self._queries_by_goal[input.task.research_goal]]  # type: ignore[union-attr]
+        return runtime_payload(
+            ExternalQueryDraft(
+                queries=[self._queries_by_goal[input.task.research_goal]]  # type: ignore[union-attr]
+            )
         )
 
 
@@ -345,11 +348,11 @@ class FakeEvidenceReviewerRuntime:
 
     async def call(
         self, agent: object, input: object, *, attempt_number: int
-    ) -> EvidenceReviewerDraft:
+    ) -> dict[str, Any]:
         del agent, input, attempt_number
         if self._timeline is not None:
             self._timeline.record("reviewer.review")
-        return self._draft
+        return runtime_payload(self._draft)
 
 
 class FakeFailingReviewerRuntime:
@@ -795,7 +798,7 @@ async def test_answer_evidence_plan_reports_evidence_review_when_review_fails() 
     """
     timeline = CallTimeline()
     progress = FakeProgressReporter(timeline=timeline)
-    failure = AgentResponseInvalidError(AgentResponseDefect.OUTPUT_SCHEMA_MISMATCH)
+    failure = AIProviderResultError(reason=AIProviderResultReason.RESPONSE_UNPARSEABLE)
     orchestrator, _, _, _, _ = _orchestrator(
         plan=_search_plan(),
         outcome=_internal_outcome(1),

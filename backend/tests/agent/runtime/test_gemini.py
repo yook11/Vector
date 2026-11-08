@@ -3,14 +3,13 @@
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass, replace
+from dataclasses import replace
 from types import SimpleNamespace
 
 import httpx2
 import pytest
 from google.genai import errors as genai_errors
 
-from app.agent.runtime.contract import AgentResponseDefect, AgentResponseInvalidError
 from app.agent.runtime.gemini import GeminiAgentRuntime
 from app.ai_providers.errors import (
     AIProviderResponseError,
@@ -21,8 +20,6 @@ from app.ai_providers.errors import (
 from tests.agent.runtime._helpers import (
     FakeGeminiClient,
     FakeResponse,
-    RuntimeOutput,
-    ValidationProbeOutput,
     blocked_response,
     finished_response,
     make_agent,
@@ -31,34 +28,28 @@ from tests.agent.runtime._helpers import (
 from tests.cloudwatch.records import metric_records
 
 
-@dataclass(frozen=True, slots=True)
-class DataclassRuntimeOutput:
-    result: str
-    tags: list[str]
-
-
-async def test_call_uses_provider_once_and_returns_validated_output_directly() -> None:
-    """一試行が一度だけ provider を呼び検証済み出力を返す。"""
+async def test_call_uses_provider_once_and_returns_the_json_object() -> None:
+    """一試行が一度だけ provider を呼び、返った JSON object をそのまま返す。"""
     client = FakeGeminiClient([success_response(result="validated")])
     runtime = GeminiAgentRuntime(client=client)
 
     output = await runtime.call(make_agent(), "typed input", attempt_number=1)
 
-    assert output == RuntimeOutput(result="validated", tags=["runtime"])
+    assert output == {"result": "validated", "tags": ["runtime"]}
     assert client.models.generate_content.await_count == 1
     client.close.assert_not_awaited()
     client.aclose.assert_not_awaited()
 
 
-async def test_call_validates_a_declared_dataclass_output_type() -> None:
-    """宣言された dataclass 出力型を runtime 境界で検証する。"""
-    client = FakeGeminiClient([success_response(result="dataclass")])
+async def test_call_does_not_validate_the_declared_output_type() -> None:
+    """宣言された出力の型に合わない JSON object も、検証せずにそのまま返す。"""
+    payload = {"result": 1, "unknown": "kept"}
+    client = FakeGeminiClient([FakeResponse(text=json.dumps(payload))])
     runtime = GeminiAgentRuntime(client=client)
-    agent = replace(make_agent(), output_type=DataclassRuntimeOutput)
 
-    output = await runtime.call(agent, "typed input", attempt_number=1)
+    output = await runtime.call(make_agent(), "typed input", attempt_number=1)
 
-    assert output == DataclassRuntimeOutput(result="dataclass", tags=["runtime"])
+    assert output == payload
 
 
 async def test_request_separates_instructions_contents_and_thaws_schema() -> None:
@@ -123,8 +114,8 @@ async def test_same_runtime_does_not_carry_agent_or_input_state_between_calls() 
     second_output = await runtime.call(second_agent, "second input", attempt_number=2)
 
     first_call, second_call = client.models.generate_content.await_args_list
-    assert first_output.result == "first"
-    assert second_output.result == "second"
+    assert first_output["result"] == "first"
+    assert second_output["result"] == "second"
     assert first_call.kwargs["model"] == "gemini-first-model"
     assert first_call.kwargs["contents"] == "FIRST_CONTENTS_SENTINEL"
     assert first_call.kwargs["config"].system_instruction == (
@@ -140,107 +131,27 @@ async def test_same_runtime_does_not_carry_agent_or_input_state_between_calls() 
 
 
 @pytest.mark.parametrize(
-    ("response_text", "defect_name"),
+    "response_text",
     [
-        ("MODEL_OUTPUT_SENTINEL_NOT_JSON", "RESPONSE_NOT_JSON"),
-        (json.dumps(["MODEL_OUTPUT_SENTINEL_NOT_OBJECT"]), "RESPONSE_NOT_OBJECT"),
+        pytest.param("MODEL_OUTPUT_SENTINEL_NOT_JSON", id="not-json"),
+        pytest.param(json.dumps(["MODEL_OUTPUT_SENTINEL_NOT_OBJECT"]), id="not-object"),
     ],
 )
-async def test_invalid_response_shape_maps_to_provider_neutral_defect(
+async def test_unreadable_response_becomes_unparseable_provider_result(
     response_text: str,
-    defect_name: str,
 ) -> None:
-    """不正な応答形を安全な provider 中立 defect に写像する。"""
+    """JSON object として読めない応答は、中身を含まない provider の結果の失敗にする。"""
     client = FakeGeminiClient([FakeResponse(text=response_text)])
     runtime = GeminiAgentRuntime(client=client)
 
-    with pytest.raises(AgentResponseInvalidError) as exc_info:
+    with pytest.raises(AIProviderResultError) as exc_info:
         await runtime.call(make_agent(), "typed input", attempt_number=1)
 
-    assert exc_info.value.defect is getattr(AgentResponseDefect, defect_name)
+    assert exc_info.value.reason is AIProviderResultReason.RESPONSE_UNPARSEABLE
     assert "MODEL_OUTPUT_SENTINEL" not in str(exc_info.value)
-    assert "MODEL_OUTPUT_SENTINEL" not in (exc_info.value.repair_hint or "")
     assert exc_info.value.__context__ is None
     assert exc_info.value.__cause__ is None
     assert client.models.generate_content.await_count == 1
-
-
-async def test_output_validation_error_exposes_only_safe_repair_fields() -> None:
-    """出力検証エラーから安全な修正情報だけを公開する。"""
-    model_output_sentinel = "MODEL_OUTPUT_SENTINEL_SECRET_4e91"
-    payload = {
-        "score": 0,
-        "secret_number": model_output_sentinel,
-        "unsafe": "trigger validator",
-    }
-    client = FakeGeminiClient([FakeResponse(text=json.dumps(payload))])
-    runtime = GeminiAgentRuntime(client=client)
-
-    with pytest.raises(AgentResponseInvalidError) as exc_info:
-        await runtime.call(
-            make_agent(output_type=ValidationProbeOutput),
-            "typed input",
-            attempt_number=1,
-        )
-
-    error = exc_info.value
-    safe_error_text = f"{error}\n{error.repair_hint or ''}"
-    assert error.defect is AgentResponseDefect.OUTPUT_SCHEMA_MISMATCH
-    assert "score" in safe_error_text
-    assert "greater_than_equal" in safe_error_text
-    assert "ge" in safe_error_text
-    assert "secret_number" in safe_error_text
-    assert "int_parsing" in safe_error_text
-    assert "unsafe" in safe_error_text
-    assert "value_error" in safe_error_text
-    assert model_output_sentinel not in safe_error_text
-    assert "ARBITRARY_CTX_SENTINEL_7c62" not in safe_error_text
-    assert "Input should be" not in safe_error_text
-    assert "errors.pydantic.dev" not in safe_error_text
-    assert error.__context__ is None
-    assert error.__cause__ is None
-
-
-async def test_unknown_extra_field_location_is_collapsed_to_fixed_placeholder() -> None:
-    """未知の追加 field 名を固定の安全な表現へ畳み込む。"""
-    unknown_field_sentinels = (
-        "MODEL_OUTPUT_UNKNOWN_KEY_SENTINEL_4b1e",
-        "MODEL_OUTPUT_DIFFERENT_KEY_SENTINEL_9f73",
-    )
-    client = FakeGeminiClient(
-        [
-            FakeResponse(
-                text=json.dumps(
-                    {
-                        "result": "accepted",
-                        "tags": ["runtime"],
-                        sentinel: "unknown extra value",
-                    }
-                )
-            )
-            for sentinel in unknown_field_sentinels
-        ]
-    )
-    runtime = GeminiAgentRuntime(client=client)
-    errors = []
-
-    for attempt_number in (1, 2):
-        with pytest.raises(AgentResponseInvalidError) as exc_info:
-            await runtime.call(
-                make_agent(),
-                "typed input",
-                attempt_number=attempt_number,
-            )
-        errors.append(exc_info.value)
-
-    safe_error_text = "\n".join(str(error) for error in errors)
-    assert all(
-        error.defect is AgentResponseDefect.OUTPUT_SCHEMA_MISMATCH for error in errors
-    )
-    assert errors[0].repair_hint
-    assert errors[0].repair_hint == errors[1].repair_hint
-    assert "extra_forbidden" in errors[0].repair_hint
-    assert all(sentinel not in safe_error_text for sentinel in unknown_field_sentinels)
 
 
 @pytest.mark.parametrize(
@@ -302,7 +213,7 @@ async def test_call_stop_finish_reason_still_succeeds() -> None:
 
     output = await runtime.call(make_agent(), "typed input", attempt_number=1)
 
-    assert output == RuntimeOutput(result="stopped", tags=["runtime"])
+    assert output == {"result": "stopped", "tags": ["runtime"]}
 
 
 async def test_non_stream_prompt_feedback_precedes_candidate_safety() -> None:

@@ -6,8 +6,8 @@ from datetime import UTC, datetime
 
 import pytest
 
+from app.agent.output import AgentOutputDefect, AgentOutputInvalidError
 from app.agent.retry_prospect import is_resolvable_by_retry
-from app.agent.runtime.contract import AgentResponseDefect, AgentResponseInvalidError
 from app.ai_providers.errors import (
     AIProviderError,
     AIProviderNotSentError,
@@ -71,13 +71,13 @@ def _response_error(
             id="stream_incomplete",
         ),
         pytest.param(
-            AgentResponseInvalidError(AgentResponseDefect.OUTPUT_SCHEMA_MISMATCH),
+            AgentOutputInvalidError(AgentOutputDefect.OUTPUT_SCHEMA_MISMATCH),
             id="response_invalid",
         ),
     ],
 )
 def test_transient_or_output_dependent_failure_is_resolvable(
-    error: AIProviderError | AgentResponseInvalidError,
+    error: AIProviderError | AgentOutputInvalidError,
 ) -> None:
     """解消しうる通信の失敗・分あたりの流量制限・サーバーの失敗・出力の打ち切りや途切れ・応答の形の不正は、呼び直せば解消しうる失敗として分類する。"""
     assert is_resolvable_by_retry(error) is True

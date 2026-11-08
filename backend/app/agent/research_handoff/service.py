@@ -9,6 +9,7 @@ from __future__ import annotations
 from typing import Protocol
 
 from app.agent.agent import Agent
+from app.agent.output import AgentOutputInvalidError, validate_output
 from app.agent.recording.research_handoff import (
     ResearchHandoffFailed,
     ResearchHandoffRecorder,
@@ -18,15 +19,12 @@ from app.agent.recording.research_handoff import (
 from app.agent.research_handoff.failure import ResearchHandoffError
 from app.agent.research_handoff.handoff import ResearchHandoff, ResearchHandoffDraft
 from app.agent.research_handoff.handoff_input import ResearchHandoffInput
-from app.agent.runtime.contract import (
-    AgentResponseInvalidError,
-    AgentRuntimeScopeFactory,
-)
+from app.agent.runtime.contract import AgentRuntimeScopeFactory
 from app.ai_providers.errors import AIProviderError
 
 __all__ = ["ResearchHandoffOrganizer", "ResearchHandoffService"]
 
-_CLASSIFIED_FAILURES = (AIProviderError, AgentResponseInvalidError)
+_CLASSIFIED_FAILURES = (AIProviderError, AgentOutputInvalidError)
 
 
 class ResearchHandoffOrganizer(Protocol):
@@ -52,7 +50,8 @@ class ResearchHandoffService:
         async with self._recorder.record(agent_name=self._agent.name) as recording:
             try:
                 async with self._runtime_scope_factory() as runtime:
-                    draft = await runtime.call(self._agent, input, attempt_number=1)
+                    payload = await runtime.call(self._agent, input, attempt_number=1)
+                draft = validate_output(self._agent, payload)
             except _CLASSIFIED_FAILURES as cause:
                 error = ResearchHandoffError(cause=cause)
                 recording.report_outcome(ResearchHandoffFailed(failure_code=error.code))

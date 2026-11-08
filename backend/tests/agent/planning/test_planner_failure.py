@@ -4,11 +4,8 @@ from __future__ import annotations
 
 import pytest
 
+from app.agent.output import AgentOutputDefect, AgentOutputInvalidError
 from app.agent.planning.failure import PlanningError
-from app.agent.runtime.contract import (
-    AgentResponseDefect,
-    AgentResponseInvalidError,
-)
 from app.ai_providers.errors import (
     AIProviderTransportError,
 )
@@ -53,8 +50,8 @@ def test_planning_error_names_the_cause_as_code(
 
 def test_planning_error_names_each_response_defect_without_repair_hint() -> None:
     """応答の契約違反は欠陥の種類をcodeにし、修復の指示を文にもcodeにも含めない。"""
-    for defect in AgentResponseDefect:
-        cause = AgentResponseInvalidError(
+    for defect in AgentOutputDefect:
+        cause = AgentOutputInvalidError(
             defect,
             repair_hint="REPAIR_HINT_MUST_NOT_ENTER_AUDIT_2a91",
         )

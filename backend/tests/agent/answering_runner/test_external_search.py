@@ -38,7 +38,6 @@ from app.agent.planning.contract import (
     SearchPlan,
     TargetTimeWindow,
 )
-from app.agent.runtime.contract import AgentResponseDefect, AgentResponseInvalidError
 from app.ai_providers.errors import (
     AIProviderTransportError,
 )
@@ -88,7 +87,11 @@ from tests.agent.answering_runner._harness import (
 from tests.agent.answering_runner._harness import (
     review_draft as _review_draft,
 )
-from tests.agent.runtime._fakes import GoalKeyedAgentRuntime, ScriptedAgentRuntime
+from tests.agent.runtime._fakes import (
+    GoalKeyedAgentRuntime,
+    ScriptedAgentRuntime,
+    runtime_payload,
+)
 from tests.logfire._metric_helpers import collected_metrics
 
 _TIME_FILTER_METRIC = "external_search_time_filter_resolution_total"
@@ -254,7 +257,7 @@ class _ParallelQueryRuntime:
             self.peak_reached.set()
         try:
             await self._release.wait()
-            return _query_draft([input.task.research_goal])
+            return runtime_payload(_query_draft([input.task.research_goal]))
         finally:
             self.active -= 1
 
@@ -868,9 +871,7 @@ async def test_provider_result_cap_is_applied_before_external_hits(
 
 @pytest.mark.asyncio
 async def test_classified_query_failure_never_starts_tool_or_reviewer() -> None:
-    query_runtime = ScriptedAgentRuntime(
-        [AgentResponseInvalidError(AgentResponseDefect.RESPONSE_NOT_JSON)]
-    )
+    query_runtime = ScriptedAgentRuntime([{}])
     reviewer_runtime = ScriptedAgentRuntime([])
     gateway = _FakeExternalSearchGateway()
     runner, answerer, factory = _runner(
@@ -1183,7 +1184,7 @@ async def test_outer_cancellation_cancels_and_joins_all_started_external_tasks()
 async def test_classified_task_failure_does_not_cancel_its_sibling() -> None:
     query_runtime = GoalKeyedAgentRuntime(
         {
-            "failed": AgentResponseInvalidError(AgentResponseDefect.RESPONSE_NOT_JSON),
+            "failed": {},
             "succeeds": _query_draft(["q"]),
         }
     )

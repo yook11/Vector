@@ -7,9 +7,16 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Any, cast
 
+from pydantic import BaseModel
+
 from app.agent.agent import Agent
 
-__all__ = ["AgentRuntimeCall", "GoalKeyedAgentRuntime", "ScriptedAgentRuntime"]
+__all__ = [
+    "AgentRuntimeCall",
+    "GoalKeyedAgentRuntime",
+    "ScriptedAgentRuntime",
+    "runtime_payload",
+]
 
 
 @dataclass(frozen=True, slots=True)
@@ -21,6 +28,13 @@ class AgentRuntimeCall:
     attempt_number: int
 
 
+def runtime_payload(outcome: object) -> dict[str, Any]:
+    """Runtimeが返すJSON objectにし、scriptに書いたDraftはJSONへ直す。"""
+    if isinstance(outcome, BaseModel):
+        return outcome.model_dump(mode="json", by_alias=True)
+    return cast(dict[str, Any], outcome)
+
+
 class ScriptedAgentRuntime:
     """AgentRuntime の結果列を FIFO で返す policy test double。"""
 
@@ -28,13 +42,13 @@ class ScriptedAgentRuntime:
         self._outcomes: deque[object | BaseException] = deque(outcomes)
         self.calls: list[AgentRuntimeCall] = []
 
-    async def call[InputT, OutputT](
+    async def call[InputT](
         self,
-        agent: Agent[InputT, OutputT],
+        agent: Agent[InputT, Any],
         input: InputT,
         *,
         attempt_number: int,
-    ) -> OutputT:
+    ) -> dict[str, Any]:
         self.calls.append(
             AgentRuntimeCall(
                 agent=agent,
@@ -50,7 +64,7 @@ class ScriptedAgentRuntime:
         outcome = self._outcomes.popleft()
         if isinstance(outcome, BaseException):
             raise outcome
-        return cast(OutputT, outcome)
+        return runtime_payload(outcome)
 
     def assert_all_outcomes_consumed(self) -> None:
         """全script消費が保証に必要なtestから明示的に呼ぶ。"""
@@ -69,13 +83,13 @@ class GoalKeyedAgentRuntime:
         self._outcomes_by_goal = outcomes_by_goal
         self.calls: list[AgentRuntimeCall] = []
 
-    async def call[InputT, OutputT](
+    async def call[InputT](
         self,
-        agent: Agent[InputT, OutputT],
+        agent: Agent[InputT, Any],
         input: InputT,
         *,
         attempt_number: int,
-    ) -> OutputT:
+    ) -> dict[str, Any]:
         self.calls.append(
             AgentRuntimeCall(
                 agent=agent,
@@ -92,4 +106,4 @@ class GoalKeyedAgentRuntime:
             ) from exc
         if isinstance(outcome, BaseException):
             raise outcome
-        return cast(OutputT, outcome)
+        return runtime_payload(outcome)

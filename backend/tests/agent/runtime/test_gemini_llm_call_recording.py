@@ -10,7 +10,6 @@ import httpx2
 import pytest
 
 from app.agent.recording.types import Usage
-from app.agent.runtime.contract import AgentResponseDefect, AgentResponseInvalidError
 from app.agent.runtime.gemini import GeminiAgentRuntime
 from app.agent.runtime.llm_failure import UNCLASSIFIED_FAILURE_CODE, LlmAttemptFailed
 from app.ai_providers.errors import (
@@ -101,19 +100,17 @@ async def test_blocked_call_records_failed_with_code() -> None:
     )
 
 
-async def test_invalid_response_records_failed_with_defect() -> None:
-    """不正応答は分類済み失敗と defect で閉じる。"""
+async def test_unreadable_response_records_failed_with_code() -> None:
+    """JSON object として読めない応答は、分類済み失敗と CODE で閉じる。"""
 
     recorder = RecordingLlmCallRecorder()
     runtime = _runtime([FakeResponse(text="MODEL_OUTPUT_NOT_JSON")], recorder)
 
-    with pytest.raises(AgentResponseInvalidError):
+    with pytest.raises(AIProviderResultError):
         await runtime.call(make_agent(), "typed input", attempt_number=1)
 
     recorded = recorder.records[0]
-    assert recorded.failure == LlmAttemptFailed(
-        failure_code=AgentResponseDefect.RESPONSE_NOT_JSON
-    )
+    assert recorded.failure == LlmAttemptFailed(failure_code=AIProviderResultError.CODE)
 
 
 async def test_translated_provider_error_records_failed_with_code() -> None:

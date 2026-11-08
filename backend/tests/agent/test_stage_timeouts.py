@@ -21,7 +21,6 @@ from app.agent.evidence_review.agent import EVIDENCE_REVIEWER_AGENT
 from app.agent.planning.agent import QUESTION_PLANNER_AGENT
 from app.agent.planning.failure import PlanningError
 from app.agent.planning.service import QuestionPlanningService
-from app.agent.runtime.contract import AgentResponseDefect, AgentResponseInvalidError
 from app.ai_providers.errors import (
     AIProviderResultError,
     AIProviderResultReason,
@@ -87,12 +86,15 @@ class WaitingRuntime:
         if self.mode == "retry":
             await asyncio.sleep(0.12)
             if attempt_number == 1:
-                raise AgentResponseInvalidError(AgentResponseDefect.RESPONSE_NOT_JSON)
-            return (
+                raise AIProviderResultError(
+                    reason=AIProviderResultReason.RESPONSE_UNPARSEABLE
+                )
+            draft = (
                 _draft(plan_type="direct_answer")
                 if self.stage == "planning"
                 else _ANY_REVIEWER_DRAFT
             )
+            return draft.model_dump(mode="json")
         await asyncio.Event().wait()
 
     async def stream_text(self, agent: Any, input: Any, *, attempt_number: int):

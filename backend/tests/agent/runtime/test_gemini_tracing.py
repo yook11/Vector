@@ -5,7 +5,6 @@ SDK I/O だけを fake にし、span 生成と結果分類は production Runtime
 
 from __future__ import annotations
 
-import json
 from dataclasses import replace
 from types import SimpleNamespace
 from typing import cast
@@ -19,7 +18,6 @@ from opentelemetry.sdk.trace import ReadableSpan
 from opentelemetry.trace import SpanKind, StatusCode
 
 import app.agent.runtime.gemini as gemini_runtime_module
-from app.agent.runtime.contract import AgentResponseDefect, AgentResponseInvalidError
 from app.agent.runtime.gemini import GeminiAgentRuntime
 from app.ai_providers.errors import (
     AIProviderResultError,
@@ -29,7 +27,6 @@ from app.logfire.redaction import install_exception_redaction
 from tests.agent.runtime._helpers import (
     FakeGeminiClient,
     FakeResponse,
-    ValidationProbeOutput,
     blocked_response,
     finished_response,
     make_agent,
@@ -254,7 +251,7 @@ async def test_invalid_response_records_usage_before_classification(
         ]
     )
 
-    with pytest.raises(AgentResponseInvalidError):
+    with pytest.raises(AIProviderResultError):
         await GeminiAgentRuntime(client=cast(AsyncClient, client)).call(
             make_agent(),
             "typed input",
@@ -265,7 +262,7 @@ async def test_invalid_response_records_usage_before_classification(
     attributes = dict(span.attributes or {})
     assert "result" not in attributes
     assert attributes["status"] == "failed"
-    assert attributes["error.type"] == AgentResponseDefect.RESPONSE_NOT_JSON
+    assert attributes["error.type"] == AIProviderResultError.CODE
     assert span.status.status_code is StatusCode.ERROR
     assert span.status.description in (None, "")
     assert exception_events(span) == []
@@ -276,61 +273,6 @@ async def test_invalid_response_records_usage_before_classification(
         "status",
     }
     _assert_no_model_visible_text(span, "MODEL_OUTPUT_SENTINEL_INVALID_JSON_041b")
-
-
-async def test_output_schema_mismatch_records_usage_and_safe_classified_span(
-    capfire: CaptureLogfire,
-) -> None:
-    """schema mismatch の使用量を残し本文なしの安全な span にする。"""
-    model_output_sentinel = "MODEL_OUTPUT_SENTINEL_SCHEMA_MISMATCH_294c"
-    payload = {
-        "score": 0,
-        "secret_number": model_output_sentinel,
-        "unsafe": "trigger validator",
-    }
-    client = FakeGeminiClient(
-        [
-            FakeResponse(
-                text=json.dumps(payload),
-                usage_metadata=_full_usage(),
-            )
-        ]
-    )
-
-    with pytest.raises(AgentResponseInvalidError) as exc_info:
-        await GeminiAgentRuntime(client=cast(AsyncClient, client)).call(
-            make_agent(output_type=ValidationProbeOutput),
-            "typed input",
-            attempt_number=1,
-        )
-
-    span = one_provider_attempt_span(capfire)
-    attributes = dict(span.attributes or {})
-    observed_span_text = span_text(span)
-    assert exc_info.value.defect is AgentResponseDefect.OUTPUT_SCHEMA_MISMATCH
-    assert "result" not in attributes
-    assert attributes["status"] == "failed"
-    assert attributes["error.type"] == AgentResponseDefect.OUTPUT_SCHEMA_MISMATCH
-    assert attributes["gen_ai.usage.input_tokens"] == 11
-    assert attributes["gen_ai.usage.output_tokens"] == 7
-    assert attributes["gen_ai.usage.cache_read.input_tokens"] == 3
-    assert attributes["gen_ai.usage.reasoning.output_tokens"] == 2
-    assert span.status.status_code is StatusCode.ERROR
-    assert span.status.description in (None, "")
-    assert exception_events(span) == []
-    assert application_attribute_keys(span) == {
-        "agent_name",
-        "attempt_number",
-        "prompt_version",
-        "status",
-    }
-    _assert_no_model_visible_text(
-        span,
-        model_output_sentinel,
-        "ARBITRARY_CTX_SENTINEL_7c62",
-    )
-    assert "Input should be" not in observed_span_text
-    assert "errors.pydantic.dev" not in observed_span_text
 
 
 async def test_classified_provider_error_has_no_usage_or_exception_event(

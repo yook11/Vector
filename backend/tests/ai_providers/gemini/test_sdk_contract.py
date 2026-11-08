@@ -27,7 +27,7 @@ from app.http.failure import (
     HttpTransportFailureReason,
     HttpTransportStage,
 )
-from tests.agent.runtime._helpers import RuntimeOutput, make_agent
+from tests.agent.runtime._helpers import make_agent
 from tests.ai_providers.gemini._sdk_exchange import install_sdk_exchange
 from tests.ai_providers.gemini._sdk_exchange import (
     open_gemini_test_client as _open_client,
@@ -104,7 +104,7 @@ async def test_generation_decodes_text_usage_and_finish_reason(exchange):
 
 @pytest.mark.asyncio
 async def test_runtime_structured_output_survives_sdk_serialization(exchange):
-    """runtimeのschemaが送信され、実SDKの応答を宣言済み出力型へ復元できる。"""
+    """runtimeのschemaが送信され、実SDKの応答をJSON objectとして返す。"""
     exchange.respond_json(
         {
             "candidates": [
@@ -121,7 +121,7 @@ async def test_runtime_structured_output_survives_sdk_serialization(exchange):
         output = await GeminiAgentRuntime(client=client).call(
             make_agent(), "input", attempt_number=1
         )
-    assert output == RuntimeOutput(result="accepted", tags=["sdk"])
+    assert output == {"result": "accepted", "tags": ["sdk"]}
     config = exchange.request_json(0)["generationConfig"]
     assert config["responseMimeType"] == "application/json"
     assert config["responseSchema"] == {

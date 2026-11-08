@@ -6,8 +6,8 @@ from datetime import UTC, datetime
 
 import pytest
 
+from app.agent.output import AgentOutputDefect, AgentOutputInvalidError
 from app.agent.research_handoff.failure import ResearchHandoffError
-from app.agent.runtime.contract import AgentResponseDefect, AgentResponseInvalidError
 from app.ai_providers.errors import (
     AIProviderError,
     AIProviderResponseError,
@@ -22,8 +22,8 @@ _RECEIVED_AT = datetime(2026, 1, 1, tzinfo=UTC)
     ("cause", "expected_code"),
     [
         pytest.param(
-            AgentResponseInvalidError(
-                AgentResponseDefect.OUTPUT_SCHEMA_MISMATCH,
+            AgentOutputInvalidError(
+                AgentOutputDefect.OUTPUT_SCHEMA_MISMATCH,
                 repair_hint="SECRET_REPAIR_HINT_MUST_NOT_LEAK",
             ),
             "output_schema_mismatch",
@@ -40,7 +40,7 @@ _RECEIVED_AT = datetime(2026, 1, 1, tzinfo=UTC)
     ],
 )
 def test_research_handoff_error_names_the_cause_as_code(
-    cause: AIProviderError | AgentResponseInvalidError, expected_code: str
+    cause: AIProviderError | AgentOutputInvalidError, expected_code: str
 ) -> None:
     """原因を保持し、原因の種別をcodeとして名乗ってログ用のdetailsにも載せる。"""
     error = ResearchHandoffError(cause=cause)

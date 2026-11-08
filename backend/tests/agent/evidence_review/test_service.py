@@ -29,7 +29,6 @@ from app.agent.recording.evidence_review import (
     EvidenceReviewOutcome,
     EvidenceReviewSucceeded,
 )
-from app.agent.runtime.contract import AgentResponseDefect, AgentResponseInvalidError
 from app.ai_providers.errors import (
     AIProviderError,
     AIProviderResultError,
@@ -261,7 +260,7 @@ async def test_review_propagates_missing_as_a_single_run_level_value() -> None:
 async def test_review_retries_at_most_twice_with_the_same_typed_input() -> None:
     runtime = ScriptedAgentRuntime(
         [
-            AgentResponseInvalidError(AgentResponseDefect.OUTPUT_SCHEMA_MISMATCH),
+            {},
             _reviewer_draft(
                 [{"option_index": 0, "claim": "claim", "why_selected": "w"}]
             ),
@@ -296,10 +295,11 @@ async def test_review_retries_at_most_twice_with_the_same_typed_input() -> None:
     ("failure", "expected_code"),
     [
         pytest.param(
-            AgentResponseInvalidError(AgentResponseDefect.RESPONSE_NOT_JSON),
-            "response_not_json",
-            id="runtime-defect",
+            AIProviderResultError(reason=AIProviderResultReason.RESPONSE_UNPARSEABLE),
+            "response_unparseable",
+            id="unparseable-response",
         ),
+        pytest.param({}, "output_schema_mismatch", id="output-defect"),
         pytest.param(
             AIProviderTransportError(
                 http_error=HttpTransportError(
@@ -316,7 +316,7 @@ async def test_review_retries_at_most_twice_with_the_same_typed_input() -> None:
     ],
 )
 async def test_review_returns_last_failure_code_after_two_exhausted_attempts(
-    failure: BaseException,
+    failure: object,
     expected_code: str,
 ) -> None:
     """S1(精査の失敗)。2 attempt尽きるとRun全体が失敗結果で終わり例外を投げない。
@@ -355,7 +355,7 @@ async def test_review_uses_the_last_failure_code_when_attempt_codes_differ() -> 
     recorder = RecordingEvidenceReviewRecorder()
     runtime = ScriptedAgentRuntime(
         [
-            AgentResponseInvalidError(AgentResponseDefect.RESPONSE_NOT_JSON),
+            AIProviderResultError(reason=AIProviderResultReason.RESPONSE_UNPARSEABLE),
             AIProviderTransportError(
                 http_error=HttpTransportError(
                     failure=HttpTransportFailure(
@@ -615,7 +615,7 @@ async def test_retry_success_records_succeeded_with_attempt_count() -> None:
     recorder = RecordingEvidenceReviewRecorder()
     runtime = ScriptedAgentRuntime(
         [
-            AgentResponseInvalidError(AgentResponseDefect.OUTPUT_SCHEMA_MISMATCH),
+            {},
             _ANY_REVIEWER_DRAFT,
         ]
     )

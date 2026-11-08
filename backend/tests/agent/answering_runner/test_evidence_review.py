@@ -47,7 +47,6 @@ from app.agent.evidence_review import (
 )
 from app.agent.evidence_review.agent import EVIDENCE_REVIEWER_AGENT
 from app.agent.planning.contract import ResearchTask, SearchPlan, TargetTimeWindow
-from app.agent.runtime.contract import AgentResponseDefect, AgentResponseInvalidError
 from tests.agent.answering_runner._harness import (
     DEFAULT_TARGET_TIME_WINDOW as _TARGET_TIME_WINDOW,
 )
@@ -891,9 +890,8 @@ async def test_reviewer_failure_after_two_attempts_empties_the_whole_run() -> No
             ],
         }
     )
-    failure = AgentResponseInvalidError(AgentResponseDefect.OUTPUT_SCHEMA_MISMATCH)
     success_draft = _draft([{"option_index": 0, "claim": "claim", "why_selected": "w"}])
-    reviewer_runtime = ScriptedAgentRuntime([failure, failure, success_draft])
+    reviewer_runtime = ScriptedAgentRuntime([{}, {}, success_draft])
     events = _Events()
     runner, answerer, _factory = _runner(
         plan=_plan(*tasks),
@@ -928,8 +926,7 @@ async def test_reviewer_failure_after_two_attempts_becomes_failed_evidence_run(
     tests/agent/evidence_review/test_service.py が正本。
     """
     captured = _capture_external_outcome(monkeypatch)
-    failure = AgentResponseInvalidError(AgentResponseDefect.RESPONSE_NOT_JSON)
-    reviewer_runtime = ScriptedAgentRuntime([failure, failure])
+    reviewer_runtime = ScriptedAgentRuntime([{}, {}])
     runner, answerer, _factory = _runner(
         plan=_plan(_task("reviewer failure", ["query-a"])),
         query_runtime=ScriptedAgentRuntime([_query_draft(["q"])]),
@@ -949,7 +946,7 @@ async def test_reviewer_failure_after_two_attempts_becomes_failed_evidence_run(
         isinstance(evidence_run, EvidenceRunFailed),
         evidence_run.failure_code,
         answerer.calls,
-    ) == ("succeeded", True, "response_not_json", [[]])
+    ) == ("succeeded", True, "output_schema_mismatch", [[]])
 
 
 @pytest.mark.asyncio
@@ -959,11 +956,10 @@ async def test_failed_evidence_run_keeps_failure_code_out_of_answerer_and_in_spa
 ) -> None:
     captured = _capture_external_outcome(monkeypatch)
     answerer = _ReviewMissingCapturingAnswerer()
-    failure = AgentResponseInvalidError(AgentResponseDefect.RESPONSE_NOT_JSON)
     runner, _answerer, _factory = _runner(
         plan=_plan(_task("reviewer failure", ["query-a"])),
         query_runtime=ScriptedAgentRuntime([_query_draft(["q"])]),
-        reviewer_runtime=ScriptedAgentRuntime([failure, failure]),
+        reviewer_runtime=ScriptedAgentRuntime([{}, {}]),
         external_gateway=_FakeExternalSearchGateway(
             {"q": [_external_hit("https://example.com/q")]}
         ),
@@ -985,7 +981,7 @@ async def test_failed_evidence_run_keeps_failure_code_out_of_answerer_and_in_spa
         answerer.review_missing_calls,
         span["attributes"]["review_failure_code"],
         evidence_run.failure_code,
-    ) == ([()], "response_not_json", "response_not_json")
+    ) == ([()], "output_schema_mismatch", "output_schema_mismatch")
     assert len(review_spans) == 1
     assert exception_event(review_spans[0]) is None
     assert review_spans[0]["attributes"]["agent_name"] == EVIDENCE_REVIEWER_AGENT.name

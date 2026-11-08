@@ -23,7 +23,6 @@ from app.agent.recording.external_search import (
     ExternalSearchFailed,
     ExternalSearchSucceeded,
 )
-from app.agent.runtime.contract import AgentResponseDefect, AgentResponseInvalidError
 from app.ai_providers.errors import AIProviderResultError, AIProviderResultReason
 from tests.agent.recording._fakes import RecordingExternalSearchRecorder
 from tests.agent.runtime._fakes import ScriptedAgentRuntime
@@ -131,11 +130,7 @@ async def test_search_records_completed_on_partial_provider_failure() -> None:
 
 
 async def test_search_records_completed_when_query_generation_fails() -> None:
-    service, recorder = _service(
-        ScriptedAgentRuntime(
-            [AgentResponseInvalidError(AgentResponseDefect.OUTPUT_SCHEMA_MISMATCH)]
-        )
-    )
+    service, recorder = _service(ScriptedAgentRuntime([{}]))
 
     execution = await _search(service)
 
@@ -152,11 +147,7 @@ async def test_search_records_completed_when_query_generation_fails() -> None:
 @pytest.mark.parametrize(
     ("failure", "expected_error_type"),
     [
-        pytest.param(
-            AgentResponseInvalidError(AgentResponseDefect.RESPONSE_NOT_JSON),
-            "response_not_json",
-            id="response-defect",
-        ),
+        pytest.param({}, "output_schema_mismatch", id="output-defect"),
         pytest.param(
             AIProviderResultError(reason=AIProviderResultReason.RESPONSE_UNPARSEABLE),
             "ai_provider_result_error",
@@ -166,7 +157,7 @@ async def test_search_records_completed_when_query_generation_fails() -> None:
     ],
 )
 async def test_failed_query_generation_closes_its_phase_as_failed_with_the_cause(
-    failure: Exception,
+    failure: object,
     expected_error_type: str,
     capfire: CaptureLogfire,
 ) -> None:

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from app.agent.error_type import span_error_type
-from app.agent.runtime.contract import AgentResponseInvalidError
+from app.agent.output import AgentOutputInvalidError
 from app.ai_providers.errors import AIProviderError
 from app.shared.errors import ApplicationError
 
@@ -16,7 +16,7 @@ class ExternalQueryGenerationError(ApplicationError):
     """外部検索のクエリ生成が、分類済みの原因でクエリを作れなかった。"""
 
     def __init__(
-        self, *, cause: AIProviderError | AgentResponseInvalidError | TimeoutError
+        self, *, cause: AIProviderError | AgentOutputInvalidError | TimeoutError
     ) -> None:
         self.cause = cause
         self.__cause__ = cause

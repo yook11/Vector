@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from app.agent.runtime.contract import AgentResponseInvalidError
+from app.agent.output import AgentOutputInvalidError
 from app.ai_providers.errors import (
     AIProviderError,
     AIProviderNotSentError,
@@ -15,11 +15,11 @@ from app.ai_providers.errors import (
 from app.http import retry_prospect as http_retry_prospect
 
 
-def is_resolvable_by_retry(error: AIProviderError | AgentResponseInvalidError) -> bool:
+def is_resolvable_by_retry(error: AIProviderError | AgentOutputInvalidError) -> bool:
     """同じ入力で呼び直すだけで解消しうる失敗かを返す。"""
     match error:
         # モデルの生成は呼ぶたびに変わるので、呼び直せば契約を満たす応答が返りうる。
-        case AgentResponseInvalidError():
+        case AgentOutputInvalidError():
             return True
         case AIProviderTransportError():
             return http_retry_prospect.is_resolvable_by_retry(error.http_error.failure)

@@ -11,8 +11,8 @@ from opentelemetry.semconv.attributes.error_attributes import ERROR_TYPE
 from opentelemetry.trace import StatusCode
 
 from app.agent.error_type import span_error_type
+from app.agent.output import AgentOutputInvalidError
 from app.agent.running.stop import AnswerGenerationStopped
-from app.agent.runtime.contract import AgentResponseInvalidError
 from app.ai_providers.errors import AIProviderError
 
 __all__ = ["AgentPhase", "agent_phase"]
@@ -32,7 +32,7 @@ _PHASE_SPAN_NAME = "agent_phase"
 
 # 工程が自分で扱える終了。span を error にせず、同じ例外を span 終了後に再送出する。
 _PHASE_STOPS = (AnswerGenerationStopped,)
-_CLASSIFIED_FAILURES = (AIProviderError, AgentResponseInvalidError)
+_CLASSIFIED_FAILURES = (AIProviderError, AgentOutputInvalidError)
 
 
 @contextmanager

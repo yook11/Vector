@@ -127,7 +127,7 @@ async def test_invalid_json_then_success_records_two_production_provider_attempt
         "completed",
     ]
     assert [provider["attributes"].get("error.type") for provider in providers] == [
-        "response_not_json",
+        "ai_provider_result_error",
         None,
     ]
     assert all(

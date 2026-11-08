@@ -20,9 +20,8 @@ from app.agent.recording.types import Usage, _usage_from_optional_counts
 from app.agent.runtime._structured_output import (
     parse_json_object,
     thaw_schema,
-    validate_output,
 )
-from app.agent.runtime.contract import AgentResponseInvalidError, AgentTextStream
+from app.agent.runtime.contract import AgentTextStream
 from app.agent.runtime.llm_failure import (
     UNCLASSIFIED_FAILURE_CODE,
     LlmAttemptFailed,
@@ -55,13 +54,13 @@ class GeminiAgentRuntime:
         self._client = client
         self._llm_calls = llm_calls
 
-    async def call[InputT, OutputT](
+    async def call[InputT](
         self,
-        agent: Agent[InputT, OutputT],
+        agent: Agent[InputT, Any],
         input: InputT,
         *,
         attempt_number: int,
-    ) -> OutputT:
+    ) -> dict[str, Any]:
         if (
             not isinstance(attempt_number, int)
             or isinstance(attempt_number, bool)
@@ -121,8 +120,8 @@ class GeminiAgentRuntime:
                         )
                     else:
                         try:
-                            return _parse_output(agent, response)
-                        except AgentResponseInvalidError as exc:
+                            return _parse_output(response)
+                        except AIProviderResultError as exc:
                             classified_error = exc
 
             if classified_error is not None:
@@ -366,12 +365,9 @@ def _finish_reason_name(response: object) -> str | None:
     return None
 
 
-def _parse_output[InputT, OutputT](
-    agent: Agent[InputT, OutputT],
-    response: object,
-) -> OutputT:
+def _parse_output(response: object) -> dict[str, Any]:
     text = getattr(response, "text", None) or ""
-    return validate_output(agent, parse_json_object(text))
+    return parse_json_object(text)
 
 
 def _usage_from_metadata(usage: object | None) -> Usage | None:

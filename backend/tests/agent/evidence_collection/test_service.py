@@ -25,7 +25,6 @@ from app.agent.evidence_collection.internal_search.query_embedding import (
     InternalSearchQueries,
 )
 from app.agent.planning.contract import ResearchTask, SearchPlan, TargetTimeWindow
-from app.agent.runtime.contract import AgentResponseDefect, AgentResponseInvalidError
 from app.analysis.analyzed_article import InScopeAnalyzedArticle
 from app.analysis.assessment.domain.result import InScope, InScopeCategory
 from tests.agent.answering_runner._harness import fixed_scope
@@ -396,9 +395,7 @@ async def test_time_filter_failure_records_one_metric_for_multiple_goals(
 @pytest.mark.asyncio
 async def test_empty_queries_skip_gateway_even_when_time_filter_fails() -> None:
     gateway = _FakeExternalSearchGateway()
-    query_runtime = ScriptedAgentRuntime(
-        [AgentResponseInvalidError(AgentResponseDefect.OUTPUT_SCHEMA_MISMATCH)]
-    )
+    query_runtime = ScriptedAgentRuntime([{}])
     service = _service(
         internal_search=_FakeInternalSearch(),
         external=_external_search(query_runtime, gateway=gateway),
@@ -684,9 +681,7 @@ async def test_executed_queries_is_empty_when_query_generation_fails() -> None:
 
     provider呼び出しが一度も起きないためexecuted_queriesは空tupleになる。
     """
-    query_runtime = ScriptedAgentRuntime(
-        [AgentResponseInvalidError(AgentResponseDefect.OUTPUT_SCHEMA_MISMATCH)]
-    )
+    query_runtime = ScriptedAgentRuntime([{}])
     service = _service(
         internal_search=_FakeInternalSearch(),
         external=_external_search(query_runtime),

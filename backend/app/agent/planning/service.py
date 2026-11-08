@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 
 from app.agent.agent import Agent
+from app.agent.output import AgentOutputInvalidError, validate_output
 from app.agent.planning.contract import (
     PlanningInput,
     QuestionPlan,
@@ -19,17 +20,14 @@ from app.agent.recording.planning import (
     logfire_planning_recorder,
 )
 from app.agent.retry_prospect import is_resolvable_by_retry
-from app.agent.runtime.contract import (
-    AgentResponseInvalidError,
-    AgentRuntimeScopeFactory,
-)
+from app.agent.runtime.contract import AgentRuntimeScopeFactory
 from app.ai_providers.errors import (
     CLASSIFIED_AI_PROVIDER_ERRORS,
 )
 
 _PLANNING_SOURCE_ERRORS = (
     *CLASSIFIED_AI_PROVIDER_ERRORS,
-    AgentResponseInvalidError,
+    AgentOutputInvalidError,
 )
 _MAX_ATTEMPTS = 2
 _PLANNING_TIMEOUT_SECONDS = 15
@@ -60,11 +58,12 @@ class QuestionPlanningService:
                     async with self._runtime_scope_factory() as runtime:
                         for attempt_number in range(1, _MAX_ATTEMPTS + 1):
                             try:
-                                draft = await runtime.call(
+                                payload = await runtime.call(
                                     self._agent,
                                     input,
                                     attempt_number=attempt_number,
                                 )
+                                draft = validate_output(self._agent, payload)
                                 plan = plan_from_draft(draft)
                             except _PLANNING_SOURCE_ERRORS as cause:
                                 if (

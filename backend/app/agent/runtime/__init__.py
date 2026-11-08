@@ -1,8 +1,6 @@
 """Provider-neutral Agent runtime contracts."""
 
 from app.agent.runtime.contract import (
-    AgentResponseDefect,
-    AgentResponseInvalidError,
     AgentRuntime,
     AgentRuntimeScopeFactory,
     AgentTextStream,
@@ -11,8 +9,6 @@ from app.agent.runtime.contract import (
 )
 
 __all__ = [
-    "AgentResponseDefect",
-    "AgentResponseInvalidError",
     "AgentRuntime",
     "AgentRuntimeScopeFactory",
     "AgentTextStream",

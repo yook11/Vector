@@ -12,7 +12,6 @@ from opentelemetry.trace import StatusCode
 
 from app.agent.recording.llm import LogfireLlmCallRecorder
 from app.agent.recording.types import Usage
-from app.agent.runtime.contract import AgentResponseDefect, AgentResponseInvalidError
 from app.agent.runtime.llm_failure import (
     UNCLASSIFIED_FAILURE_CODE,
     LlmAttemptFailed,
@@ -56,8 +55,8 @@ def test_failed_outcome_rejects_empty_failure_code() -> None:
         LlmAttemptFailed(failure_code="")
 
 
-def test_llm_attempt_failed_from_uses_code_or_defect() -> None:
-    """分類済み失敗は CODE / defect を failure_code にする。"""
+def test_llm_attempt_failed_from_uses_code() -> None:
+    """分類済み失敗は CODE を failure_code にする。"""
 
     assert llm_attempt_failed_from(
         AIProviderTransportError(
@@ -68,9 +67,6 @@ def test_llm_attempt_failed_from_uses_code_or_defect() -> None:
             )
         )
     ) == LlmAttemptFailed(failure_code=AIProviderTransportError.CODE)
-    assert llm_attempt_failed_from(
-        AgentResponseInvalidError(AgentResponseDefect.RESPONSE_NOT_JSON)
-    ) == LlmAttemptFailed(failure_code=AgentResponseDefect.RESPONSE_NOT_JSON)
 
 
 def test_llm_attempt_failed_from_rejects_class_name() -> None:

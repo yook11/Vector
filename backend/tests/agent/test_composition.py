@@ -17,11 +17,8 @@ from app.agent.composition import (
     activate_gemini_client,
     ensure_agent_worker_configured,
 )
+from app.agent.output import AgentOutputDefect, AgentOutputInvalidError
 from app.agent.planning.agent import QUESTION_PLANNER_AGENT
-from app.agent.runtime.contract import (
-    AgentResponseDefect,
-    AgentResponseInvalidError,
-)
 from app.ai_providers.errors import (
     AIProviderNotSentError,
     AIProviderNotSentReason,
@@ -235,8 +232,8 @@ async def test_gemini_client_scope_rejects_missing_key_before_opening(
             id="provider-error",
         ),
         pytest.param(
-            AgentResponseInvalidError(AgentResponseDefect.RESPONSE_NOT_JSON),
-            id="response-error",
+            AgentOutputInvalidError(AgentOutputDefect.OUTPUT_SCHEMA_MISMATCH),
+            id="output-error",
         ),
         pytest.param(RuntimeError("runtime scope body failed"), id="body-error"),
         pytest.param(asyncio.CancelledError(), id="cancellation"),

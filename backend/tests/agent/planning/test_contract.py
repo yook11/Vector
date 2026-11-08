@@ -11,6 +11,7 @@ import pytest
 from pydantic import ValidationError
 
 import app.agent.planning.contract as planning_contract_module
+from app.agent.output import AgentOutputDefect, AgentOutputInvalidError
 from app.agent.planning.contract import (
     MAX_ARTICLE_SEARCH_QUERIES,
     RESEARCH_GOAL_MAX_CHARS,
@@ -27,10 +28,6 @@ from app.agent.planning.contract import (
     TargetTimeWindow,
     plan_from_draft,
     render_target_time_window,
-)
-from app.agent.runtime.contract import (
-    AgentResponseDefect,
-    AgentResponseInvalidError,
 )
 from app.agent.threads.contracts import ThreadMessageSnapshot
 
@@ -457,10 +454,10 @@ def test_plan_from_draft_turns_semantic_inconsistency_into_safe_response_defect(
     draft: Any,
 ) -> None:
 
-    with pytest.raises(AgentResponseInvalidError) as raised:
+    with pytest.raises(AgentOutputInvalidError) as raised:
         plan_from_draft(draft())
 
-    assert raised.value.defect is AgentResponseDefect.OUTPUT_SCHEMA_MISMATCH
+    assert raised.value.defect is AgentOutputDefect.OUTPUT_SCHEMA_MISMATCH
     assert "RAW_QUESTION_MUST_NOT_BE_FALLBACK_34a1" not in str(raised.value)
 
 

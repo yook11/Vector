@@ -23,12 +23,12 @@ from app.agent.answering.evidence_answer.contract import (
     EvidenceAnswerDraftInvalidError,
 )
 from app.agent.answering.evidence_answer.failure import EvidenceAnswerError
+from app.agent.output import AgentOutputDefect, AgentOutputInvalidError
 from app.agent.phase_span import agent_phase
 from app.agent.planning.failure import PlanningError
 from app.agent.running.state import RunRejected, RunRejectionReason
 from app.agent.running.stop import AnswerGenerationStopped
 from app.agent.running.types import AgentRunStatus
-from app.agent.runtime.contract import AgentResponseDefect, AgentResponseInvalidError
 from app.ai_providers.errors import (
     AIProviderTransportError,
 )
@@ -212,9 +212,9 @@ def test_ai_provider_error_marks_span_error_with_error_type_and_reraises_same_in
 def test_agent_response_invalid_error_marks_span_error_with_defect_error_type(
     capfire: CaptureLogfire,
 ) -> None:
-    error = AgentResponseInvalidError(AgentResponseDefect.OUTPUT_SCHEMA_MISMATCH)
+    error = AgentOutputInvalidError(AgentOutputDefect.OUTPUT_SCHEMA_MISMATCH)
 
-    with pytest.raises(AgentResponseInvalidError) as raised:
+    with pytest.raises(AgentOutputInvalidError) as raised:
         with agent_phase(phase="planning", agent_name="question_planner"):
             raise error
 
