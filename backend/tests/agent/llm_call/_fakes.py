@@ -1,4 +1,4 @@
-"""AgentRuntime policy tests 用の provider-neutral なtest doubles。"""
+"""LlmCaller policy tests 用の provider-neutral なtest doubles。"""
 
 from __future__ import annotations
 
@@ -12,35 +12,35 @@ from pydantic import BaseModel
 from app.agent.agent import Agent
 
 __all__ = [
-    "AgentRuntimeCall",
-    "GoalKeyedAgentRuntime",
-    "ScriptedAgentRuntime",
-    "runtime_payload",
+    "RecordedLlmCall",
+    "GoalKeyedLlmCaller",
+    "ScriptedLlmCaller",
+    "caller_payload",
 ]
 
 
 @dataclass(frozen=True, slots=True)
-class AgentRuntimeCall:
-    """ScriptedAgentRuntime が観測した1 attempt。"""
+class RecordedLlmCall:
+    """ScriptedLlmCaller が観測した1 attempt。"""
 
     agent: Agent[Any, Any]
     input: Any
     attempt_number: int
 
 
-def runtime_payload(outcome: object) -> dict[str, Any]:
-    """Runtimeが返すJSON objectにし、scriptに書いたDraftはJSONへ直す。"""
+def caller_payload(outcome: object) -> dict[str, Any]:
+    """LlmCallerが返すJSON objectにし、scriptに書いたDraftはJSONへ直す。"""
     if isinstance(outcome, BaseModel):
         return outcome.model_dump(mode="json", by_alias=True)
     return cast(dict[str, Any], outcome)
 
 
-class ScriptedAgentRuntime:
-    """AgentRuntime の結果列を FIFO で返す policy test double。"""
+class ScriptedLlmCaller:
+    """LlmCaller の結果列を FIFO で返す policy test double。"""
 
     def __init__(self, outcomes: Sequence[object | BaseException]) -> None:
         self._outcomes: deque[object | BaseException] = deque(outcomes)
-        self.calls: list[AgentRuntimeCall] = []
+        self.calls: list[RecordedLlmCall] = []
 
     async def call[InputT](
         self,
@@ -50,7 +50,7 @@ class ScriptedAgentRuntime:
         attempt_number: int,
     ) -> dict[str, Any]:
         self.calls.append(
-            AgentRuntimeCall(
+            RecordedLlmCall(
                 agent=agent,
                 input=input,
                 attempt_number=attempt_number,
@@ -58,13 +58,13 @@ class ScriptedAgentRuntime:
         )
         if not self._outcomes:
             raise AssertionError(
-                "ScriptedAgentRuntime outcome queue exhausted "
+                "ScriptedLlmCaller outcome queue exhausted "
                 f"at invocation {len(self.calls)}"
             )
         outcome = self._outcomes.popleft()
         if isinstance(outcome, BaseException):
             raise outcome
-        return runtime_payload(outcome)
+        return caller_payload(outcome)
 
     def assert_all_outcomes_consumed(self) -> None:
         """全script消費が保証に必要なtestから明示的に呼ぶ。"""
@@ -72,16 +72,16 @@ class ScriptedAgentRuntime:
         remaining = len(self._outcomes)
         if remaining:
             raise AssertionError(
-                f"ScriptedAgentRuntime has {remaining} unconsumed outcome(s)"
+                f"ScriptedLlmCaller has {remaining} unconsumed outcome(s)"
             )
 
 
-class GoalKeyedAgentRuntime:
+class GoalKeyedLlmCaller:
     """research_goal で outcome を返す。同時 fan-out でも対応が入れ替わらない。"""
 
     def __init__(self, outcomes_by_goal: dict[str, object | BaseException]) -> None:
         self._outcomes_by_goal = outcomes_by_goal
-        self.calls: list[AgentRuntimeCall] = []
+        self.calls: list[RecordedLlmCall] = []
 
     async def call[InputT](
         self,
@@ -91,7 +91,7 @@ class GoalKeyedAgentRuntime:
         attempt_number: int,
     ) -> dict[str, Any]:
         self.calls.append(
-            AgentRuntimeCall(
+            RecordedLlmCall(
                 agent=agent,
                 input=input,
                 attempt_number=attempt_number,
@@ -102,8 +102,8 @@ class GoalKeyedAgentRuntime:
             outcome = self._outcomes_by_goal[goal]
         except KeyError as exc:
             raise AssertionError(
-                f"GoalKeyedAgentRuntime has no outcome for research_goal={goal!r}"
+                f"GoalKeyedLlmCaller has no outcome for research_goal={goal!r}"
             ) from exc
         if isinstance(outcome, BaseException):
             raise outcome
-        return runtime_payload(outcome)
+        return caller_payload(outcome)

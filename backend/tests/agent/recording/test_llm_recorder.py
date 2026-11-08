@@ -26,7 +26,7 @@ from app.http.failure import (
     HttpTransportFailureReason,
     HttpTransportStage,
 )
-from tests.agent.runtime._tracing_helpers import (
+from tests.agent.llm_call._tracing_helpers import (
     exception_events,
     one_provider_attempt_span,
 )
@@ -123,7 +123,7 @@ async def test_classified_failure_records_status_and_failure_code(
     """分類済み失敗の outcome だけに failure_code を付ける。"""
 
     recorder = LogfireLlmCallRecorder()
-    error = RuntimeError("classified by runtime")
+    error = RuntimeError("classified by caller")
     with pytest.raises(RuntimeError) as raised:
         async with recorder.record(**_RECORD_KWARGS) as recording:
             recording.report_outcome(
@@ -252,7 +252,7 @@ async def test_reported_unclassified_records_outcome_and_error_type(
     """報告済み unclassified は status と error.type を残し、result は付けない。"""
 
     recorder = LogfireLlmCallRecorder()
-    error = RuntimeError("unclassified by runtime")
+    error = RuntimeError("unclassified by caller")
     with pytest.raises(RuntimeError) as raised:
         async with recorder.record(**_RECORD_KWARGS) as recording:
             recording.report_outcome(

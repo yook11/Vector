@@ -40,8 +40,8 @@ from app.http.failure import (
     HttpTransportFailureReason,
     HttpTransportStage,
 )
+from tests.agent.llm_call._fakes import ScriptedLlmCaller
 from tests.agent.recording._fakes import RecordingPlanningRecorder
-from tests.agent.runtime._fakes import ScriptedAgentRuntime
 from tests.logfire._metric_helpers import collected_metrics, sum_counter_for_result
 
 _PLANNER_OUTCOME_METRIC = "vector.agent.planner.outcome"
@@ -80,20 +80,20 @@ def _unparseable_response() -> AIProviderResultError:
     return AIProviderResultError(reason=AIProviderResultReason.RESPONSE_UNPARSEABLE)
 
 
-class _RecordingPlannerRuntimeScope:
+class _RecordingPlannerCallerScope:
     def __init__(
         self,
-        factory: RecordingPlannerRuntimeScopeFactory,
-        runtime: ScriptedAgentRuntime,
+        factory: RecordingPlannerCallerScopeFactory,
+        caller: ScriptedLlmCaller,
     ) -> None:
         self._factory = factory
-        self._runtime = runtime
+        self._caller = caller
 
-    async def __aenter__(self) -> ScriptedAgentRuntime:
+    async def __aenter__(self) -> ScriptedLlmCaller:
         if self._factory.enter_error is not None:
             raise self._factory.enter_error
-        self._factory.entered.append(self._runtime)
-        return self._runtime
+        self._factory.entered.append(self._caller)
+        return self._caller
 
     async def __aexit__(
         self,
@@ -101,7 +101,7 @@ class _RecordingPlannerRuntimeScope:
         exc: BaseException | None,
         traceback: TracebackType | None,
     ) -> bool:
-        self._factory.exits.append((self._runtime, exc_type, exc, traceback))
+        self._factory.exits.append((self._caller, exc_type, exc, traceback))
         if self._factory.exit_observer is not None:
             self._factory.exit_observer()
         if self._factory.exit_error is not None:
@@ -109,55 +109,55 @@ class _RecordingPlannerRuntimeScope:
         return False
 
 
-class RecordingPlannerRuntimeScopeFactory:
+class RecordingPlannerCallerScopeFactory:
     def __init__(
         self,
-        runtimes: Sequence[ScriptedAgentRuntime],
+        callers: Sequence[ScriptedLlmCaller],
         *,
         enter_error: BaseException | None = None,
         exit_error: BaseException | None = None,
         exit_observer: Callable[[], None] | None = None,
     ) -> None:
-        self._runtimes = list(runtimes)
+        self._callers = list(callers)
         self.enter_error = enter_error
         self.exit_error = exit_error
         self.exit_observer = exit_observer
-        self.created: list[ScriptedAgentRuntime] = []
-        self.entered: list[ScriptedAgentRuntime] = []
+        self.created: list[ScriptedLlmCaller] = []
+        self.entered: list[ScriptedLlmCaller] = []
         self.exits: list[
             tuple[
-                ScriptedAgentRuntime,
+                ScriptedLlmCaller,
                 type[BaseException] | None,
                 BaseException | None,
                 TracebackType | None,
             ]
         ] = []
 
-    def __call__(self) -> _RecordingPlannerRuntimeScope:
-        runtime = self._runtimes[len(self.created)]
-        self.created.append(runtime)
-        return _RecordingPlannerRuntimeScope(self, runtime)
+    def __call__(self) -> _RecordingPlannerCallerScope:
+        caller = self._callers[len(self.created)]
+        self.created.append(caller)
+        return _RecordingPlannerCallerScope(self, caller)
 
 
 def _service(
-    runtime: ScriptedAgentRuntime,
+    caller: ScriptedLlmCaller,
     *,
     exit_observer: Callable[[], None] | None = None,
     recorder: RecordingPlanningRecorder | None = None,
-) -> tuple[QuestionPlanningService, RecordingPlannerRuntimeScopeFactory]:
-    factory = RecordingPlannerRuntimeScopeFactory(
-        [runtime],
+) -> tuple[QuestionPlanningService, RecordingPlannerCallerScopeFactory]:
+    factory = RecordingPlannerCallerScopeFactory(
+        [caller],
         exit_observer=exit_observer,
     )
     if recorder is None:
         service = QuestionPlanningService(
             agent=QUESTION_PLANNER_AGENT,
-            runtime_scope_factory=factory,
+            llm_caller_scope_factory=factory,
         )
     else:
         service = QuestionPlanningService(
             agent=QUESTION_PLANNER_AGENT,
-            runtime_scope_factory=factory,
+            llm_caller_scope_factory=factory,
             recorder=recorder,
         )
     return (service, factory)
@@ -213,10 +213,10 @@ async def test_planner_returns_each_completed_two_plan_variant_after_scope_exit(
     expected_plan_type: str,
     capfire: CaptureLogfire,
 ) -> None:
-    runtime = ScriptedAgentRuntime([draft()])
+    caller = ScriptedLlmCaller([draft()])
     metrics_at_scope_exit: list[dict[str, Any]] = []
     service, factory = _service(
-        runtime,
+        caller,
         exit_observer=lambda: metrics_at_scope_exit.extend(
             _metric_attributes(collected_metrics(capfire))
         ),
@@ -225,16 +225,16 @@ async def test_planner_returns_each_completed_two_plan_variant_after_scope_exit(
     plan = await service.plan(_input())
 
     assert plan.plan_type == expected_plan_type
-    assert len(runtime.calls) == 1
-    call = runtime.calls[0]
+    assert len(caller.calls) == 1
+    call = caller.calls[0]
     assert (
         call.agent is QUESTION_PLANNER_AGENT,
         call.attempt_number,
         call.input.question,
     ) == (True, 1, "今日のNVIDIAの発表は？")
     assert (factory.created, factory.entered, len(factory.exits)) == (
-        [runtime],
-        [runtime],
+        [caller],
+        [caller],
         1,
     )
     assert metrics_at_scope_exit == []
@@ -251,9 +251,9 @@ async def test_planner_returns_each_completed_two_plan_variant_after_scope_exit(
 async def test_successful_plan_records_succeeded_outcome() -> None:
     """完成 plan は recorder へ成功結論を1回渡す。"""
 
-    runtime = ScriptedAgentRuntime([_draft(plan_type="direct_answer")])
+    caller = ScriptedLlmCaller([_draft(plan_type="direct_answer")])
     recorder = RecordingPlanningRecorder()
-    service, _factory = _service(runtime, recorder=recorder)
+    service, _factory = _service(caller, recorder=recorder)
 
     plan = await service.plan(_input())
 
@@ -269,7 +269,7 @@ async def test_semantic_response_defect_retries_once() -> None:
         plan_type="direct_answer",
         research_tasks=[_task_draft("goal", ["invalid"])],
     )
-    runtime = ScriptedAgentRuntime(
+    caller = ScriptedLlmCaller(
         [
             invalid,
             _draft(
@@ -280,18 +280,18 @@ async def test_semantic_response_defect_retries_once() -> None:
             ),
         ]
     )
-    service, _factory = _service(runtime)
+    service, _factory = _service(caller)
 
     plan = await service.plan(_input())
 
     assert plan.plan_type == "search"
-    assert [call.attempt_number for call in runtime.calls] == [1, 2]
-    assert runtime.calls[0].input is runtime.calls[1].input
+    assert [call.attempt_number for call in caller.calls] == [1, 2]
+    assert caller.calls[0].input is caller.calls[1].input
 
 
 async def test_resolvable_provider_failure_retries_once_with_the_same_input() -> None:
     """呼び直せば解消しうるAIの失敗(通信の待ち切れ)は同じ入力で1回だけ再試行し、2回目の計画を返す。"""
-    runtime = ScriptedAgentRuntime(
+    caller = ScriptedLlmCaller(
         [
             AIProviderTransportError(
                 http_error=HttpTransportError(
@@ -303,27 +303,27 @@ async def test_resolvable_provider_failure_retries_once_with_the_same_input() ->
             _draft(plan_type="direct_answer"),
         ]
     )
-    service, _factory = _service(runtime)
+    service, _factory = _service(caller)
 
     plan = await service.plan(_input())
 
     assert plan.plan_type == "direct_answer"
-    assert [call.attempt_number for call in runtime.calls] == [1, 2]
-    assert runtime.calls[0].input is runtime.calls[1].input
+    assert [call.attempt_number for call in caller.calls] == [1, 2]
+    assert caller.calls[0].input is caller.calls[1].input
 
 
 async def test_two_response_defects_propagate_second_error_and_record_not_created(
     capfire: CaptureLogfire,
 ) -> None:
-    runtime = ScriptedAgentRuntime([_unparseable_response(), {}])
-    service, factory = _service(runtime)
+    caller = ScriptedLlmCaller([_unparseable_response(), {}])
+    service, factory = _service(caller)
 
     with pytest.raises(PlanningError) as raised:
         await service.plan(_input())
 
     assert isinstance(raised.value.__cause__, AgentOutputInvalidError)
     assert raised.value.code == AgentOutputDefect.OUTPUT_SCHEMA_MISMATCH.value
-    assert [call.attempt_number for call in runtime.calls] == [1, 2]
+    assert [call.attempt_number for call in caller.calls] == [1, 2]
     assert factory.exits[0][2] is raised.value
     metrics = collected_metrics(capfire)
     assert sum_counter_for_result(metrics, _PLANNER_OUTCOME_METRIC, "failed") == 1
@@ -340,9 +340,9 @@ async def test_two_response_defects_propagate_second_error_and_record_not_create
 async def test_terminal_response_defect_records_failed_outcome() -> None:
     """分類済み終端は recorder へ failed を1回渡す。"""
 
-    runtime = ScriptedAgentRuntime([_unparseable_response(), {}])
+    caller = ScriptedLlmCaller([_unparseable_response(), {}])
     recorder = RecordingPlanningRecorder()
-    service, _factory = _service(runtime, recorder=recorder)
+    service, _factory = _service(caller, recorder=recorder)
 
     with pytest.raises(PlanningError):
         await service.plan(_input())
@@ -368,15 +368,15 @@ async def test_unresolvable_provider_failure_does_not_retry_and_records_not_crea
             )
         )
     )
-    runtime = ScriptedAgentRuntime([error])
-    service, factory = _service(runtime)
+    caller = ScriptedLlmCaller([error])
+    service, factory = _service(caller)
 
     with pytest.raises(PlanningError) as raised:
         await service.plan(_input())
 
     assert raised.value.__cause__ is error
     assert raised.value.code == "ai_provider_transport_error"
-    assert [call.attempt_number for call in runtime.calls] == [1]
+    assert [call.attempt_number for call in caller.calls] == [1]
     assert factory.exits[0][2] is raised.value
     assert _metric_attributes(collected_metrics(capfire)) == [
         {
@@ -399,9 +399,9 @@ async def test_classified_provider_failure_records_failed_outcome() -> None:
             )
         )
     )
-    runtime = ScriptedAgentRuntime([error])
+    caller = ScriptedLlmCaller([error])
     recorder = RecordingPlanningRecorder()
-    service, _factory = _service(runtime, recorder=recorder)
+    service, _factory = _service(caller, recorder=recorder)
 
     with pytest.raises(PlanningError):
         await service.plan(_input())
@@ -425,8 +425,8 @@ async def test_unregistered_provider_error_propagates_without_outcome_metric(
     error = _UnregisteredProviderError(
         reason=AIProviderResultReason.RESPONSE_UNPARSEABLE
     )
-    runtime = ScriptedAgentRuntime([error])
-    service, factory = _service(runtime)
+    caller = ScriptedLlmCaller([error])
+    service, factory = _service(caller)
 
     with pytest.raises(AIProviderError) as raised:
         await service.plan(_input())
@@ -438,7 +438,7 @@ async def test_unregistered_provider_error_propagates_without_outcome_metric(
         and (span.attributes or {}).get("logfire.span_type") == "span"
     )
     assert raised.value is error
-    assert [call.attempt_number for call in runtime.calls] == [1]
+    assert [call.attempt_number for call in caller.calls] == [1]
     assert factory.exits[0][2] is error
     assert _metric_attributes(collected_metrics(capfire)) == []
     assert phase.status.status_code is StatusCode.ERROR
@@ -455,9 +455,9 @@ async def test_unclassified_failure_and_cancellation_propagate_without_metric(
     error: BaseException,
     capfire: CaptureLogfire,
 ) -> None:
-    runtime = ScriptedAgentRuntime([error])
+    caller = ScriptedLlmCaller([error])
     recorder = RecordingPlanningRecorder()
-    service, _factory = _service(runtime, recorder=recorder)
+    service, _factory = _service(caller, recorder=recorder)
 
     with pytest.raises(type(error)) as raised:
         await service.plan(_input())
@@ -471,7 +471,7 @@ async def test_search_plan_preserves_typed_time_window_through_service() -> None
     target_time_window = TargetTimeWindow.model_validate(
         {"kind": "last_n_days", "days": 7}
     )
-    runtime = ScriptedAgentRuntime(
+    caller = ScriptedLlmCaller(
         [
             _draft(
                 plan_type="search",
@@ -480,7 +480,7 @@ async def test_search_plan_preserves_typed_time_window_through_service() -> None
             )
         ]
     )
-    service, _factory = _service(runtime)
+    service, _factory = _service(caller)
 
     plan = await service.plan(_input())
 
@@ -494,11 +494,11 @@ async def test_search_plan_preserves_typed_time_window_through_service() -> None
         pytest.param({}, id="output-defect"),
     ],
 )
-async def test_each_response_defect_retries_once_in_the_same_runtime(
+async def test_each_response_defect_retries_once_in_the_same_caller(
     first_outcome: object,
 ) -> None:
-    """JSONとして読めない応答と、出力の契約を満たさない応答は、同じruntimeで1回だけ呼び直す。"""
-    runtime = ScriptedAgentRuntime(
+    """JSONとして読めない応答と、出力の契約を満たさない応答は、同じcallerで1回だけ呼び直す。"""
+    caller = ScriptedLlmCaller(
         [
             first_outcome,
             _draft(
@@ -507,19 +507,19 @@ async def test_each_response_defect_retries_once_in_the_same_runtime(
             ),
         ]
     )
-    service, factory = _service(runtime)
+    service, factory = _service(caller)
 
     plan = await service.plan(_input())
 
     assert plan.plan_type == "search"
-    assert (factory.created, factory.entered) == ([runtime], [runtime])
+    assert (factory.created, factory.entered) == ([caller], [caller])
     assert len(factory.exits) == 1
-    assert [call.agent for call in runtime.calls] == [
+    assert [call.agent for call in caller.calls] == [
         QUESTION_PLANNER_AGENT,
         QUESTION_PLANNER_AGENT,
     ]
-    assert [call.attempt_number for call in runtime.calls] == [1, 2]
-    assert runtime.calls[0].input is runtime.calls[1].input
+    assert [call.attempt_number for call in caller.calls] == [1, 2]
+    assert caller.calls[0].input is caller.calls[1].input
 
 
 async def test_close_error_replaces_terminal_response_defect_without_metric(
@@ -532,15 +532,15 @@ async def test_close_error_replaces_terminal_response_defect_without_metric(
             )
         )
     )
-    runtime = ScriptedAgentRuntime([_unparseable_response(), {}])
-    factory = RecordingPlannerRuntimeScopeFactory(
-        [runtime],
+    caller = ScriptedLlmCaller([_unparseable_response(), {}])
+    factory = RecordingPlannerCallerScopeFactory(
+        [caller],
         exit_error=close_error,
     )
     recorder = RecordingPlanningRecorder()
     service = QuestionPlanningService(
         agent=QUESTION_PLANNER_AGENT,
-        runtime_scope_factory=factory,
+        llm_caller_scope_factory=factory,
         recorder=recorder,
     )
 
@@ -551,9 +551,9 @@ async def test_close_error_replaces_terminal_response_defect_without_metric(
     planning_error = close_error.__context__
     assert isinstance(planning_error, PlanningError)
     assert isinstance(planning_error.__cause__, AgentOutputInvalidError)
-    assert [call.attempt_number for call in runtime.calls] == [1, 2]
+    assert [call.attempt_number for call in caller.calls] == [1, 2]
     assert (
-        factory.exits[0][0] is runtime,
+        factory.exits[0][0] is caller,
         factory.exits[0][1] is PlanningError,
         factory.exits[0][2] is planning_error,
         factory.exits[0][3] is not None,
@@ -592,10 +592,10 @@ async def test_unresolvable_provider_error_propagates_without_retry(
 ) -> None:
     """呼び直しても解消しないAIの失敗は再試行せず、入力や原文を含めずに失敗を記録する。"""
     question_sentinel = "PLANNER_QUESTION_MUST_NOT_ENTER_METRICS_7f0a"
-    runtime = ScriptedAgentRuntime([error])
+    caller = ScriptedLlmCaller([error])
     metrics_at_scope_exit: list[dict[str, Any]] = []
     service, factory = _service(
-        runtime,
+        caller,
         exit_observer=lambda: metrics_at_scope_exit.extend(
             _metric_attributes(collected_metrics(capfire))
         ),
@@ -606,7 +606,7 @@ async def test_unresolvable_provider_error_propagates_without_retry(
 
     assert raised.value.__cause__ is error
     assert raised.value.code == expected_failure_code
-    assert [call.attempt_number for call in runtime.calls] == [1]
+    assert [call.attempt_number for call in caller.calls] == [1]
     assert factory.exits[0][2] is raised.value
     assert metrics_at_scope_exit == []
     metrics = collected_metrics(capfire)
@@ -641,15 +641,15 @@ async def test_unknown_error_and_cancellation_propagate_by_identity(
     capfire: CaptureLogfire,
 ) -> None:
     question_sentinel = "PLANNER_QUESTION_MUST_NOT_ENTER_METRICS_58d2"
-    runtime = ScriptedAgentRuntime([error])
+    caller = ScriptedLlmCaller([error])
     recorder = RecordingPlanningRecorder()
-    service, factory = _service(runtime, recorder=recorder)
+    service, factory = _service(caller, recorder=recorder)
 
     with pytest.raises(type(error)) as raised:
         await service.plan(_input(question_sentinel))
 
     assert raised.value is error
-    assert [call.attempt_number for call in runtime.calls] == [1]
+    assert [call.attempt_number for call in caller.calls] == [1]
     assert len(factory.exits) == 1
     assert factory.exits[0][2] is error
     metrics = collected_metrics(capfire)
@@ -662,19 +662,19 @@ async def test_unknown_error_and_cancellation_propagate_by_identity(
 
 
 @pytest.mark.parametrize(
-    ("failure_point", "runtime_call_count", "error"),
+    ("failure_point", "caller_call_count", "error"),
     [
         pytest.param(
             "enter",
             0,
-            RuntimeError("planner runtime scope enter failed"),
-            id="runtime-enter",
+            RuntimeError("planner caller scope enter failed"),
+            id="caller-enter",
         ),
         pytest.param(
             "exit",
             1,
-            RuntimeError("planner runtime scope exit failed"),
-            id="runtime-exit",
+            RuntimeError("planner caller scope exit failed"),
+            id="caller-exit",
         ),
         pytest.param(
             "enter",
@@ -702,13 +702,13 @@ async def test_unknown_error_and_cancellation_propagate_by_identity(
         ),
     ],
 )
-async def test_all_runtime_scope_failures_propagate_without_plan_or_metric(
+async def test_all_caller_scope_failures_propagate_without_plan_or_metric(
     failure_point: str,
-    runtime_call_count: int,
+    caller_call_count: int,
     error: BaseException,
     capfire: CaptureLogfire,
 ) -> None:
-    runtime = ScriptedAgentRuntime(
+    caller = ScriptedLlmCaller(
         [
             _draft(
                 plan_type="search",
@@ -718,15 +718,15 @@ async def test_all_runtime_scope_failures_propagate_without_plan_or_metric(
             )
         ]
     )
-    factory = RecordingPlannerRuntimeScopeFactory(
-        [runtime],
+    factory = RecordingPlannerCallerScopeFactory(
+        [caller],
         enter_error=error if failure_point == "enter" else None,
         exit_error=error if failure_point == "exit" else None,
     )
     recorder = RecordingPlanningRecorder()
     service = QuestionPlanningService(
         agent=QUESTION_PLANNER_AGENT,
-        runtime_scope_factory=factory,
+        llm_caller_scope_factory=factory,
         recorder=recorder,
     )
 
@@ -734,14 +734,14 @@ async def test_all_runtime_scope_failures_propagate_without_plan_or_metric(
         await service.plan(_input())
 
     assert raised.value is error
-    assert len(runtime.calls) == runtime_call_count
+    assert len(caller.calls) == caller_call_count
     assert _metric_attributes(collected_metrics(capfire)) == []
     _assert_recorded(recorder, outcome=None)
 
 
-async def test_two_plan_calls_activate_fresh_runtime_scopes() -> None:
-    first_runtime = ScriptedAgentRuntime([_draft(plan_type="direct_answer")])
-    second_runtime = ScriptedAgentRuntime(
+async def test_two_plan_calls_activate_fresh_caller_scopes() -> None:
+    first_caller = ScriptedLlmCaller([_draft(plan_type="direct_answer")])
+    second_caller = ScriptedLlmCaller(
         [
             _draft(
                 plan_type="search",
@@ -749,20 +749,20 @@ async def test_two_plan_calls_activate_fresh_runtime_scopes() -> None:
             )
         ]
     )
-    factory = RecordingPlannerRuntimeScopeFactory([first_runtime, second_runtime])
+    factory = RecordingPlannerCallerScopeFactory([first_caller, second_caller])
     service = QuestionPlanningService(
         agent=QUESTION_PLANNER_AGENT,
-        runtime_scope_factory=factory,
+        llm_caller_scope_factory=factory,
     )
 
     first = await service.plan(_input("first"))
     second = await service.plan(_input("second"))
 
     assert (first.plan_type, second.plan_type) == ("direct_answer", "search")
-    assert factory.created == [first_runtime, second_runtime]
-    assert factory.entered == [first_runtime, second_runtime]
+    assert factory.created == [first_caller, second_caller]
+    assert factory.entered == [first_caller, second_caller]
     assert len(factory.exits) == 2
-    assert first_runtime is not second_runtime
+    assert first_caller is not second_caller
 
 
 async def test_retry_success_metric_records_after_scope_exit_without_repair_detail(
@@ -772,7 +772,7 @@ async def test_retry_success_metric_records_after_scope_exit_without_repair_deta
         "plan_type": "REPAIR_HINT_MUST_NOT_ENTER_METRICS_4d7f",
         "research_tasks": [],
     }
-    runtime = ScriptedAgentRuntime(
+    caller = ScriptedLlmCaller(
         [
             invalid,
             _draft(
@@ -785,7 +785,7 @@ async def test_retry_success_metric_records_after_scope_exit_without_repair_deta
     )
     metrics_at_scope_exit: list[dict[str, Any]] = []
     service, _factory = _service(
-        runtime,
+        caller,
         exit_observer=lambda: metrics_at_scope_exit.extend(
             _metric_attributes(collected_metrics(capfire))
         ),
@@ -814,7 +814,7 @@ async def test_retry_success_records_attempt_count() -> None:
     """retry 成功は recorder へ実際の試行回数を渡す。"""
 
     invalid = _unparseable_response()
-    runtime = ScriptedAgentRuntime(
+    caller = ScriptedLlmCaller(
         [
             invalid,
             _draft(
@@ -826,7 +826,7 @@ async def test_retry_success_records_attempt_count() -> None:
         ]
     )
     recorder = RecordingPlanningRecorder()
-    service, _factory = _service(runtime, recorder=recorder)
+    service, _factory = _service(caller, recorder=recorder)
 
     plan = await service.plan(_input())
 
@@ -868,8 +868,8 @@ async def test_outcome_metric_records_once_without_model_visible_text(
     plan_type: str,
     capfire: CaptureLogfire,
 ) -> None:
-    runtime = ScriptedAgentRuntime(outcomes())
-    service, _factory = _service(runtime)
+    caller = ScriptedLlmCaller(outcomes())
+    service, _factory = _service(caller)
 
     await service.plan(_input("MODEL_VISIBLE_QUESTION_SENTINEL_86ba"))
 

@@ -1,4 +1,4 @@
-"""Agent runtime tests の固定入力と外部境界 fake。"""
+"""LLM呼び出しのテストの固定入力と外部境界 fake。"""
 
 from __future__ import annotations
 
@@ -16,7 +16,7 @@ from app.agent.agent import Agent, AgentPrompt, ModelSettings, ModelTarget
 _DEFAULT_RESPONSE_SCHEMA = object()
 
 
-class RuntimeOutput(BaseModel):
+class CallerOutput(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     result: str
@@ -44,7 +44,7 @@ class FakeResponse:
 
 
 class FakeGeminiClient:
-    """外部 I/O 境界だけを差し替え、span は runtime の責務として生成しない。"""
+    """外部 I/O 境界だけを差し替え、span は caller の責務として生成しない。"""
 
     def __init__(
         self,
@@ -62,13 +62,13 @@ class FakeGeminiClient:
 
 def make_agent(
     *,
-    name: str = "runtime_probe",
+    name: str = "caller_probe",
     instructions: str = "SYSTEM_INSTRUCTIONS_SENTINEL_5f21",
     rendered_input: str = "TASK_CONTENTS_SENTINEL_8a43",
     model_name: str = "gemini-test-model",
     temperature: float | None = 0.25,
     max_output_tokens: int | None = 321,
-    output_type: type[BaseModel] = RuntimeOutput,
+    output_type: type[BaseModel] = CallerOutput,
     response_schema: Mapping[str, Any] | None | object = _DEFAULT_RESPONSE_SCHEMA,
 ) -> Agent[Any, Any]:
     declared_schema = (
@@ -111,7 +111,7 @@ def success_response(
 ) -> FakeResponse:
     return FakeResponse(
         text=json.dumps(
-            {"result": result, "tags": ["runtime"] if tags is None else tags}
+            {"result": result, "tags": ["caller"] if tags is None else tags}
         ),
         usage_metadata=usage_metadata,
     )
@@ -147,7 +147,7 @@ def finished_response(
     """
     return FakeResponse(
         text=json.dumps(
-            {"result": result, "tags": ["runtime"] if tags is None else tags}
+            {"result": result, "tags": ["caller"] if tags is None else tags}
         ),
         candidates=[
             SimpleNamespace(

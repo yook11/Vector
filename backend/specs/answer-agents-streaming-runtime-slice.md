@@ -1,5 +1,7 @@
 # Direct / Evidence Answer Agent と streaming runtime slice 仕様
 
+> 2026-11-08追記: `app/agent/runtime/` の `AgentRuntime` / `StreamingAgentRuntime` / `GeminiAgentRuntime` と、それぞれの scope factory は改名前の名前である。現在は `app/agent/llm_call/` の `LlmCaller` / `LlmTextStreamer` / `GeminiLlmCaller` と `LlmCallerScopeFactory` / `LlmTextStreamerScopeFactory` で、工程は `call_agent` で呼び出しと出力の検証をまとめて行う。
+
 更新日: 2026-07-19
 
 実装状況: Implemented（PR7）

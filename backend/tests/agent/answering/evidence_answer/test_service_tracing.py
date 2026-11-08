@@ -18,12 +18,12 @@ from app.agent.answering.evidence_answer.contract import EvidenceAnswerInput
 from app.agent.answering.evidence_answer.evidence import AnswerInputEvidence
 from app.agent.answering.evidence_answer.service import EvidenceAnswerService
 from app.agent.contract import ExternalUrlSource
+from app.agent.llm_call.caller import LlmTextStreamer
+from app.agent.llm_call.gemini import GeminiLlmCaller
 from app.agent.planning.contract import TargetTimeWindow
-from app.agent.runtime.contract import StreamingAgentRuntime
-from app.agent.runtime.gemini import GeminiAgentRuntime
 from tests.agent.answering_runner._harness import AllowAnswerGenerationStart
-from tests.agent.runtime._helpers import FakeGeminiClient
-from tests.agent.runtime._tracing_helpers import span_text
+from tests.agent.llm_call._helpers import FakeGeminiClient
+from tests.agent.llm_call._tracing_helpers import span_text
 
 
 class _SdkStream:
@@ -82,13 +82,13 @@ async def test_phase_owns_all_provider_attempts_without_model_text(
     client = FakeGeminiClient([], streams=[first_stream, second_stream])
 
     @asynccontextmanager
-    async def runtime_scope() -> AsyncIterator[StreamingAgentRuntime]:
-        yield GeminiAgentRuntime(client=cast(AsyncClient, client))
+    async def streamer_scope() -> AsyncIterator[LlmTextStreamer]:
+        yield GeminiLlmCaller(client=cast(AsyncClient, client))
 
     draft = await EvidenceAnswerService(
         schedule_deadline_check=lambda *_: None,
         agent=EVIDENCE_ANSWER_AGENT,
-        runtime_scope_factory=runtime_scope,
+        llm_text_streamer_scope_factory=streamer_scope,
         repository=AllowAnswerGenerationStart(),
     ).answer(
         EvidenceAnswerInput(

@@ -1,9 +1,9 @@
-"""Gemini-backed one-attempt Agent runtime."""
+"""Geminiで1 provider attemptを実行するLLM呼び出しの本物。"""
 
 from __future__ import annotations
 
 import asyncio
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Mapping
 from typing import Any, cast
 
 from google.genai.client import AsyncClient
@@ -11,6 +11,7 @@ from google.genai.types import GenerateContentConfig
 from opentelemetry import context as otel_context
 
 from app.agent.agent import Agent
+from app.agent.llm_call.caller import AgentTextStream
 from app.agent.recording.llm import (
     UNCLASSIFIED_FAILURE_CODE,
     LlmAttemptFailed,
@@ -20,8 +21,6 @@ from app.agent.recording.llm import (
     logfire_llm_call_recorder,
 )
 from app.agent.recording.types import Usage, _usage_from_optional_counts
-from app.agent.runtime._structured_output import thaw_schema
-from app.agent.runtime.contract import AgentTextStream
 from app.ai_providers.errors import AIProviderError, AIProviderResultError
 from app.ai_providers.gemini.error_translator import translate_gemini_error
 from app.ai_providers.gemini.response import (
@@ -31,7 +30,7 @@ from app.ai_providers.gemini.response import (
 from app.analysis.ai_provider_exhaustion import record_ai_provider_exhausted
 
 
-class GeminiAgentRuntime:
+class GeminiLlmCaller:
     """借りたGemini async clientで1 provider attemptだけを実行する。"""
 
     __slots__ = ("_client", "_llm_calls")
@@ -59,9 +58,9 @@ class GeminiAgentRuntime:
         ):
             raise ValueError("attempt_number must be a positive integer")
         if agent.model.provider != "gemini":
-            raise ValueError("GeminiAgentRuntime requires a Gemini Agent")
+            raise ValueError("GeminiLlmCaller requires a Gemini Agent")
         if agent.response_schema is None:
-            raise ValueError("GeminiAgentRuntime.call requires response_schema")
+            raise ValueError("GeminiLlmCaller.call requires response_schema")
 
         contents = agent.prompt.input_renderer(input)
         config = _build_config(agent, structured=True)
@@ -125,7 +124,7 @@ class GeminiAgentRuntime:
         ):
             raise ValueError("attempt_number must be a positive integer")
         if agent.model.provider != "gemini":
-            raise ValueError("GeminiAgentRuntime requires a Gemini Agent")
+            raise ValueError("GeminiLlmCaller requires a Gemini Agent")
 
         contents = agent.prompt.input_renderer(input)
         config = _build_config(
@@ -244,7 +243,7 @@ def _build_config(
             raise ValueError("structured Gemini request requires response_schema")
         config.update(
             response_mime_type="application/json",
-            response_schema=thaw_schema(agent.response_schema),
+            response_schema=_thaw_schema(agent.response_schema),
         )
     if agent.model_settings.temperature is not None:
         config["temperature"] = agent.model_settings.temperature
@@ -274,3 +273,12 @@ def _usage_from_metadata(usage: object | None) -> Usage | None:
         cache_read_input_tokens=getattr(usage, "cached_content_token_count", None),
         reasoning_output_tokens=getattr(usage, "thoughts_token_count", None),
     )
+
+
+def _thaw_schema(value: Any) -> Any:
+    """Agentの凍結schemaをprovider request用のJSON互換値へ戻す。"""
+    if isinstance(value, Mapping):
+        return {key: _thaw_schema(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_thaw_schema(item) for item in value]
+    return value

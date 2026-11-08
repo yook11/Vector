@@ -59,7 +59,7 @@ from tests.agent.answering_runner._harness import (
     PassThroughOrganizer,
     run_identity,
 )
-from tests.agent.runtime._fakes import runtime_payload
+from tests.agent.llm_call._fakes import caller_payload
 
 
 def _as_of() -> datetime:
@@ -162,7 +162,7 @@ def _external_evidence(
 
 @dataclass(frozen=True, slots=True)
 class _FixtureTaskMissing:
-    """_external_runtime_for が reviewer draft の missing を組むための内部 fixture
+    """_external_caller_for が reviewer draft の missing を組むための内部 fixture
 
     (production ResearchTaskReport ではない。D4-S2 で report shape が再設計
     されるため、このファイルは production 型を経由せず reviewer 応答の
@@ -183,7 +183,7 @@ def _report(
 
 @dataclass(frozen=True, slots=True)
 class _FixtureExternalOutcome:
-    """_external_runtime_for がtask別evidence/missingを引くための内部fixture。"""
+    """_external_caller_for がtask別evidence/missingを引くための内部fixture。"""
 
     evidence: list[ExternalSearchEvidence] = field(default_factory=list)
     task_reports: list[_FixtureTaskMissing] = field(default_factory=list)
@@ -208,7 +208,7 @@ class _RetrievalFixture:
     internal_hitsはreviewer精査前のraw hit(FakeInternalSearchが返す値)であり、
     production側のinternal_evidence(精査後、claim付き)とは型が違う。
     このfixtureのinternal_hits/external_searchは「reviewerが全選択肢を採用した
-    場合に到達してほしい最終形」を表し、_external_runtime_forがそれに対応する
+    場合に到達してほしい最終形」を表し、_external_caller_forがそれに対応する
     reviewer draft(統合index空間で内部→外部の順に全採用)を組み立てる。
     D4-S2: run単位のcollection_failuresは廃止されたため、このfixtureも持たない
     (internal検索を失敗させたい場合は_orchestrator()のinternal_errorを使う)。
@@ -318,11 +318,11 @@ class FakeExternalScopes:
     @asynccontextmanager
     async def reviewer_scope(self):
         if self._scopes is None:
-            raise AssertionError("reviewer runtime must not activate for this plan")
-        yield self._scopes.reviewer_runtime
+            raise AssertionError("reviewer caller must not activate for this plan")
+        yield self._scopes.reviewer_caller
 
 
-class FakeExternalQueryRuntime:
+class FakeExternalQueryCaller:
     def __init__(self, queries_by_goal: dict[str, str]) -> None:
         self._queries_by_goal = queries_by_goal
 
@@ -330,14 +330,14 @@ class FakeExternalQueryRuntime:
         self, agent: object, input: object, *, attempt_number: int
     ) -> dict[str, Any]:
         del agent, attempt_number
-        return runtime_payload(
+        return caller_payload(
             ExternalQueryDraft(
                 queries=[self._queries_by_goal[input.task.research_goal]]  # type: ignore[union-attr]
             )
         )
 
 
-class FakeEvidenceReviewerRuntime:
+class FakeEvidenceReviewerCaller:
     """S1: reviewerはRun単位で1回だけ呼ばれるため、goal別ではなく単一draftを返す。"""
 
     def __init__(
@@ -352,11 +352,11 @@ class FakeEvidenceReviewerRuntime:
         del agent, input, attempt_number
         if self._timeline is not None:
             self._timeline.record("reviewer.review")
-        return runtime_payload(self._draft)
+        return caller_payload(self._draft)
 
 
-class FakeFailingReviewerRuntime:
-    """常に指定した例外で失敗する reviewer runtime(review失敗経路の検証用)。"""
+class FakeFailingReviewerCaller:
+    """常に指定した例外で失敗する reviewer caller(review失敗経路の検証用)。"""
 
     def __init__(
         self, error: Exception, *, timeline: CallTimeline | None = None
@@ -381,7 +381,7 @@ class _ZeroHitExternalTool:
         return []
 
 
-class _UnexpectedReviewerRuntime:
+class _UnexpectedReviewerCaller:
     """精査を呼ばない経路のテストで、誤って呼ばれたら失敗させる。"""
 
     async def call(
@@ -401,13 +401,13 @@ class FakeExternalTool:
         return list(self._hits_by_query[request.query])  # type: ignore[union-attr]
 
 
-def _external_runtime_for(
+def _external_caller_for(
     *,
     plan: object,
     outcome: _RetrievalFixture,
     internal_hits: list[InternalArticleSearchHit] | None = None,
     timeline: CallTimeline | None = None,
-    reviewer_runtime: object | None = None,
+    reviewer_caller: object | None = None,
 ) -> ExternalScopes:
     """S1: reviewerがRun全体の統合index空間(task_index昇順、group内は内部先・
 
@@ -483,13 +483,13 @@ def _external_runtime_for(
     )
     return ExternalScopes(
         external_search=ExternalSearchService(
-            query_runtime=FakeExternalQueryRuntime(queries_by_goal),  # type: ignore[arg-type]
+            query_caller=FakeExternalQueryCaller(queries_by_goal),  # type: ignore[arg-type]
             search_gateway=FakeExternalTool(hits_by_query),  # type: ignore[arg-type]
         ),
-        reviewer_runtime=(
-            reviewer_runtime
-            if reviewer_runtime is not None
-            else FakeEvidenceReviewerRuntime(draft, timeline=timeline)
+        reviewer_caller=(
+            reviewer_caller
+            if reviewer_caller is not None
+            else FakeEvidenceReviewerCaller(draft, timeline=timeline)
         ),
     )
 
@@ -611,8 +611,8 @@ def _orchestrator(
     internal_error: Exception | None = None,
     progress: FakeProgressReporter | None = None,
     timeline: CallTimeline | None = None,
-    reviewer_runtime: object | None = None,
-    external_runtime_override: ExternalScopes | None = None,
+    reviewer_caller: object | None = None,
+    external_caller_override: ExternalScopes | None = None,
 ) -> tuple[
     _WorkflowHarness,
     FakePlanner,
@@ -625,23 +625,23 @@ def _orchestrator(
         internal_error if internal_error is not None else outcome,
         timeline=timeline,
     )
-    if external_runtime_override is not None:
-        external_runtime: ExternalScopes | None = external_runtime_override
+    if external_caller_override is not None:
+        external_caller: ExternalScopes | None = external_caller_override
     else:
-        external_runtime = (
-            _external_runtime_for(
+        external_caller = (
+            _external_caller_for(
                 plan=plan,
                 outcome=outcome,
                 internal_hits=outcome.internal_hits,
                 timeline=timeline,
-                reviewer_runtime=reviewer_runtime,
+                reviewer_caller=reviewer_caller,
             )
             if isinstance(plan, SearchPlan) and isinstance(outcome, _RetrievalFixture)
             else None
         )
     evidence_answerer = FakeEvidenceAnswerer(draft, timeline=timeline)
     direct_answerer = FakeDirectAnswerer(direct_draft, timeline=timeline)
-    external_scopes = FakeExternalScopes(external_runtime, timeline=timeline)
+    external_scopes = FakeExternalScopes(external_caller, timeline=timeline)
     phases = AnsweringPhases(
         planner=planner,
         collector=EvidenceCollectionService(
@@ -652,7 +652,7 @@ def _orchestrator(
         evidence_answerer=evidence_answerer,
         reviewer=EvidenceReviewService(
             agent=EVIDENCE_REVIEWER_AGENT,
-            runtime_scope_factory=external_scopes.reviewer_scope,
+            llm_caller_scope_factory=external_scopes.reviewer_scope,
         ),
         organizer=PassThroughOrganizer(),
     )
@@ -744,19 +744,19 @@ async def test_answer_evidence_plan_skips_evidence_review_for_zero_hits() -> Non
     timeline = CallTimeline()
     progress = FakeProgressReporter(timeline=timeline)
     task = _task(0)
-    zero_hit_runtime = ExternalScopes(
+    zero_hit_caller = ExternalScopes(
         external_search=ExternalSearchService(
-            query_runtime=FakeExternalQueryRuntime(  # type: ignore[arg-type]
+            query_caller=FakeExternalQueryCaller(  # type: ignore[arg-type]
                 {task.research_goal: "fixture-query"}
             ),
             search_gateway=_ZeroHitExternalTool(),  # type: ignore[arg-type]
         ),
-        reviewer_runtime=_UnexpectedReviewerRuntime(),
+        reviewer_caller=_UnexpectedReviewerCaller(),
     )
     orchestrator, _, _, evidence_answerer, _ = _orchestrator(
         plan=_search_plan(tasks=[task]),
         outcome=_RetrievalFixture(internal_hits=[]),
-        external_runtime_override=zero_hit_runtime,
+        external_caller_override=zero_hit_caller,
         draft=_draft(
             answer=(
                 "検索で引用できる根拠は見つかりませんでした。"
@@ -802,7 +802,7 @@ async def test_answer_evidence_plan_reports_evidence_review_when_review_fails() 
     orchestrator, _, _, _, _ = _orchestrator(
         plan=_search_plan(),
         outcome=_internal_outcome(1),
-        reviewer_runtime=FakeFailingReviewerRuntime(failure, timeline=timeline),
+        reviewer_caller=FakeFailingReviewerCaller(failure, timeline=timeline),
         draft=_draft(
             answer=(
                 "検索で引用できる根拠は見つかりませんでした。"

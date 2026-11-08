@@ -12,15 +12,15 @@ from app.agent.output import (
     validate_output,
 )
 from app.shared.errors import ApplicationError
-from tests.agent.runtime._helpers import (
-    RuntimeOutput,
+from tests.agent.llm_call._helpers import (
+    CallerOutput,
     ValidationProbeOutput,
     make_agent,
 )
 
 
 @dataclass(frozen=True, slots=True)
-class DataclassRuntimeOutput:
+class DataclassCallerOutput:
     result: str
     tags: list[str]
 
@@ -59,18 +59,18 @@ def test_agent_output_invalid_error_is_application_error_with_defect_details() -
 
 def test_validate_output_returns_the_declared_model() -> None:
     """宣言された出力の型に合うJSON objectは、その型の値になる。"""
-    output = validate_output(make_agent(), {"result": "validated", "tags": ["runtime"]})
+    output = validate_output(make_agent(), {"result": "validated", "tags": ["caller"]})
 
-    assert output == RuntimeOutput(result="validated", tags=["runtime"])
+    assert output == CallerOutput(result="validated", tags=["caller"])
 
 
 def test_validate_output_returns_a_declared_dataclass() -> None:
     """宣言された dataclass の出力の型でも検証して値にする。"""
-    agent = replace(make_agent(), output_type=DataclassRuntimeOutput)
+    agent = replace(make_agent(), output_type=DataclassCallerOutput)
 
-    output = validate_output(agent, {"result": "dataclass", "tags": ["runtime"]})
+    output = validate_output(agent, {"result": "dataclass", "tags": ["caller"]})
 
-    assert output == DataclassRuntimeOutput(result="dataclass", tags=["runtime"])
+    assert output == DataclassCallerOutput(result="dataclass", tags=["caller"])
 
 
 def test_output_validation_error_exposes_only_safe_repair_fields() -> None:
@@ -117,7 +117,7 @@ def test_unknown_extra_field_location_is_collapsed_to_fixed_placeholder() -> Non
                 make_agent(),
                 {
                     "result": "accepted",
-                    "tags": ["runtime"],
+                    "tags": ["caller"],
                     sentinel: "unknown extra value",
                 },
             )

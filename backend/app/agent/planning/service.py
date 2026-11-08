@@ -5,7 +5,8 @@ from __future__ import annotations
 import asyncio
 
 from app.agent.agent import Agent
-from app.agent.output import AgentOutputInvalidError, validate_output
+from app.agent.llm_call.caller import LlmCallerScopeFactory, call_agent
+from app.agent.output import AgentOutputInvalidError
 from app.agent.planning.contract import (
     PlanningInput,
     QuestionPlan,
@@ -20,7 +21,6 @@ from app.agent.recording.planning import (
     logfire_planning_recorder,
 )
 from app.agent.retry_prospect import is_resolvable_by_retry
-from app.agent.runtime.contract import AgentRuntimeScopeFactory
 from app.ai_providers.errors import (
     CLASSIFIED_AI_PROVIDER_ERRORS,
 )
@@ -40,11 +40,11 @@ class QuestionPlanningService:
         self,
         *,
         agent: Agent[PlanningInput, QuestionPlanDraft],
-        runtime_scope_factory: AgentRuntimeScopeFactory,
+        llm_caller_scope_factory: LlmCallerScopeFactory,
         recorder: PlanningRecorder = logfire_planning_recorder,
     ) -> None:
         self._agent = agent
-        self._runtime_scope_factory = runtime_scope_factory
+        self._llm_caller_scope_factory = llm_caller_scope_factory
         self._recorder = recorder
 
     async def plan(self, input: PlanningInput) -> QuestionPlan:
@@ -55,15 +55,15 @@ class QuestionPlanningService:
             timeout = asyncio.timeout(_PLANNING_TIMEOUT_SECONDS)
             try:
                 async with timeout:
-                    async with self._runtime_scope_factory() as runtime:
+                    async with self._llm_caller_scope_factory() as caller:
                         for attempt_number in range(1, _MAX_ATTEMPTS + 1):
                             try:
-                                payload = await runtime.call(
+                                draft = await call_agent(
+                                    caller,
                                     self._agent,
                                     input,
                                     attempt_number=attempt_number,
                                 )
-                                draft = validate_output(self._agent, payload)
                                 plan = plan_from_draft(draft)
                             except _PLANNING_SOURCE_ERRORS as cause:
                                 if (

@@ -190,7 +190,7 @@ async def test_embed_queries_translates_rate_limited_error() -> None:
 
 
 # ai_provider_exhausted EMF emit (CloudWatch A6) — _embed_once の except 節は
-# runtime を経由しない唯一の provider 呼出し経路なので、枯渇系翻訳の emit を単独で守る。
+# caller を経由しない唯一の provider 呼出し経路なので、枯渇系翻訳の emit を単独で守る。
 
 
 _EXHAUSTED_METRIC = "ai_provider_exhausted"

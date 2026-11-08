@@ -1,5 +1,7 @@
 # Agent input safety gate slice 仕様
 
+> 2026-11-08追記: `app/agent/runtime/` の `AgentRuntime` / `StreamingAgentRuntime` / `GeminiAgentRuntime` と、それぞれの scope factory は改名前の名前である。現在は `app/agent/llm_call/` の `LlmCaller` / `LlmTextStreamer` / `GeminiLlmCaller` と `LlmCallerScopeFactory` / `LlmTextStreamerScopeFactory` で、工程は `call_agent` で呼び出しと出力の検証をまとめて行う。
+
 > 2026-09-20追記: 本書のFAILURE_MODE／AIProviderFailureMode、rejection_kind／AIProviderContentRejectionKind、is_safety_rejectionに関する記述は廃止前の設計記録である。これらの分類は共有例外と利用側から撤去する。具体的な例外型・CODE・reasonと、例外型による回答生成の再試行判断は維持する。回答生成の内部失敗情報からfailure_kindを削除し、代替分類は追加しない。
 
 更新日: 2026-07-20

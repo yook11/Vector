@@ -33,8 +33,8 @@ from app.agent.answering_runner import (
 )
 from app.agent.composition import (
     activate_external_search,
-    activate_gemini_agent_runtime,
     activate_gemini_client,
+    activate_gemini_llm_caller,
 )
 from app.agent.contract import (
     AnswerProgressEvent,
@@ -129,7 +129,7 @@ class _UnreachableExternalSearchScope:
 
 class _UnreachableEvidenceReviewerScope:
     def __call__(self) -> object:
-        raise AssertionError("evidence reviewer runtime must not activate")
+        raise AssertionError("evidence reviewer caller must not activate")
 
 
 class _UnreachableOrganizer:
@@ -237,17 +237,17 @@ async def _probe_search(
                 ),
                 reviewer=EvidenceReviewService(
                     agent=EVIDENCE_REVIEWER_AGENT,
-                    runtime_scope_factory=activate_gemini_agent_runtime,
+                    llm_caller_scope_factory=activate_gemini_llm_caller,
                 ),
                 evidence_answerer=EvidenceAnswerService(
                     agent=EVIDENCE_ANSWER_AGENT,
-                    runtime_scope_factory=activate_gemini_agent_runtime,
+                    llm_text_streamer_scope_factory=activate_gemini_llm_caller,
                     repository=_ProbeAnswerGenerationStart(),
                 ),
                 direct_answerer=_UnreachableDirectAnswerer(),
                 organizer=ResearchHandoffService(
                     agent=RESEARCH_HANDOFF_AGENT,
-                    runtime_scope_factory=activate_gemini_agent_runtime,
+                    llm_caller_scope_factory=activate_gemini_llm_caller,
                 ),
             ),
             events=events,
@@ -284,12 +284,12 @@ async def _probe_direct(*, question: str) -> None:
             ),
             reviewer=EvidenceReviewService(
                 agent=EVIDENCE_REVIEWER_AGENT,
-                runtime_scope_factory=_UnreachableEvidenceReviewerScope(),
+                llm_caller_scope_factory=_UnreachableEvidenceReviewerScope(),
             ),
             evidence_answerer=_UnreachableEvidenceAnswerer(),
             direct_answerer=DirectAnswerService(
                 agent=DIRECT_ANSWER_AGENT,
-                runtime_scope_factory=activate_gemini_agent_runtime,
+                llm_text_streamer_scope_factory=activate_gemini_llm_caller,
                 repository=_ProbeAnswerGenerationStart(),
             ),
             organizer=_UnreachableOrganizer(),

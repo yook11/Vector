@@ -1,5 +1,7 @@
 # Agent phase span の所属工程を実工程語彙へ揃える slice 仕様
 
+> 2026-11-08追記: `app/agent/runtime/` の `AgentRuntime` / `StreamingAgentRuntime` / `GeminiAgentRuntime` と、それぞれの scope factory は改名前の名前である。現在は `app/agent/llm_call/` の `LlmCaller` / `LlmTextStreamer` / `GeminiLlmCaller` と `LlmCallerScopeFactory` / `LlmTextStreamerScopeFactory` で、工程は `call_agent` で呼び出しと出力の検証をまとめて行う。
+
 > 2026-09-21追記: State／Contentの中間クラスを使う記述は廃止前の設計記録である。現在は具体型10種類が通常の`Exception`を継承する`AIProviderError`の直下にあり、呼び出し側は共有の`CLASSIFIED_AI_PROVIDER_ERRORS`で判定する。`reason`は任意とし、基底型と未知の直接サブクラスを分類済みへ広げない。
 
 更新日: 2026-08-01

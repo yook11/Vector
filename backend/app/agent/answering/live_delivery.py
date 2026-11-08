@@ -5,7 +5,7 @@ from __future__ import annotations
 from app.agent.contract import (
     AnswerDeltaReporter,
 )
-from app.agent.runtime.contract import AgentTextStream
+from app.agent.llm_call.caller import AgentTextStream
 
 __all__ = [
     "BestEffortAnswerDeltaReporter",

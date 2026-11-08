@@ -17,10 +17,10 @@ from app.agent.answering.evidence_answer.contract import (
 )
 from app.agent.answering.evidence_answer.evidence import AnswerInputEvidence
 from app.agent.contract import ExternalUrlSource
+from app.agent.llm_call.gemini import GeminiLlmCaller
 from app.agent.planning.contract import TargetTimeWindow
-from app.agent.runtime.gemini import GeminiAgentRuntime
 from app.agent.threads.contracts import ThreadMessageSnapshot
-from tests.agent.runtime._helpers import FakeGeminiClient
+from tests.agent.llm_call._helpers import FakeGeminiClient
 
 
 class _SdkStream:
@@ -127,7 +127,7 @@ def test_fixed_instructions_and_rendered_input_are_separated() -> None:
     assert "target_time_window: 直近7日" in rendered
 
 
-async def test_runtime_request_keeps_fixed_and_dynamic_text_separate() -> None:
+async def test_caller_request_keeps_fixed_and_dynamic_text_separate() -> None:
     """条件1: plain text streamのためresponse_mime_type/response_schemaを
     provider requestへ明示しない (Direct Answerと同じ非structured経路)。
     """
@@ -139,7 +139,7 @@ async def test_runtime_request_keeps_fixed_and_dynamic_text_separate() -> None:
         target_time_window=TargetTimeWindow(kind="last_n_days", days=7),
         review_missing=(),
     )
-    stream = GeminiAgentRuntime(client=cast(AsyncClient, client)).stream_text(
+    stream = GeminiLlmCaller(client=cast(AsyncClient, client)).stream_text(
         EVIDENCE_ANSWER_AGENT,
         input,
         attempt_number=2,

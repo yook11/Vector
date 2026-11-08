@@ -76,7 +76,7 @@ from tests.agent.answering_runner._harness import (
     external_hit as _hit,
 )
 from tests.agent.answering_runner._harness import (
-    external_research_runtime as _runtime,
+    external_research_caller as _caller,
 )
 from tests.agent.answering_runner._harness import (
     external_task as _task,
@@ -87,10 +87,10 @@ from tests.agent.answering_runner._harness import (
 from tests.agent.answering_runner._harness import (
     review_draft as _review_draft,
 )
-from tests.agent.runtime._fakes import (
-    GoalKeyedAgentRuntime,
-    ScriptedAgentRuntime,
-    runtime_payload,
+from tests.agent.llm_call._fakes import (
+    GoalKeyedLlmCaller,
+    ScriptedLlmCaller,
+    caller_payload,
 )
 from tests.logfire._metric_helpers import collected_metrics
 
@@ -241,7 +241,7 @@ def _external_search_events(events: list[Any]) -> list[Any]:
     ]
 
 
-class _ParallelQueryRuntime:
+class _ParallelQueryCaller:
     def __init__(self, *, release: asyncio.Event, expected_peak: int) -> None:
         self._release = release
         self._expected_peak = expected_peak
@@ -257,12 +257,12 @@ class _ParallelQueryRuntime:
             self.peak_reached.set()
         try:
             await self._release.wait()
-            return runtime_payload(_query_draft([input.task.research_goal]))
+            return caller_payload(_query_draft([input.task.research_goal]))
         finally:
             self.active -= 1
 
 
-class _NeverCompletingRuntime:
+class _NeverCompletingCaller:
     def __init__(self) -> None:
         self.started = asyncio.Event()
         self.cancelled = False
@@ -281,7 +281,7 @@ class _NeverCompletingRuntime:
             raise
 
 
-class _AllTasksBlockingRuntime:
+class _AllTasksBlockingCaller:
     def __init__(self, *, task_count: int, timeline: list[str]) -> None:
         self._task_count = task_count
         self._timeline = timeline
@@ -308,7 +308,7 @@ class _AllTasksBlockingRuntime:
                 self.all_tasks_finished.set()
 
 
-class _TaskFailureAfterSiblingStartsRuntime:
+class _TaskFailureAfterSiblingStartsCaller:
     def __init__(self, *, error: BaseException, timeline: list[str]) -> None:
         self._error = error
         self._timeline = timeline
@@ -358,13 +358,13 @@ class _QueryFailureAfterSiblingStartsGateway(_FakeExternalSearchGateway):
 def _runner(
     *,
     tasks: list[ExternalResearchTask],
-    runtime: ExternalScopes,
+    caller: ExternalScopes,
     events: _Events | None = None,
     timeline: list[str] | None = None,
     target_time_window: TargetTimeWindow | None = _DEFAULT_TARGET_TIME_WINDOW,
 ) -> tuple[AnsweringRunner, _EvidenceAnswerer, _Factory]:
     answerer = _EvidenceAnswerer()
-    factory = _Factory([runtime.external_search], timeline=timeline)
+    factory = _Factory([caller.external_search], timeline=timeline)
     phases = AnsweringPhases(
         planner=_Planner(
             _plan(tasks, target_time_window=target_time_window),
@@ -378,7 +378,7 @@ def _runner(
         evidence_answerer=answerer,
         reviewer=EvidenceReviewService(
             agent=EVIDENCE_REVIEWER_AGENT,
-            runtime_scope_factory=fixed_scope(runtime.reviewer_runtime),
+            llm_caller_scope_factory=fixed_scope(caller.reviewer_caller),
         ),
         organizer=PassThroughOrganizer(),
     )
@@ -426,10 +426,10 @@ def _record_and_shorten_pipeline_timeouts(
 async def test_external_pipeline_normalizes_and_caps_generated_queries() -> None:
     """query正規化・重複除去・件数capの配線。URL非到達の正本はrun_scope B5。"""
     long_query = "x" * 205
-    query_runtime = ScriptedAgentRuntime(
+    query_caller = ScriptedLlmCaller(
         [_query_draft(["  normalized  ", "normalized", long_query, "third", "fourth"])]
     )
-    reviewer_runtime = ScriptedAgentRuntime(
+    reviewer_caller = ScriptedLlmCaller(
         [_review_draft([{"option_index": 1, "claim": "claim", "why_selected": "why"}])]
     )
     gateway = _FakeExternalSearchGateway(
@@ -441,9 +441,9 @@ async def test_external_pipeline_normalizes_and_caps_generated_queries() -> None
     )
     runner, answerer, _ = _runner(
         tasks=[_task("collect evidence")],
-        runtime=_runtime(
-            query_runtime=query_runtime,
-            reviewer_runtime=reviewer_runtime,
+        caller=_caller(
+            query_caller=query_caller,
+            reviewer_caller=reviewer_caller,
             gateway=gateway,
         ),
     )
@@ -465,7 +465,7 @@ async def test_external_pipeline_normalizes_and_caps_generated_queries() -> None
 @pytest.mark.asyncio
 async def test_external_pipeline_passes_resolved_filter_to_every_tool_call() -> None:
     target_time_window = TargetTimeWindow(kind="last_n_days", days=7)
-    query_runtime = GoalKeyedAgentRuntime(
+    query_caller = GoalKeyedLlmCaller(
         {
             "first task": _query_draft(["first"]),
             "second task": _query_draft(["second"]),
@@ -479,11 +479,9 @@ async def test_external_pipeline_passes_resolved_filter_to_every_tool_call() -> 
     )
     runner, _, _ = _runner(
         tasks=[_task("first task"), _task("second task")],
-        runtime=_runtime(
-            query_runtime=query_runtime,
-            reviewer_runtime=ScriptedAgentRuntime(
-                [_review_draft([]), _review_draft([])]
-            ),
+        caller=_caller(
+            query_caller=query_caller,
+            reviewer_caller=ScriptedLlmCaller([_review_draft([]), _review_draft([])]),
             gateway=gateway,
         ),
         target_time_window=target_time_window,
@@ -493,7 +491,7 @@ async def test_external_pipeline_passes_resolved_filter_to_every_tool_call() -> 
 
     assert (
         [call.date_filter for call in gateway.calls],
-        [call.input.target_time_window for call in query_runtime.calls],
+        [call.input.target_time_window for call in query_caller.calls],
     ) == (
         [
             ExternalSearchDateFilter(
@@ -516,9 +514,9 @@ async def test_external_pipeline_passes_explicit_none_filter_to_tool() -> None:
     )
     runner, _, _ = _runner(
         tasks=[_task("no publication filter")],
-        runtime=_runtime(
-            query_runtime=ScriptedAgentRuntime([_query_draft(["query"])]),
-            reviewer_runtime=ScriptedAgentRuntime([_review_draft([])]),
+        caller=_caller(
+            query_caller=ScriptedLlmCaller([_query_draft(["query"])]),
+            reviewer_caller=ScriptedLlmCaller([_review_draft([])]),
             gateway=gateway,
         ),
         target_time_window=None,
@@ -573,14 +571,14 @@ async def test_external_runner_resolves_target_time_window_once_per_branch(
     gateway = _FakeExternalSearchGateway()
     runner, _, _ = _runner(
         tasks=tasks,
-        runtime=_runtime(
-            query_runtime=GoalKeyedAgentRuntime(
+        caller=_caller(
+            query_caller=GoalKeyedLlmCaller(
                 {
                     "first period task": _query_draft(["first-1", "first-2"]),
                     "second period task": _query_draft(["second-1", "second-2"]),
                 }
             ),
-            reviewer_runtime=ScriptedAgentRuntime([]),
+            reviewer_caller=ScriptedLlmCaller([]),
             gateway=gateway,
         ),
         target_time_window=target_time_window,
@@ -626,14 +624,14 @@ async def test_naive_as_of_propagates_before_external_activity_or_observability(
     )
     captured = _capture_external_outcome(monkeypatch)
     events = _Events()
-    query_runtime = ScriptedAgentRuntime([])
-    reviewer_runtime = ScriptedAgentRuntime([])
+    query_caller = ScriptedLlmCaller([])
+    reviewer_caller = ScriptedLlmCaller([])
     gateway = _FakeExternalSearchGateway()
     runner, answerer, factory = _runner(
         tasks=[_task("naive as_of は分類しない")],
-        runtime=_runtime(
-            query_runtime=query_runtime,
-            reviewer_runtime=reviewer_runtime,
+        caller=_caller(
+            query_caller=query_caller,
+            reviewer_caller=reviewer_caller,
             gateway=gateway,
         ),
         events=events,
@@ -647,8 +645,8 @@ async def test_naive_as_of_propagates_before_external_activity_or_observability(
     assert (
         resolver_calls,
         len(factory.scopes),
-        query_runtime.calls,
-        reviewer_runtime.calls,
+        query_caller.calls,
+        reviewer_caller.calls,
         gateway.calls,
         _external_search_events(events.events),
         answerer.calls,
@@ -694,9 +692,9 @@ async def test_external_branch_records_one_nonfailed_time_filter_resolution_metr
     gateway = _FakeExternalSearchGateway()
     runner, _, factory = _runner(
         tasks=[_task("期間計測")],
-        runtime=_runtime(
-            query_runtime=ScriptedAgentRuntime([_query_draft(["metric query"])]),
-            reviewer_runtime=ScriptedAgentRuntime([]),
+        caller=_caller(
+            query_caller=ScriptedLlmCaller([_query_draft(["metric query"])]),
+            reviewer_caller=ScriptedLlmCaller([]),
             gateway=gateway,
         ),
         target_time_window=target_time_window,
@@ -764,13 +762,13 @@ async def test_time_filter_resolution_failure_still_searches_without_date_filter
 ) -> None:
     captured = _capture_external_outcome(monkeypatch)
     events = _Events()
-    query_runtime = GoalKeyedAgentRuntime(
+    query_caller = GoalKeyedLlmCaller(
         {
             "first closed task": _query_draft(["first-q"]),
             "second closed task": _query_draft(["second-q"]),
         }
     )
-    reviewer_runtime = ScriptedAgentRuntime([_review_draft([])])
+    reviewer_caller = ScriptedLlmCaller([_review_draft([])])
     gateway = _FakeExternalSearchGateway(
         {
             "first-q": [_hit("https://example.com/first")],
@@ -780,9 +778,9 @@ async def test_time_filter_resolution_failure_still_searches_without_date_filter
     tasks = [_task("first closed task"), _task("second closed task")]
     runner, _answerer, factory = _runner(
         tasks=tasks,
-        runtime=_runtime(
-            query_runtime=query_runtime,
-            reviewer_runtime=reviewer_runtime,
+        caller=_caller(
+            query_caller=query_caller,
+            reviewer_caller=reviewer_caller,
             gateway=gateway,
         ),
         events=events,
@@ -796,7 +794,7 @@ async def test_time_filter_resolution_failure_still_searches_without_date_filter
 
     assert (
         len(factory.scopes),
-        [call.input.target_time_window for call in query_runtime.calls],
+        [call.input.target_time_window for call in query_caller.calls],
         [call.date_filter for call in gateway.calls],
         [
             (
@@ -838,12 +836,12 @@ async def test_provider_result_cap_is_applied_before_external_hits(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     captured = _capture_external_outcome(monkeypatch)
-    reviewer_runtime = ScriptedAgentRuntime([_review_draft([])])
+    reviewer_caller = ScriptedLlmCaller([_review_draft([])])
     runner, _, _ = _runner(
         tasks=[_task("provider result cap")],
-        runtime=_runtime(
-            query_runtime=ScriptedAgentRuntime([_query_draft(["q"])]),
-            reviewer_runtime=reviewer_runtime,
+        caller=_caller(
+            query_caller=ScriptedLlmCaller([_query_draft(["q"])]),
+            reviewer_caller=reviewer_caller,
             gateway=_FakeExternalSearchGateway(
                 {
                     "q": [
@@ -857,7 +855,7 @@ async def test_provider_result_cap_is_applied_before_external_hits(
 
     await _run(runner)
 
-    options = reviewer_runtime.calls[0].input.task_groups[0].options
+    options = reviewer_caller.calls[0].input.task_groups[0].options
     assert (
         len(options),
         options[-1].title,
@@ -871,14 +869,14 @@ async def test_provider_result_cap_is_applied_before_external_hits(
 
 @pytest.mark.asyncio
 async def test_classified_query_failure_never_starts_tool_or_reviewer() -> None:
-    query_runtime = ScriptedAgentRuntime([{}])
-    reviewer_runtime = ScriptedAgentRuntime([])
+    query_caller = ScriptedLlmCaller([{}])
+    reviewer_caller = ScriptedLlmCaller([])
     gateway = _FakeExternalSearchGateway()
     runner, answerer, factory = _runner(
         tasks=[_task("invalid query")],
-        runtime=_runtime(
-            query_runtime=query_runtime,
-            reviewer_runtime=reviewer_runtime,
+        caller=_caller(
+            query_caller=query_caller,
+            reviewer_caller=reviewer_caller,
             gateway=gateway,
         ),
     )
@@ -887,7 +885,7 @@ async def test_classified_query_failure_never_starts_tool_or_reviewer() -> None:
 
     assert (
         gateway.calls,
-        reviewer_runtime.calls,
+        reviewer_caller.calls,
         answerer.calls,
         factory.scopes[0].exit_calls,
     ) == ([], [], [[]], 1)
@@ -899,22 +897,22 @@ async def test_partial_provider_failure_continues_but_all_failure_skips_reviewer
 ) -> None:
     captured = _capture_external_outcome(monkeypatch)
     provider_error = ExternalSearchProviderError(reason="external_search_http_error")
-    query_runtime = GoalKeyedAgentRuntime(
+    query_caller = GoalKeyedLlmCaller(
         {
             "partial failure": _query_draft(["good", "bad"]),
             "complete failure": _query_draft(["bad"]),
         }
     )
-    reviewer_runtime = ScriptedAgentRuntime([_review_draft([])])
+    reviewer_caller = ScriptedLlmCaller([_review_draft([])])
     gateway = _FakeExternalSearchGateway(
         {"good": [_hit("https://example.com/good")]},
         errors_by_query={"bad": provider_error},
     )
     runner, answerer, _ = _runner(
         tasks=[_task("partial failure"), _task("complete failure")],
-        runtime=_runtime(
-            query_runtime=query_runtime,
-            reviewer_runtime=reviewer_runtime,
+        caller=_caller(
+            query_caller=query_caller,
+            reviewer_caller=reviewer_caller,
             gateway=gateway,
         ),
     )
@@ -923,7 +921,7 @@ async def test_partial_provider_failure_continues_but_all_failure_skips_reviewer
 
     assert (
         Counter(call.query for call in gateway.calls),
-        len(reviewer_runtime.calls),
+        len(reviewer_caller.calls),
         answerer.calls,
         [
             (
@@ -954,8 +952,8 @@ async def test_workflow_constructs_task_ordered_external_outcome_before_answerin
     tasks = [_task("first"), _task("second")]
     runner, _, _ = _runner(
         tasks=tasks,
-        runtime=_runtime(
-            query_runtime=GoalKeyedAgentRuntime(
+        caller=_caller(
+            query_caller=GoalKeyedLlmCaller(
                 {
                     "first": _query_draft(["q1"]),
                     "second": _query_draft(["q2"]),
@@ -964,7 +962,7 @@ async def test_workflow_constructs_task_ordered_external_outcome_before_answerin
             # S1: reviewerはRun単位1回。統合index空間(仮定: task昇順)ではtask0の
             # 唯一の選択肢が0、task1の唯一の選択肢が1になる。task単位で呼ぶ旧経路が
             # 残っていても2件目のcallがscript枯渇crashにならないよう空draftを足す。
-            reviewer_runtime=ScriptedAgentRuntime(
+            reviewer_caller=ScriptedLlmCaller(
                 [
                     _review_draft(
                         [
@@ -1038,18 +1036,18 @@ async def test_collection_events_are_per_task_causal_with_their_contract_payload
     正本のため、ここでは重複して主張しない。
     """
     events = _Events()
-    query_runtime = GoalKeyedAgentRuntime(
+    query_caller = GoalKeyedLlmCaller(
         {
             "first": _query_draft(["q1"]),
             "second": _query_draft(["q2"]),
         }
     )
-    reviewer_runtime = ScriptedAgentRuntime([_review_draft([])])
+    reviewer_caller = ScriptedLlmCaller([_review_draft([])])
     runner, _, _ = _runner(
         tasks=[_task("first"), _task("second")],
-        runtime=_runtime(
-            query_runtime=query_runtime,
-            reviewer_runtime=reviewer_runtime,
+        caller=_caller(
+            query_caller=query_caller,
+            reviewer_caller=reviewer_caller,
             gateway=_FakeExternalSearchGateway(
                 {
                     "q1": [_hit("https://example.com/q1")],
@@ -1102,9 +1100,9 @@ async def test_collection_events_are_per_task_causal_with_their_contract_payload
 async def test_external_pipeline_is_a_noop_for_events_when_reporter_is_none() -> None:
     runner, answerer, _ = _runner(
         tasks=[_task("no reporter")],
-        runtime=_runtime(
-            query_runtime=ScriptedAgentRuntime([_query_draft(["q"])]),
-            reviewer_runtime=ScriptedAgentRuntime([_review_draft([])]),
+        caller=_caller(
+            query_caller=ScriptedLlmCaller([_query_draft(["q"])]),
+            reviewer_caller=ScriptedLlmCaller([_review_draft([])]),
             gateway=_FakeExternalSearchGateway({"q": [_hit("https://example.com/q")]}),
         ),
         events=None,
@@ -1118,20 +1116,20 @@ async def test_external_pipeline_is_a_noop_for_events_when_reporter_is_none() ->
 @pytest.mark.asyncio
 async def test_all_research_goals_run_concurrently() -> None:
     release = asyncio.Event()
-    query_runtime = _ParallelQueryRuntime(release=release, expected_peak=3)
+    query_caller = _ParallelQueryCaller(release=release, expected_peak=3)
     runner, _, _ = _runner(
         tasks=[_task("first"), _task("second"), _task("third")],
-        runtime=_runtime(
-            query_runtime=query_runtime,
-            reviewer_runtime=ScriptedAgentRuntime([]),
+        caller=_caller(
+            query_caller=query_caller,
+            reviewer_caller=ScriptedLlmCaller([]),
             gateway=_FakeExternalSearchGateway(),
         ),
     )
     running = asyncio.create_task(_run(runner))
 
     try:
-        await asyncio.wait_for(query_runtime.peak_reached.wait(), timeout=0.5)
-        assert query_runtime.peak == 3
+        await asyncio.wait_for(query_caller.peak_reached.wait(), timeout=0.5)
+        assert query_caller.peak == 3
     finally:
         release.set()
         await asyncio.wait_for(running, timeout=0.5)
@@ -1143,31 +1141,31 @@ async def test_outer_cancellation_cancels_and_joins_all_started_external_tasks()
 ):
     tasks = [_task("first blocking task"), _task("second blocking task")]
     timeline: list[str] = []
-    query_runtime = _AllTasksBlockingRuntime(
+    query_caller = _AllTasksBlockingCaller(
         task_count=len(tasks),
         timeline=timeline,
     )
     runner, answerer, factory = _runner(
         tasks=tasks,
-        runtime=_runtime(
-            query_runtime=query_runtime,
-            reviewer_runtime=ScriptedAgentRuntime([]),
+        caller=_caller(
+            query_caller=query_caller,
+            reviewer_caller=ScriptedLlmCaller([]),
             gateway=_FakeExternalSearchGateway(),
         ),
         timeline=timeline,
     )
     running = asyncio.create_task(_run(runner))
 
-    await asyncio.wait_for(query_runtime.all_tasks_started.wait(), timeout=0.5)
+    await asyncio.wait_for(query_caller.all_tasks_started.wait(), timeout=0.5)
     running.cancel()
     with pytest.raises(asyncio.CancelledError):
         await asyncio.wait_for(running, timeout=0.5)
 
     assert (
-        query_runtime.started_count,
-        query_runtime.cancelled_count,
-        query_runtime.finished_count,
-        query_runtime.all_tasks_finished.is_set(),
+        query_caller.started_count,
+        query_caller.cancelled_count,
+        query_caller.finished_count,
+        query_caller.all_tasks_finished.is_set(),
         answerer.calls,
         factory.scopes[0].exit_calls,
         timeline.count("external_task.finished"),
@@ -1182,20 +1180,20 @@ async def test_outer_cancellation_cancels_and_joins_all_started_external_tasks()
 
 @pytest.mark.asyncio
 async def test_classified_task_failure_does_not_cancel_its_sibling() -> None:
-    query_runtime = GoalKeyedAgentRuntime(
+    query_caller = GoalKeyedLlmCaller(
         {
             "failed": {},
             "succeeds": _query_draft(["q"]),
         }
     )
-    reviewer_runtime = ScriptedAgentRuntime(
+    reviewer_caller = ScriptedLlmCaller(
         [_review_draft([{"option_index": 0, "claim": "claim", "why_selected": "why"}])]
     )
     runner, answerer, _ = _runner(
         tasks=[_task("failed"), _task("succeeds")],
-        runtime=_runtime(
-            query_runtime=query_runtime,
-            reviewer_runtime=reviewer_runtime,
+        caller=_caller(
+            query_caller=query_caller,
+            reviewer_caller=reviewer_caller,
             gateway=_FakeExternalSearchGateway({"q": [_hit("https://example.com/q")]}),
         ),
     )
@@ -1211,14 +1209,12 @@ async def test_classified_task_failure_does_not_cancel_its_sibling() -> None:
 async def test_unclassified_task_failure_joins_sibling_before_scope_close() -> None:
     error = RuntimeError("UNCLASSIFIED_TASK_ERROR")
     timeline: list[str] = []
-    query_runtime = _TaskFailureAfterSiblingStartsRuntime(
-        error=error, timeline=timeline
-    )
+    query_caller = _TaskFailureAfterSiblingStartsCaller(error=error, timeline=timeline)
     runner, _, factory = _runner(
         tasks=[_task("failing"), _task("blocking")],
-        runtime=_runtime(
-            query_runtime=query_runtime,
-            reviewer_runtime=ScriptedAgentRuntime([]),
+        caller=_caller(
+            query_caller=query_caller,
+            reviewer_caller=ScriptedLlmCaller([]),
             gateway=_FakeExternalSearchGateway(),
         ),
         timeline=timeline,
@@ -1229,8 +1225,8 @@ async def test_unclassified_task_failure_joins_sibling_before_scope_close() -> N
 
     assert (
         raised.value is error,
-        query_runtime.sibling_cancelled,
-        query_runtime.sibling_finished.is_set(),
+        query_caller.sibling_cancelled,
+        query_caller.sibling_finished.is_set(),
         factory.scopes[0].exited,
         timeline.index("sibling.finished") < timeline.index("scope.exit"),
     ) == (True, True, True, True, True)
@@ -1242,9 +1238,9 @@ async def test_unclassified_query_failure_joins_sibling_before_reraise() -> None
     gateway = _QueryFailureAfterSiblingStartsGateway(error=error)
     runner, _, factory = _runner(
         tasks=[_task("query siblings")],
-        runtime=_runtime(
-            query_runtime=ScriptedAgentRuntime([_query_draft(["failing", "blocking"])]),
-            reviewer_runtime=ScriptedAgentRuntime([]),
+        caller=_caller(
+            query_caller=ScriptedLlmCaller([_query_draft(["failing", "blocking"])]),
+            reviewer_caller=ScriptedLlmCaller([]),
             gateway=gateway,
         ),
     )
@@ -1262,15 +1258,15 @@ async def test_unclassified_query_failure_joins_sibling_before_reraise() -> None
 
 @pytest.mark.asyncio
 async def test_external_scope_is_activated_fresh_per_run() -> None:
-    """external runtime scopeはrunごとに新しくactivateされ、終了時に必ずexitする。
+    """external caller scopeはrunごとに新しくactivateされ、終了時に必ずexitする。
 
     同URL外部ヒットが両方残ること(URL重複排除の廃止)の正本は
     test_evidence_review.py の same_url テストが持つ。
     """
     tasks = [_task("first"), _task("second")]
 
-    def _reviewer_runtime() -> ScriptedAgentRuntime:
-        return ScriptedAgentRuntime(
+    def _reviewer_caller() -> ScriptedLlmCaller:
+        return ScriptedLlmCaller(
             [
                 _review_draft(
                     [
@@ -1293,36 +1289,36 @@ async def test_external_scope_is_activated_fresh_per_run() -> None:
             }
         )
 
-    first_runtime = _runtime(
-        query_runtime=GoalKeyedAgentRuntime(
+    first_caller = _caller(
+        query_caller=GoalKeyedLlmCaller(
             {
                 "first": _query_draft(["q1"]),
                 "second": _query_draft(["q2"]),
             }
         ),
-        reviewer_runtime=_reviewer_runtime(),
+        reviewer_caller=_reviewer_caller(),
         gateway=_gateway(),
     )
-    second_runtime = _runtime(
-        query_runtime=GoalKeyedAgentRuntime(
+    second_caller = _caller(
+        query_caller=GoalKeyedLlmCaller(
             {
                 "first": _query_draft(["q1"]),
                 "second": _query_draft(["q2"]),
             }
         ),
-        reviewer_runtime=_reviewer_runtime(),
+        reviewer_caller=_reviewer_caller(),
         gateway=_gateway(),
     )
     answerer = _EvidenceAnswerer()
-    factory = _Factory([first_runtime.external_search, second_runtime.external_search])
-    reviewer_runtimes = [
-        first_runtime.reviewer_runtime,
-        second_runtime.reviewer_runtime,
+    factory = _Factory([first_caller.external_search, second_caller.external_search])
+    reviewer_callers = [
+        first_caller.reviewer_caller,
+        second_caller.reviewer_caller,
     ]
 
     @asynccontextmanager
     async def _reviewer_scope() -> AsyncIterator[object]:
-        yield reviewer_runtimes.pop(0)
+        yield reviewer_callers.pop(0)
 
     phases = AnsweringPhases(
         planner=_Planner(_plan(tasks)),
@@ -1333,7 +1329,7 @@ async def test_external_scope_is_activated_fresh_per_run() -> None:
         direct_answerer=_UnreachableDirectAnswerer(),
         evidence_answerer=answerer,
         reviewer=EvidenceReviewService(
-            agent=EVIDENCE_REVIEWER_AGENT, runtime_scope_factory=_reviewer_scope
+            agent=EVIDENCE_REVIEWER_AGENT, llm_caller_scope_factory=_reviewer_scope
         ),
         organizer=PassThroughOrganizer(),
     )
@@ -1354,11 +1350,11 @@ async def test_external_scope_is_activated_fresh_per_run() -> None:
 
 @pytest.mark.asyncio
 async def test_query_timeout_is_classified_without_reviewer() -> None:
-    reviewer_runtime = ScriptedAgentRuntime([])
+    reviewer_caller = ScriptedLlmCaller([])
     runner, _, _ = _runner(
         tasks=[_task("timeout")],
-        runtime=_runtime(
-            query_runtime=ScriptedAgentRuntime(
+        caller=_caller(
+            query_caller=ScriptedLlmCaller(
                 [
                     AIProviderTransportError(
                         http_error=HttpTransportError(
@@ -1370,28 +1366,28 @@ async def test_query_timeout_is_classified_without_reviewer() -> None:
                     )
                 ]
             ),
-            reviewer_runtime=reviewer_runtime,
+            reviewer_caller=reviewer_caller,
             gateway=_FakeExternalSearchGateway(),
         ),
     )
 
     await _run(runner)
 
-    assert reviewer_runtime.calls == []
+    assert reviewer_caller.calls == []
 
 
 @pytest.mark.asyncio
-async def test_query_timeout_backstop_cancels_the_runtime_and_reports_failure(
+async def test_query_timeout_backstop_cancels_the_caller_and_reports_failure(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     observed_timeouts = _record_and_shorten_pipeline_timeouts(monkeypatch)
     captured = _capture_external_outcome(monkeypatch)
-    query_runtime = _NeverCompletingRuntime()
+    query_caller = _NeverCompletingCaller()
     runner, _, _ = _runner(
         tasks=[_task("query timeout")],
-        runtime=_runtime(
-            query_runtime=query_runtime,
-            reviewer_runtime=ScriptedAgentRuntime([]),
+        caller=_caller(
+            query_caller=query_caller,
+            reviewer_caller=ScriptedLlmCaller([]),
             gateway=_FakeExternalSearchGateway(),
         ),
     )
@@ -1400,7 +1396,7 @@ async def test_query_timeout_backstop_cancels_the_runtime_and_reports_failure(
 
     report = _task_reports(captured[0])[0]
     assert (
-        query_runtime.cancelled,
+        query_caller.cancelled,
         report.external_collection,
         isinstance(captured[0].evidence_run, EvidenceRunCompleted),
         report.generated_queries,
@@ -1416,12 +1412,12 @@ async def test_provider_timeout_backstop_cancels_tool_and_skips_reviewer(
     captured = _capture_external_outcome(monkeypatch)
     started = asyncio.Event()
     gateway = _FakeExternalSearchGateway(started=started, release=asyncio.Event())
-    reviewer_runtime = ScriptedAgentRuntime([])
+    reviewer_caller = ScriptedLlmCaller([])
     runner, _, _ = _runner(
         tasks=[_task("provider timeout")],
-        runtime=_runtime(
-            query_runtime=ScriptedAgentRuntime([_query_draft(["q"])]),
-            reviewer_runtime=reviewer_runtime,
+        caller=_caller(
+            query_caller=ScriptedLlmCaller([_query_draft(["q"])]),
+            reviewer_caller=reviewer_caller,
             gateway=gateway,
         ),
     )
@@ -1432,7 +1428,7 @@ async def test_provider_timeout_backstop_cancels_tool_and_skips_reviewer(
     assert (
         started.is_set(),
         gateway.cancelled,
-        reviewer_runtime.calls,
+        reviewer_caller.calls,
         report.external_collection,
         isinstance(captured[0].evidence_run, EvidenceRunCompleted),
         report.provider_failed_query_count,

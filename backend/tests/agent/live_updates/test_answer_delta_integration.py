@@ -119,7 +119,7 @@ async def _answer(
     return await DirectAnswerService(
         schedule_deadline_check=lambda *_: None,
         agent=DIRECT_ANSWER_AGENT,
-        runtime_scope_factory=generator.activate,
+        llm_text_streamer_scope_factory=generator.activate,
         repository=AllowAnswerGenerationStart(),
         delta_reporter=reporter,
     ).answer(
@@ -139,7 +139,7 @@ async def _evidence_answer(
     return await EvidenceAnswerService(
         schedule_deadline_check=lambda *_: None,
         agent=EVIDENCE_ANSWER_AGENT,
-        runtime_scope_factory=generator.activate,
+        llm_text_streamer_scope_factory=generator.activate,
         repository=AllowAnswerGenerationStart(),
         delta_reporter=reporter,
     ).answer(

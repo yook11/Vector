@@ -23,7 +23,7 @@ from app.http.failure import (
     HttpTransportStage,
 )
 from tests.agent.evidence_review._builders import AS_OF
-from tests.agent.runtime._fakes import ScriptedAgentRuntime
+from tests.agent.llm_call._fakes import ScriptedLlmCaller
 
 
 @pytest.mark.parametrize(
@@ -94,13 +94,13 @@ def test_evidence_review_error_names_draft_validation_error_as_schema_mismatch()
 
 @pytest.mark.asyncio
 async def test_review_attempt_preserves_classified_source_as_cause() -> None:
-    """Runtimeが返した分類済みの失敗は、そのまま原因として包まれreasonを名乗る。"""
+    """LlmCallerが返した分類済みの失敗は、そのまま原因として包まれreasonを名乗る。"""
     cause = AIProviderResultError(reason=AIProviderResultReason.RESPONSE_UNPARSEABLE)
 
     with pytest.raises(EvidenceReviewError) as raised:
         await _review_attempt(
             agent=EVIDENCE_REVIEWER_AGENT,
-            reviewer_runtime=ScriptedAgentRuntime([cause]),
+            reviewer_caller=ScriptedLlmCaller([cause]),
             review_input=EvidenceReviewInput(task_groups=(), as_of=AS_OF),
             attempt_number=1,
         )

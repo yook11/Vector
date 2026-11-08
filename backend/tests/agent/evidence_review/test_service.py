@@ -48,8 +48,8 @@ from tests.agent.evidence_review._builders import (
     external_hit,
     internal_hit,
 )
+from tests.agent.llm_call._fakes import ScriptedLlmCaller
 from tests.agent.recording._fakes import RecordingEvidenceReviewRecorder
-from tests.agent.runtime._fakes import ScriptedAgentRuntime
 
 # 中身を見ないテスト用。空なのはどのtasksでも妥当なため。
 _ANY_REVIEWER_DRAFT = EvidenceReviewerDraft.model_validate(
@@ -71,12 +71,12 @@ async def _review(
     *,
     tasks: list[Any],
     as_of: datetime = AS_OF,
-    reviewer_runtime: Any,
+    reviewer_caller: Any,
     recorder: RecordingEvidenceReviewRecorder | None = None,
 ) -> EvidenceRunResult:
     service_kwargs: dict[str, Any] = {
         "agent": EVIDENCE_REVIEWER_AGENT,
-        "runtime_scope_factory": fixed_scope(reviewer_runtime),
+        "llm_caller_scope_factory": fixed_scope(reviewer_caller),
     }
     if recorder is not None:
         service_kwargs["recorder"] = recorder
@@ -116,8 +116,8 @@ def _internal_task() -> Any:
 
 @pytest.mark.asyncio
 async def test_review_is_called_exactly_once_for_a_multi_task_run() -> None:
-    """S1 A1。複数taskがあってもreviewer_runtime.callは1 attemptにつき1回。"""
-    runtime = ScriptedAgentRuntime([_ANY_REVIEWER_DRAFT])
+    """S1 A1。複数taskがあってもreviewer_caller.callは1 attemptにつき1回。"""
+    caller = ScriptedLlmCaller([_ANY_REVIEWER_DRAFT])
     tasks = [
         collected_task(
             task_index=0,
@@ -136,38 +136,38 @@ async def test_review_is_called_exactly_once_for_a_multi_task_run() -> None:
         ),
     ]
 
-    await _review(tasks=tasks, reviewer_runtime=runtime)
+    await _review(tasks=tasks, reviewer_caller=caller)
 
-    assert len(runtime.calls) == 1
-    assert runtime.calls[0].agent is EVIDENCE_REVIEWER_AGENT
+    assert len(caller.calls) == 1
+    assert caller.calls[0].agent is EVIDENCE_REVIEWER_AGENT
 
 
 @pytest.mark.asyncio
-async def test_review_passes_evidence_review_input_to_runtime() -> None:
-    """runtimeへ渡す入力はEvidenceReviewInputである。"""
-    runtime = ScriptedAgentRuntime([_ANY_REVIEWER_DRAFT])
+async def test_review_passes_evidence_review_input_to_caller() -> None:
+    """callerへ渡す入力はEvidenceReviewInputである。"""
+    caller = ScriptedLlmCaller([_ANY_REVIEWER_DRAFT])
 
     await _review(
         tasks=[collected_task(task_index=0)],
-        reviewer_runtime=runtime,
+        reviewer_caller=caller,
     )
 
-    assert type(runtime.calls[0].input) is EvidenceReviewInput
+    assert type(caller.calls[0].input) is EvidenceReviewInput
 
 
 @pytest.mark.asyncio
 async def test_review_passes_as_of_to_the_reviewer_input_unchanged() -> None:
     """受け取ったas_ofは別の時刻に置き換えずReviewer入力へ渡す。"""
-    runtime = ScriptedAgentRuntime([_ANY_REVIEWER_DRAFT])
+    caller = ScriptedLlmCaller([_ANY_REVIEWER_DRAFT])
     as_of = datetime(2030, 1, 2, 3, 4, 5, tzinfo=UTC)
 
     await _review(
         tasks=[],
         as_of=as_of,
-        reviewer_runtime=runtime,
+        reviewer_caller=caller,
     )
 
-    assert runtime.calls[0].input.as_of == as_of
+    assert caller.calls[0].input.as_of == as_of
 
 
 @pytest.mark.asyncio
@@ -196,7 +196,7 @@ async def test_selection_restores_origin_and_task_from_a_cross_task_index() -> N
             ],
         ),
     ]
-    runtime = ScriptedAgentRuntime(
+    caller = ScriptedLlmCaller(
         [
             _reviewer_draft(
                 [
@@ -215,7 +215,7 @@ async def test_selection_restores_origin_and_task_from_a_cross_task_index() -> N
         ]
     )
 
-    result = await _review(tasks=tasks, reviewer_runtime=runtime)
+    result = await _review(tasks=tasks, reviewer_caller=caller)
 
     assert isinstance(result, EvidenceRunCompleted)
     assert [
@@ -233,7 +233,7 @@ async def test_selection_restores_origin_and_task_from_a_cross_task_index() -> N
 @pytest.mark.asyncio
 async def test_review_propagates_missing_as_a_single_run_level_value() -> None:
     """S1(何ができていないかの表明)。missingはRun全体で1本として返る。"""
-    runtime = ScriptedAgentRuntime([_reviewer_draft([], missing=["run全体の不足"])])
+    caller = ScriptedLlmCaller([_reviewer_draft([], missing=["run全体の不足"])])
 
     result = await _review(
         tasks=[
@@ -249,7 +249,7 @@ async def test_review_propagates_missing_as_a_single_run_level_value() -> None:
                 ],
             )
         ],
-        reviewer_runtime=runtime,
+        reviewer_caller=caller,
     )
 
     assert isinstance(result, EvidenceRunCompleted)
@@ -258,7 +258,7 @@ async def test_review_propagates_missing_as_a_single_run_level_value() -> None:
 
 @pytest.mark.asyncio
 async def test_review_retries_at_most_twice_with_the_same_typed_input() -> None:
-    runtime = ScriptedAgentRuntime(
+    caller = ScriptedLlmCaller(
         [
             {},
             _reviewer_draft(
@@ -281,12 +281,12 @@ async def test_review_retries_at_most_twice_with_the_same_typed_input() -> None:
                 ],
             )
         ],
-        reviewer_runtime=runtime,
+        reviewer_caller=caller,
     )
 
     assert isinstance(result, EvidenceRunCompleted)
-    assert [call.attempt_number for call in runtime.calls] == [1, 2]
-    assert runtime.calls[0].input is runtime.calls[1].input
+    assert [call.attempt_number for call in caller.calls] == [1, 2]
+    assert caller.calls[0].input is caller.calls[1].input
     assert len(result.answer_evidence.internal_evidence) == 1
 
 
@@ -324,7 +324,7 @@ async def test_review_returns_last_failure_code_after_two_exhausted_attempts(
     2 taskに選択肢があっても、reviewerの呼び出しはRunにつき1回(最大2 attempt)
     であり、taskごとに新しいattempt列は発生しない。
     """
-    runtime = ScriptedAgentRuntime([failure, failure])
+    caller = ScriptedLlmCaller([failure, failure])
     tasks = [
         collected_task(
             task_index=0,
@@ -343,17 +343,17 @@ async def test_review_returns_last_failure_code_after_two_exhausted_attempts(
         ),
     ]
 
-    result = await _review(tasks=tasks, reviewer_runtime=runtime)
+    result = await _review(tasks=tasks, reviewer_caller=caller)
 
     assert isinstance(result, EvidenceRunFailed)
-    assert [call.attempt_number for call in runtime.calls] == [1, 2]
+    assert [call.attempt_number for call in caller.calls] == [1, 2]
     assert result.failure_code == expected_code
 
 
 @pytest.mark.asyncio
 async def test_review_uses_the_last_failure_code_when_attempt_codes_differ() -> None:
     recorder = RecordingEvidenceReviewRecorder()
-    runtime = ScriptedAgentRuntime(
+    caller = ScriptedLlmCaller(
         [
             AIProviderResultError(reason=AIProviderResultReason.RESPONSE_UNPARSEABLE),
             AIProviderTransportError(
@@ -368,13 +368,13 @@ async def test_review_uses_the_last_failure_code_when_attempt_codes_differ() -> 
 
     result = await _review(
         tasks=[_internal_task()],
-        reviewer_runtime=runtime,
+        reviewer_caller=caller,
         recorder=recorder,
     )
 
     assert isinstance(result, EvidenceRunFailed)
     assert result.failure_code == "timeout"
-    assert [call.attempt_number for call in runtime.calls] == [1, 2]
+    assert [call.attempt_number for call in caller.calls] == [1, 2]
     _assert_recorded(
         recorder,
         outcome=EvidenceReviewFailed(
@@ -387,14 +387,14 @@ async def test_review_uses_the_last_failure_code_when_attempt_codes_differ() -> 
 @pytest.mark.asyncio
 async def test_review_does_not_retry_an_unresolvable_provider_failure() -> None:
     """呼び直しても解消しないAIの失敗(出力のブロック)は再試行せず、その理由を種別とする精査の失敗を返す。"""
-    runtime = ScriptedAgentRuntime(
+    caller = ScriptedLlmCaller(
         [AIProviderResultError(reason=AIProviderResultReason.OUTPUT_BLOCKED_SAFETY)]
     )
 
-    result = await _review(tasks=[_internal_task()], reviewer_runtime=runtime)
+    result = await _review(tasks=[_internal_task()], reviewer_caller=caller)
 
     assert result == EvidenceRunFailed(failure_code="output_blocked_safety")
-    assert [call.attempt_number for call in runtime.calls] == [1]
+    assert [call.attempt_number for call in caller.calls] == [1]
 
 
 class _UnregisteredProviderError(AIProviderError):
@@ -421,13 +421,13 @@ async def test_review_propagates_unclassified_provider_error() -> None:
     error = _UnregisteredProviderError(
         reason=AIProviderResultReason.RESPONSE_UNPARSEABLE
     )
-    runtime = ScriptedAgentRuntime([error])
+    caller = ScriptedLlmCaller([error])
 
     with pytest.raises(AIProviderError) as raised:
-        await _review(tasks=tasks, reviewer_runtime=runtime)
+        await _review(tasks=tasks, reviewer_caller=caller)
 
     assert raised.value is error
-    assert [call.attempt_number for call in runtime.calls] == [1]
+    assert [call.attempt_number for call in caller.calls] == [1]
 
 
 @pytest.mark.asyncio
@@ -436,10 +436,10 @@ async def test_review_retries_after_invalid_draft_and_drops_invalid_selections()
 ):
     """claimが空のselectionはfrom_draft()でValidationErrorとなり
 
-    attempt 1が失敗として扱われる(schema自体は妥当なのでruntimeは例外を
+    attempt 1が失敗として扱われる(schema自体は妥当なのでcallerは例外を
     投げない)。attempt 2で重複/範囲外を除き、有効な選択だけが残る。
     """
-    runtime = ScriptedAgentRuntime(
+    caller = ScriptedLlmCaller(
         [
             _reviewer_draft([{"option_index": 0, "claim": "", "why_selected": "w"}]),
             _reviewer_draft(
@@ -459,11 +459,11 @@ async def test_review_retries_after_invalid_draft_and_drops_invalid_selections()
                 external_hits=[external_hit("https://example.com/a")],
             )
         ],
-        reviewer_runtime=runtime,
+        reviewer_caller=caller,
     )
 
     assert isinstance(result, EvidenceRunCompleted)
-    assert [call.attempt_number for call in runtime.calls] == [1, 2]
+    assert [call.attempt_number for call in caller.calls] == [1, 2]
     assert [item.claim for item in result.answer_evidence.external_evidence] == [
         "first"
     ]
@@ -473,7 +473,7 @@ async def test_review_retries_after_invalid_draft_and_drops_invalid_selections()
 async def test_review_propagates_unclassified_exception_without_retry() -> None:
     """分類対象外の例外はreview()が握りつぶさず、即座に呼び出し元へ伝播する。"""
     error = RuntimeError("unclassified reviewer error")
-    runtime = ScriptedAgentRuntime([error])
+    caller = ScriptedLlmCaller([error])
 
     with pytest.raises(RuntimeError) as raised:
         await _review(
@@ -490,15 +490,15 @@ async def test_review_propagates_unclassified_exception_without_retry() -> None:
                     ],
                 )
             ],
-            reviewer_runtime=runtime,
+            reviewer_caller=caller,
         )
 
     assert raised.value is error
-    assert [call.attempt_number for call in runtime.calls] == [1]
+    assert [call.attempt_number for call in caller.calls] == [1]
 
 
-class _NeverCompletingRuntime:
-    """timeoutで打ち切られるまで応答しないruntime double。"""
+class _NeverCompletingCaller:
+    """timeoutで打ち切られるまで応答しないcaller double。"""
 
     def __init__(self) -> None:
         self.started = asyncio.Event()
@@ -517,13 +517,13 @@ class _NeverCompletingRuntime:
 
 
 @pytest.mark.asyncio
-async def test_review_timeout_cancels_the_runtime_without_retry(
+async def test_review_timeout_cancels_the_caller_without_retry(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(
         "app.agent.evidence_review.service._REVIEW_TIMEOUT_SECONDS", 0.02
     )
-    runtime = _NeverCompletingRuntime()
+    caller = _NeverCompletingCaller()
 
     result = await asyncio.wait_for(
         _review(
@@ -540,14 +540,14 @@ async def test_review_timeout_cancels_the_runtime_without_retry(
                     ],
                 )
             ],
-            reviewer_runtime=runtime,
+            reviewer_caller=caller,
         ),
         timeout=0.5,
     )
 
     assert isinstance(result, EvidenceRunFailed)
-    assert runtime.cancelled is True
-    assert runtime.attempt_numbers == [1]
+    assert caller.cancelled is True
+    assert caller.attempt_numbers == [1]
     assert result.failure_code == "reviewer_timeout"
 
 
@@ -556,11 +556,11 @@ async def test_successful_review_records_succeeded_outcome() -> None:
     """初回の完成結果はattempt_count=1の成功結論を1回渡す。"""
 
     recorder = RecordingEvidenceReviewRecorder()
-    runtime = ScriptedAgentRuntime([_ANY_REVIEWER_DRAFT])
+    caller = ScriptedLlmCaller([_ANY_REVIEWER_DRAFT])
 
     result = await _review(
         tasks=[_internal_task()],
-        reviewer_runtime=runtime,
+        reviewer_caller=caller,
         recorder=recorder,
     )
 
@@ -573,7 +573,7 @@ async def test_classified_failure_records_failure_code_and_attempt_count() -> No
     """retry枯渇は最後のfailure codeと実行回数を1回渡す。"""
 
     recorder = RecordingEvidenceReviewRecorder()
-    runtime = ScriptedAgentRuntime(
+    caller = ScriptedLlmCaller(
         [
             AIProviderTransportError(
                 http_error=HttpTransportError(
@@ -594,7 +594,7 @@ async def test_classified_failure_records_failure_code_and_attempt_count() -> No
 
     result = await _review(
         tasks=[_internal_task()],
-        reviewer_runtime=runtime,
+        reviewer_caller=caller,
         recorder=recorder,
     )
 
@@ -613,7 +613,7 @@ async def test_retry_success_records_succeeded_with_attempt_count() -> None:
     """retry成功はattempt_count=2の成功結論を渡す。"""
 
     recorder = RecordingEvidenceReviewRecorder()
-    runtime = ScriptedAgentRuntime(
+    caller = ScriptedLlmCaller(
         [
             {},
             _ANY_REVIEWER_DRAFT,
@@ -622,7 +622,7 @@ async def test_retry_success_records_succeeded_with_attempt_count() -> None:
 
     result = await _review(
         tasks=[_internal_task()],
-        reviewer_runtime=runtime,
+        reviewer_caller=caller,
         recorder=recorder,
     )
 
@@ -651,12 +651,12 @@ async def test_unclassified_failure_and_cancellation_record_without_outcome(
     """未分類と停止は結論を渡さず、元の例外をrecordingへ残す。"""
 
     recorder = RecordingEvidenceReviewRecorder()
-    runtime = ScriptedAgentRuntime([error])
+    caller = ScriptedLlmCaller([error])
 
     with pytest.raises(type(error)) as raised:
         await _review(
             tasks=[_internal_task()],
-            reviewer_runtime=runtime,
+            reviewer_caller=caller,
             recorder=recorder,
         )
 
@@ -665,18 +665,18 @@ async def test_unclassified_failure_and_cancellation_record_without_outcome(
 
 
 @pytest.mark.asyncio
-async def test_review_propagates_runtime_scope_start_failure_unchanged() -> None:
+async def test_review_propagates_caller_scope_start_failure_unchanged() -> None:
     error = RuntimeError("scope start failed")
     recorder = RecordingEvidenceReviewRecorder()
 
     @asynccontextmanager
-    async def failing_scope() -> AsyncIterator[ScriptedAgentRuntime]:
+    async def failing_scope() -> AsyncIterator[ScriptedLlmCaller]:
         raise error
-        yield ScriptedAgentRuntime([])
+        yield ScriptedLlmCaller([])
 
     service = EvidenceReviewService(
         agent=EVIDENCE_REVIEWER_AGENT,
-        runtime_scope_factory=failing_scope,
+        llm_caller_scope_factory=failing_scope,
         recorder=recorder,
     )
 
@@ -688,19 +688,19 @@ async def test_review_propagates_runtime_scope_start_failure_unchanged() -> None
 
 
 @pytest.mark.asyncio
-async def test_review_propagates_runtime_scope_exit_failure_unchanged() -> None:
+async def test_review_propagates_caller_scope_exit_failure_unchanged() -> None:
     error = RuntimeError("scope exit failed")
-    runtime = ScriptedAgentRuntime([_ANY_REVIEWER_DRAFT])
+    caller = ScriptedLlmCaller([_ANY_REVIEWER_DRAFT])
     recorder = RecordingEvidenceReviewRecorder()
 
     @asynccontextmanager
-    async def failing_scope() -> AsyncIterator[ScriptedAgentRuntime]:
-        yield runtime
+    async def failing_scope() -> AsyncIterator[ScriptedLlmCaller]:
+        yield caller
         raise error
 
     service = EvidenceReviewService(
         agent=EVIDENCE_REVIEWER_AGENT,
-        runtime_scope_factory=failing_scope,
+        llm_caller_scope_factory=failing_scope,
         recorder=recorder,
     )
 
@@ -708,5 +708,5 @@ async def test_review_propagates_runtime_scope_exit_failure_unchanged() -> None:
         await service.review(tasks=[_internal_task()], as_of=AS_OF)
 
     assert raised.value is error
-    assert [call.attempt_number for call in runtime.calls] == [1]
+    assert [call.attempt_number for call in caller.calls] == [1]
     _assert_recorded(recorder, outcome=None, error=error)

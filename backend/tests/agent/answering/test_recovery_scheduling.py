@@ -23,22 +23,22 @@ from tests.agent.run_deadline.test_scheduling import RecordingSource
 def make_service(kind, repository, schedule, retry=False):
     outputs = ([" "] if retry else []) + ["回答です。"]
     if kind == "direct":
-        runtime = direct.ScriptedStreamingRuntime(outputs)
+        streamer = direct.ScriptedLlmTextStreamer(outputs)
         return (
             direct.DirectAnswerService(
                 agent=direct.DIRECT_ANSWER_AGENT,
-                runtime_scope_factory=direct._runtime_scope(runtime),
+                llm_text_streamer_scope_factory=direct._streamer_scope(streamer),
                 repository=repository,
                 schedule_deadline_check=schedule,
             ),
             direct._input(),
             "_generate_draft",
         )
-    runtime = evidence.FakeGenerator(outputs)
+    streamer = evidence.FakeGenerator(outputs)
     return (
         evidence.EvidenceAnswerService(
             agent=evidence.EVIDENCE_ANSWER_AGENT,
-            runtime_scope_factory=runtime.activate,
+            llm_text_streamer_scope_factory=streamer.activate,
             repository=repository,
             schedule_deadline_check=schedule,
         ),

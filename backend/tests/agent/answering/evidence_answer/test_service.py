@@ -101,7 +101,7 @@ def _evidence(ref: str = "1") -> AnswerInputEvidence:
 
 
 def _truncated_error() -> AIProviderResultError:
-    """S1 runtimeが実際に送出する形 (reason付き) を再現する。"""
+    """S1 streamerが実際に送出する形 (reason付き) を再現する。"""
     return AIProviderResultError(reason=AIProviderResultReason.OUTPUT_TRUNCATED)
 
 
@@ -257,7 +257,7 @@ async def _answer(
 ) -> EvidenceAnswerDraft:
     service_kwargs: dict[str, Any] = {
         "agent": EVIDENCE_ANSWER_AGENT,
-        "runtime_scope_factory": generator.activate,
+        "llm_text_streamer_scope_factory": generator.activate,
         "repository": (
             AllowAnswerGenerationStart() if answer_start is None else answer_start
         ),
@@ -590,10 +590,10 @@ async def test_unexpected_exception_propagates_without_fallback(
 
 
 @pytest.mark.asyncio
-async def test_runtime_scope_activation_failure_is_not_attempt_fallback(
+async def test_streamer_scope_activation_failure_is_not_attempt_fallback(
     capfire: CaptureLogfire,
 ) -> None:
-    failure = RuntimeError("runtime scope unavailable")
+    failure = RuntimeError("streamer scope unavailable")
     reporter = RecordingDeltaReporter()
 
     @asynccontextmanager
@@ -604,7 +604,7 @@ async def test_runtime_scope_activation_failure_is_not_attempt_fallback(
     service = EvidenceAnswerService(
         schedule_deadline_check=lambda *_: None,
         agent=EVIDENCE_ANSWER_AGENT,
-        runtime_scope_factory=failing_scope,
+        llm_text_streamer_scope_factory=failing_scope,
         repository=AllowAnswerGenerationStart(),
         delta_reporter=reporter,
     )
@@ -655,11 +655,11 @@ async def test_runtime_scope_activation_failure_is_not_attempt_fallback(
         ),
     ],
 )
-async def test_runtime_scope_exit_failure_discards_selected_outcome(
+async def test_streamer_scope_exit_failure_discards_selected_outcome(
     stream_outcome: StreamOutcome,
     capfire: CaptureLogfire,
 ) -> None:
-    close_error = RuntimeError("runtime scope exit failed")
+    close_error = RuntimeError("streamer scope exit failed")
     generator = FakeGenerator([stream_outcome])
 
     @asynccontextmanager
@@ -672,7 +672,7 @@ async def test_runtime_scope_exit_failure_discards_selected_outcome(
     service = EvidenceAnswerService(
         schedule_deadline_check=lambda *_: None,
         agent=EVIDENCE_ANSWER_AGENT,
-        runtime_scope_factory=broken_scope,
+        llm_text_streamer_scope_factory=broken_scope,
         repository=AllowAnswerGenerationStart(),
     )
 

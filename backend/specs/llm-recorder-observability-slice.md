@@ -1,5 +1,7 @@
 # LLM Recorder 観測集約 slice 仕様
 
+> 2026-11-08追記: `app/agent/runtime/` の `AgentRuntime` / `StreamingAgentRuntime` / `GeminiAgentRuntime` と、それぞれの scope factory は改名前の名前である。現在は `app/agent/llm_call/` の `LlmCaller` / `LlmTextStreamer` / `GeminiLlmCaller` と `LlmCallerScopeFactory` / `LlmTextStreamerScopeFactory` で、工程は `call_agent` で呼び出しと出力の検証をまとめて行う。
+
 更新日: 2026-08-30
 
 実装状況: Usage 所有権の移動済み。metric の `result` を外し、終わり方は

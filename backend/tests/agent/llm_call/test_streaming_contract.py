@@ -1,4 +1,4 @@
-"""Streaming Agent Runtime のprovider-neutral契約。"""
+"""LlmTextStreamer のprovider-neutral契約。"""
 
 from __future__ import annotations
 
@@ -31,7 +31,7 @@ from opentelemetry.trace import (
 
 import app.agent.recording.llm as llm_recording_module
 import app.ai_providers.gemini.error_translator as gemini_error_translator_module
-from app.agent.runtime.gemini import GeminiAgentRuntime
+from app.agent.llm_call.gemini import GeminiLlmCaller
 from app.ai_providers.errors import (
     AIProviderResponseError,
     AIProviderResultError,
@@ -41,7 +41,7 @@ from app.ai_providers.errors import (
 from app.ai_providers.gemini.error_translator import (
     OUTPUT_BLOCKED_FINISH_REASONS,
 )
-from tests.agent.runtime._helpers import FakeGeminiClient, make_agent, success_response
+from tests.agent.llm_call._helpers import FakeGeminiClient, make_agent, success_response
 from tests.cloudwatch.records import metric_records
 
 
@@ -199,11 +199,11 @@ async def test_unstarted_stream_close_does_not_open_provider_stream_or_span(
 ) -> None:
     sdk_stream = FakeSdkStream([_terminal_chunk()])
     client = FakeGeminiClient([], streams=[sdk_stream])
-    runtime = GeminiAgentRuntime(client=cast(AsyncClient, client))
+    caller = GeminiLlmCaller(client=cast(AsyncClient, client))
     tracer = FakeTracer()
     monkeypatch.setattr(llm_recording_module, "_TRACER", tracer)
 
-    stream = runtime.stream_text(
+    stream = caller.stream_text(
         make_agent(response_schema=None),
         "typed input",
         attempt_number=1,
@@ -220,11 +220,11 @@ async def test_first_iteration_opens_one_stream_and_yields_fragments_unchanged(
 ) -> None:
     sdk_stream = FakeSdkStream([_terminal_chunk("MODEL_FRAGMENT_SENTINEL")])
     client = FakeGeminiClient([], streams=[sdk_stream])
-    runtime = GeminiAgentRuntime(client=cast(AsyncClient, client))
+    caller = GeminiLlmCaller(client=cast(AsyncClient, client))
     tracer = FakeTracer()
     monkeypatch.setattr(llm_recording_module, "_TRACER", tracer)
 
-    stream = runtime.stream_text(
+    stream = caller.stream_text(
         make_agent(response_schema=None),
         "typed input",
         attempt_number=2,
@@ -248,7 +248,7 @@ async def test_first_iteration_opens_one_stream_and_yields_fragments_unchanged(
 async def test_real_sdk_response_types_expose_the_streamed_attribute_surface(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """SDK 型カナリア。runtime が chunk から読む属性面 (text /
+    """SDK 型カナリア。caller が chunk から読む属性面 (text /
 
     candidates[].finish_reason / usage_metadata) が実際の google.genai 型に
     存在し続けることを固定する。SimpleNamespace fake は SDK の属性改名を
@@ -273,11 +273,11 @@ async def test_real_sdk_response_types_expose_the_streamed_attribute_surface(
     )
     sdk_stream = FakeSdkStream([delta, terminal])
     client = FakeGeminiClient([], streams=[sdk_stream])
-    runtime = GeminiAgentRuntime(client=cast(AsyncClient, client))
+    caller = GeminiLlmCaller(client=cast(AsyncClient, client))
     tracer = FakeTracer()
     monkeypatch.setattr(llm_recording_module, "_TRACER", tracer)
 
-    stream = runtime.stream_text(
+    stream = caller.stream_text(
         make_agent(response_schema=None),
         "typed input",
         attempt_number=1,
@@ -302,7 +302,7 @@ async def test_structured_stream_request_keeps_declared_response_schema(
 
     fragments = [
         fragment
-        async for fragment in GeminiAgentRuntime(
+        async for fragment in GeminiLlmCaller(
             client=cast(AsyncClient, client)
         ).stream_text(make_agent(), "typed input", attempt_number=1)
     ]
@@ -319,13 +319,13 @@ async def test_stream_text_captures_creation_phase_parent_without_becoming_ambie
     tracer = FakeTracer()
     monkeypatch.setattr(llm_recording_module, "_TRACER", tracer)
     sdk_stream = FakeSdkStream([_terminal_chunk("MODEL_FRAGMENT_SENTINEL")])
-    runtime = GeminiAgentRuntime(
+    caller = GeminiLlmCaller(
         client=cast(AsyncClient, FakeGeminiClient([], streams=[sdk_stream]))
     )
     creation_phase = _phase_span(1, 1)
     creation_token = otel_context.attach(trace.set_span_in_context(creation_phase))
     try:
-        stream = runtime.stream_text(
+        stream = caller.stream_text(
             make_agent(response_schema=None),
             "typed input",
             attempt_number=1,
@@ -365,7 +365,7 @@ async def test_stream_text_rejects_renderer_failure_before_iterator_span_and_pro
     monkeypatch.setattr(llm_recording_module, "_TRACER", tracer)
 
     with pytest.raises(RuntimeError) as exc_info:
-        GeminiAgentRuntime(client=cast(AsyncClient, client)).stream_text(
+        GeminiLlmCaller(client=cast(AsyncClient, client)).stream_text(
             agent,
             "typed input",
             attempt_number=1,
@@ -391,7 +391,7 @@ async def test_stream_text_rejects_config_failure_before_iterator_span_and_provi
     monkeypatch.setattr(llm_recording_module, "_TRACER", tracer)
 
     with pytest.raises((TypeError, ValueError)):
-        GeminiAgentRuntime(client=cast(AsyncClient, client)).stream_text(
+        GeminiLlmCaller(client=cast(AsyncClient, client)).stream_text(
             agent,
             "typed input",
             attempt_number=1,
@@ -415,14 +415,14 @@ async def test_prompt_block_records_usage_then_classified_error_and_closes_once(
             )
         ]
     )
-    runtime = GeminiAgentRuntime(
+    caller = GeminiLlmCaller(
         client=cast(AsyncClient, FakeGeminiClient([], streams=[sdk_stream]))
     )
 
     with pytest.raises(AIProviderResultError) as exc_info:
         _ = [
             fragment
-            async for fragment in runtime.stream_text(
+            async for fragment in caller.stream_text(
                 make_agent(response_schema=None),
                 "typed input",
                 attempt_number=1,
@@ -463,14 +463,14 @@ async def test_blocked_finish_reason_records_blocked_outcome_without_event(
     tracer = FakeTracer()
     monkeypatch.setattr(llm_recording_module, "_TRACER", tracer)
     sdk_stream = FakeSdkStream([_stream_chunk(finish_reason=finish_reason)])
-    runtime = GeminiAgentRuntime(
+    caller = GeminiLlmCaller(
         client=cast(AsyncClient, FakeGeminiClient([], streams=[sdk_stream]))
     )
 
     with pytest.raises(AIProviderResultError) as exc_info:
         _ = [
             fragment
-            async for fragment in runtime.stream_text(
+            async for fragment in caller.stream_text(
                 make_agent(response_schema=None),
                 "typed input",
                 attempt_number=1,
@@ -510,14 +510,14 @@ async def test_max_tokens_finish_reason_raises_classified_truncation_error(
     tracer = FakeTracer()
     monkeypatch.setattr(llm_recording_module, "_TRACER", tracer)
     sdk_stream = FakeSdkStream([_stream_chunk(finish_reason="MAX_TOKENS")])
-    runtime = GeminiAgentRuntime(
+    caller = GeminiLlmCaller(
         client=cast(AsyncClient, FakeGeminiClient([], streams=[sdk_stream]))
     )
 
     with pytest.raises(AIProviderResultError) as exc_info:
         _ = [
             fragment
-            async for fragment in runtime.stream_text(
+            async for fragment in caller.stream_text(
                 make_agent(response_schema=None),
                 "typed input",
                 attempt_number=1,
@@ -549,13 +549,13 @@ async def test_max_tokens_after_partial_fragment_yield_still_raises_classified_e
             _stream_chunk(text=None, finish_reason="MAX_TOKENS"),
         ]
     )
-    runtime = GeminiAgentRuntime(
+    caller = GeminiLlmCaller(
         client=cast(AsyncClient, FakeGeminiClient([], streams=[sdk_stream]))
     )
 
     fragments: list[str] = []
     with pytest.raises(AIProviderResultError) as exc_info:
-        async for fragment in runtime.stream_text(
+        async for fragment in caller.stream_text(
             make_agent(response_schema=None),
             "typed input",
             attempt_number=1,
@@ -581,14 +581,14 @@ async def test_stream_without_terminal_reason_is_truncated_and_closed_once(
     tracer = FakeTracer()
     monkeypatch.setattr(llm_recording_module, "_TRACER", tracer)
     sdk_stream = FakeSdkStream([_stream_chunk(text="first fragment")])
-    runtime = GeminiAgentRuntime(
+    caller = GeminiLlmCaller(
         client=cast(AsyncClient, FakeGeminiClient([], streams=[sdk_stream]))
     )
 
     with pytest.raises(AIProviderResultError) as exc_info:
         _ = [
             fragment
-            async for fragment in runtime.stream_text(
+            async for fragment in caller.stream_text(
                 make_agent(response_schema=None),
                 "typed input",
                 attempt_number=1,
@@ -612,10 +612,10 @@ async def test_translated_provider_error_preserves_cause_after_cleanup(
     monkeypatch.setattr(llm_recording_module, "_TRACER", tracer)
     source_error = httpx2.ReadTimeout("PROVIDER_TIMEOUT_SENTINEL")
     client = FakeGeminiClient([], streams=[source_error])
-    runtime = GeminiAgentRuntime(client=cast(AsyncClient, client))
+    caller = GeminiLlmCaller(client=cast(AsyncClient, client))
 
     with pytest.raises(AIProviderTransportError) as exc_info:
-        await runtime.stream_text(
+        await caller.stream_text(
             make_agent(response_schema=None),
             "typed input",
             attempt_number=1,
@@ -638,12 +638,12 @@ async def test_unclassified_provider_error_records_one_event_then_closes_once(
     monkeypatch.setattr(llm_recording_module, "_TRACER", tracer)
     error = RuntimeError("UNCLASSIFIED_PROVIDER_SENTINEL")
     sdk_stream = FakeSdkStream([error], lifecycle_events=lifecycle_events)
-    runtime = GeminiAgentRuntime(
+    caller = GeminiLlmCaller(
         client=cast(AsyncClient, FakeGeminiClient([], streams=[sdk_stream]))
     )
 
     with pytest.raises(RuntimeError) as exc_info:
-        await runtime.stream_text(
+        await caller.stream_text(
             make_agent(response_schema=None),
             "typed input",
             attempt_number=1,
@@ -667,10 +667,10 @@ async def test_consumer_aclose_is_abandonment_without_error_outcome_and_ends_onc
     tracer = FakeTracer()
     monkeypatch.setattr(llm_recording_module, "_TRACER", tracer)
     sdk_stream = FakeSdkStream([_stream_chunk(text="fragment")])
-    runtime = GeminiAgentRuntime(
+    caller = GeminiLlmCaller(
         client=cast(AsyncClient, FakeGeminiClient([], streams=[sdk_stream]))
     )
-    stream = runtime.stream_text(
+    stream = caller.stream_text(
         make_agent(response_schema=None),
         "typed input",
         attempt_number=1,
@@ -698,10 +698,10 @@ async def test_usage_before_fragment_yield_survives_consumer_abandonment(
     sdk_stream = FakeSdkStream(
         [_stream_chunk(text="fragment", usage_metadata=_usage())]
     )
-    runtime = GeminiAgentRuntime(
+    caller = GeminiLlmCaller(
         client=cast(AsyncClient, FakeGeminiClient([], streams=[sdk_stream]))
     )
-    stream = runtime.stream_text(
+    stream = caller.stream_text(
         make_agent(response_schema=None),
         "typed input",
         attempt_number=1,
@@ -732,10 +732,10 @@ async def test_cancellation_during_provider_next_closes_span_once_without_outcom
     tracer = FakeTracer()
     monkeypatch.setattr(llm_recording_module, "_TRACER", tracer)
     sdk_stream = BlockingSdkStream()
-    runtime = GeminiAgentRuntime(
+    caller = GeminiLlmCaller(
         client=cast(AsyncClient, FakeGeminiClient([], streams=[sdk_stream]))
     )
-    stream = runtime.stream_text(
+    stream = caller.stream_text(
         make_agent(response_schema=None),
         "typed input",
         attempt_number=1,
@@ -763,10 +763,10 @@ async def test_cancellation_while_consumer_handles_fragment_closes_once_without_
     tracer = FakeTracer()
     monkeypatch.setattr(llm_recording_module, "_TRACER", tracer)
     sdk_stream = FakeSdkStream([_stream_chunk(text="fragment")])
-    runtime = GeminiAgentRuntime(
+    caller = GeminiLlmCaller(
         client=cast(AsyncClient, FakeGeminiClient([], streams=[sdk_stream]))
     )
-    stream = runtime.stream_text(
+    stream = caller.stream_text(
         make_agent(response_schema=None),
         "typed input",
         attempt_number=1,
@@ -808,13 +808,13 @@ async def test_sdk_close_error_is_best_effort_but_span_ends_once(
         [_terminal_chunk()],
         close_error=RuntimeError("SDK_CLOSE_FAILURE"),
     )
-    runtime = GeminiAgentRuntime(
+    caller = GeminiLlmCaller(
         client=cast(AsyncClient, FakeGeminiClient([], streams=[sdk_stream]))
     )
 
     fragments = [
         fragment
-        async for fragment in runtime.stream_text(
+        async for fragment in caller.stream_text(
             make_agent(response_schema=None),
             "typed input",
             attempt_number=1,
@@ -838,10 +838,10 @@ async def test_cancelled_sdk_close_preserves_usage_and_ends_span_once(
         [_stream_chunk(finish_reason="STOP", usage_metadata=_usage())],
         close_error=asyncio.CancelledError(),
     )
-    runtime = GeminiAgentRuntime(
+    caller = GeminiLlmCaller(
         client=cast(AsyncClient, FakeGeminiClient([], streams=[sdk_stream]))
     )
-    stream = runtime.stream_text(
+    stream = caller.stream_text(
         make_agent(response_schema=None),
         "typed input",
         attempt_number=1,
@@ -863,7 +863,7 @@ async def test_cancelled_sdk_close_preserves_usage_and_ends_span_once(
 async def test_call_rejects_schema_none_before_renderer_and_provider() -> None:
     renderer_error = RuntimeError("RENDERER_MUST_NOT_RUN")
     client = FakeGeminiClient([success_response()])
-    runtime = GeminiAgentRuntime(client=cast(AsyncClient, client))
+    caller = GeminiLlmCaller(client=cast(AsyncClient, client))
     agent = make_agent(response_schema=None)
     provider_call = client.models.generate_content
     assert agent.response_schema is None
@@ -876,7 +876,7 @@ async def test_call_rejects_schema_none_before_renderer_and_provider() -> None:
     )
 
     with pytest.raises(ValueError, match="response_schema"):
-        await runtime.call(agent, object(), attempt_number=1)
+        await caller.call(agent, object(), attempt_number=1)
 
     provider_call.assert_not_awaited()
 
@@ -923,10 +923,10 @@ async def test_stream_text_quota_exhausted_sdk_error_emits_ai_provider_exhausted
     tracer = FakeTracer()
     monkeypatch.setattr(llm_recording_module, "_TRACER", tracer)
     client = FakeGeminiClient([], streams=[_quota_exhausted_sdk_error()])
-    runtime = GeminiAgentRuntime(client=cast(AsyncClient, client))
+    caller = GeminiLlmCaller(client=cast(AsyncClient, client))
 
     with pytest.raises(AIProviderResponseError):
-        await runtime.stream_text(
+        await caller.stream_text(
             make_agent(response_schema=None),
             "typed input",
             attempt_number=1,
@@ -946,10 +946,10 @@ async def test_stream_text_plain_rate_limited_sdk_error_does_not_emit(
     tracer = FakeTracer()
     monkeypatch.setattr(llm_recording_module, "_TRACER", tracer)
     client = FakeGeminiClient([], streams=[_rate_limited_sdk_error()])
-    runtime = GeminiAgentRuntime(client=cast(AsyncClient, client))
+    caller = GeminiLlmCaller(client=cast(AsyncClient, client))
 
     with pytest.raises(AIProviderResponseError):
-        await runtime.stream_text(
+        await caller.stream_text(
             make_agent(response_schema=None),
             "typed input",
             attempt_number=1,

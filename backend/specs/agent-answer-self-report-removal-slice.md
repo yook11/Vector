@@ -1,5 +1,7 @@
 # 回答生成の自己申告撤去と欠損入力化 slice 仕様
 
+> 2026-11-08追記: `app/agent/runtime/` の `AgentRuntime` / `StreamingAgentRuntime` / `GeminiAgentRuntime` と、それぞれの scope factory は改名前の名前である。現在は `app/agent/llm_call/` の `LlmCaller` / `LlmTextStreamer` / `GeminiLlmCaller` と `LlmCallerScopeFactory` / `LlmTextStreamerScopeFactory` で、工程は `call_agent` で呼び出しと出力の検証をまとめて行う。
+
 > 2026-09-21追記: State／Contentの中間クラスを使う記述は廃止前の設計記録である。現在は具体型10種類が通常の`Exception`を継承する`AIProviderError`の直下にあり、呼び出し側は共有の`CLASSIFIED_AI_PROVIDER_ERRORS`で判定する。`reason`は任意とし、基底型と未知の直接サブクラスを分類済みへ広げない。
 
 > 2026-09-20追記: 本書のFAILURE_MODE／AIProviderFailureMode、rejection_kind／AIProviderContentRejectionKind、is_safety_rejectionに関する記述は廃止前の設計記録である。これらの分類は共有例外と利用側から撤去する。具体的な例外型・CODE・reasonと、例外型による回答生成の再試行判断は維持する。回答生成の内部失敗情報からfailure_kindを削除し、代替分類は追加しない。

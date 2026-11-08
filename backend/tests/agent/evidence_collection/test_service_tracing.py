@@ -25,7 +25,7 @@ from app.agent.evidence_collection.internal_search.query_embedding import (
 from app.agent.planning.contract import ResearchTask, SearchPlan
 from tests.agent.answering_runner._harness import fixed_scope
 from tests.agent.evidence_collection._failures import query_embedding_failed
-from tests.agent.runtime._fakes import ScriptedAgentRuntime
+from tests.agent.llm_call._fakes import ScriptedLlmCaller
 from tests.logfire._span_helpers import (
     domain_attr_keys,
     exception_event,
@@ -186,7 +186,7 @@ async def test_parallel_tasks_get_distinct_task_and_internal_search_spans(
     capfire: CaptureLogfire,
 ) -> None:
     external_search = ExternalSearchService(
-        query_runtime=ScriptedAgentRuntime(
+        query_caller=ScriptedLlmCaller(
             [
                 ExternalQueryDraft(queries=["q0"]),
                 ExternalQueryDraft(queries=["q1"]),

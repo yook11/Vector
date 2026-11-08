@@ -13,8 +13,8 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from app.agent import composition
 from app.agent.answering_runner import AnsweringPhases
 from app.agent.composition import (
-    activate_gemini_agent_runtime,
     activate_gemini_client,
+    activate_gemini_llm_caller,
     ensure_agent_worker_configured,
 )
 from app.agent.output import AgentOutputDefect, AgentOutputInvalidError
@@ -86,8 +86,8 @@ class _FakeGeminiClientFactory:
         return _FakeGeminiAsyncClientContext(client=client, lifecycle=self._lifecycle)
 
 
-class _FakeGeminiRuntime:
-    constructed: list[_FakeGeminiRuntime] = []
+class _FakeGeminiCaller:
+    constructed: list[_FakeGeminiCaller] = []
     construction_error: BaseException | None = None
     outcome: object | BaseException | None = None
     calls: list[tuple[object, object, int]] = []
@@ -110,26 +110,26 @@ class _FakeGeminiRuntime:
         if isinstance(outcome, BaseException):
             raise outcome
         if outcome is None:
-            raise AssertionError("fake runtime outcome is not configured")
+            raise AssertionError("fake caller outcome is not configured")
         return outcome
 
 
-def _install_gemini_runtime_fakes(
+def _install_gemini_caller_fakes(
     monkeypatch: pytest.MonkeyPatch,
     *,
     lifecycle: list[str],
     construction_error: BaseException | None = None,
 ) -> _FakeGeminiClientFactory:
-    from app.agent.runtime import gemini as runtime_gemini
+    from app.agent.llm_call import gemini as caller_gemini
     from app.ai_providers.gemini import client as gemini_client_module
 
     client_factory = _FakeGeminiClientFactory(lifecycle)
-    _FakeGeminiRuntime.constructed = []
-    _FakeGeminiRuntime.construction_error = construction_error
-    _FakeGeminiRuntime.outcome = None
-    _FakeGeminiRuntime.calls = []
+    _FakeGeminiCaller.constructed = []
+    _FakeGeminiCaller.construction_error = construction_error
+    _FakeGeminiCaller.outcome = None
+    _FakeGeminiCaller.calls = []
     monkeypatch.setattr(gemini_client_module, "open_gemini_client", client_factory)
-    monkeypatch.setattr(runtime_gemini, "GeminiAgentRuntime", _FakeGeminiRuntime)
+    monkeypatch.setattr(caller_gemini, "GeminiLlmCaller", _FakeGeminiCaller)
     monkeypatch.setattr(
         composition.settings,
         "gemini_api_key",
@@ -138,25 +138,25 @@ def _install_gemini_runtime_fakes(
     return client_factory
 
 
-async def test_gemini_agent_runtime_scope_is_lazy_and_opens_client_for_agent(
+async def test_gemini_llm_caller_scope_is_lazy_and_opens_client_for_agent(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     lifecycle: list[str] = []
-    client_factory = _install_gemini_runtime_fakes(
+    client_factory = _install_gemini_caller_fakes(
         monkeypatch,
         lifecycle=lifecycle,
     )
 
-    scope = activate_gemini_agent_runtime()
-    assert (client_factory.calls, lifecycle, _FakeGeminiRuntime.constructed) == (
+    scope = activate_gemini_llm_caller()
+    assert (client_factory.calls, lifecycle, _FakeGeminiCaller.constructed) == (
         [],
         [],
         [],
     )
 
-    async with scope as runtime:
-        assert runtime is _FakeGeminiRuntime.constructed[0]
-        assert runtime.client is client_factory.async_clients[0]
+    async with scope as caller:
+        assert caller is _FakeGeminiCaller.constructed[0]
+        assert caller.client is client_factory.async_clients[0]
         assert lifecycle == ["gemini 1 create", "gemini 1 enter"]
 
     assert lifecycle == ["gemini 1 create", "gemini 1 enter", "gemini 1 exit"]
@@ -213,7 +213,7 @@ async def test_gemini_client_scope_rejects_missing_key_before_opening(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     lifecycle: list[str] = []
-    client_factory = _install_gemini_runtime_fakes(monkeypatch, lifecycle=lifecycle)
+    client_factory = _install_gemini_caller_fakes(monkeypatch, lifecycle=lifecycle)
     monkeypatch.setattr(composition.settings, "gemini_api_key", SecretStr(""))
 
     with pytest.raises(AIProviderNotSentError) as raised:
@@ -235,63 +235,63 @@ async def test_gemini_client_scope_rejects_missing_key_before_opening(
             AgentOutputInvalidError(AgentOutputDefect.OUTPUT_SCHEMA_MISMATCH),
             id="output-error",
         ),
-        pytest.param(RuntimeError("runtime scope body failed"), id="body-error"),
+        pytest.param(RuntimeError("caller scope body failed"), id="body-error"),
         pytest.param(asyncio.CancelledError(), id="cancellation"),
     ],
 )
-async def test_gemini_agent_runtime_scope_closes_once_on_abnormal_body_exit(
+async def test_gemini_llm_caller_scope_closes_once_on_abnormal_body_exit(
     monkeypatch: pytest.MonkeyPatch,
     body_error: BaseException,
 ) -> None:
     lifecycle: list[str] = []
-    _install_gemini_runtime_fakes(monkeypatch, lifecycle=lifecycle)
+    _install_gemini_caller_fakes(monkeypatch, lifecycle=lifecycle)
 
     with pytest.raises(type(body_error)) as raised:
-        async with activate_gemini_agent_runtime():
+        async with activate_gemini_llm_caller():
             raise body_error
 
     assert raised.value is body_error
     assert lifecycle == ["gemini 1 create", "gemini 1 enter", "gemini 1 exit"]
 
 
-async def test_gemini_agent_runtime_scope_closes_when_runtime_construction_fails(
+async def test_gemini_llm_caller_scope_closes_when_caller_construction_fails(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     lifecycle: list[str] = []
-    error = RuntimeError("runtime construction failed")
-    _install_gemini_runtime_fakes(
+    error = RuntimeError("caller construction failed")
+    _install_gemini_caller_fakes(
         monkeypatch,
         lifecycle=lifecycle,
         construction_error=error,
     )
 
     with pytest.raises(RuntimeError) as raised:
-        async with activate_gemini_agent_runtime():
+        async with activate_gemini_llm_caller():
             raise AssertionError("scope body must not start")
 
     assert raised.value is error
     assert lifecycle == ["gemini 1 create", "gemini 1 enter", "gemini 1 exit"]
 
 
-async def test_gemini_agent_runtime_scope_creates_fresh_resources_each_time(
+async def test_gemini_llm_caller_scope_creates_fresh_resources_each_time(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     lifecycle: list[str] = []
-    client_factory = _install_gemini_runtime_fakes(
+    client_factory = _install_gemini_caller_fakes(
         monkeypatch,
         lifecycle=lifecycle,
     )
 
-    async with activate_gemini_agent_runtime() as first_runtime:
+    async with activate_gemini_llm_caller() as first_caller:
         pass
-    async with activate_gemini_agent_runtime() as second_runtime:
+    async with activate_gemini_llm_caller() as second_caller:
         pass
 
     assert len(client_factory.async_clients) == 2
     assert client_factory.async_clients[0] is not client_factory.async_clients[1]
-    assert first_runtime is not second_runtime
-    assert first_runtime.client is client_factory.async_clients[0]
-    assert second_runtime.client is client_factory.async_clients[1]
+    assert first_caller is not second_caller
+    assert first_caller.client is client_factory.async_clients[0]
+    assert second_caller.client is client_factory.async_clients[1]
     assert lifecycle == [
         "gemini 1 create",
         "gemini 1 enter",
@@ -308,7 +308,7 @@ class _KeywordObject:
         self.kwargs = kwargs
 
 
-def test_build_answering_phases_wires_planner_to_shared_gemini_runtime_scope(
+def test_build_answering_phases_wires_planner_to_shared_gemini_caller_scope(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from app.agent.answering.direct_answer import service as direct_service
@@ -385,13 +385,13 @@ def test_build_answering_phases_wires_planner_to_shared_gemini_runtime_scope(
     assert planner_calls == [
         {
             "agent": QUESTION_PLANNER_AGENT,
-            "runtime_scope_factory": activate_gemini_agent_runtime,
+            "llm_caller_scope_factory": activate_gemini_llm_caller,
         }
     ]
     assert direct_calls == [
         {
             "agent": DIRECT_ANSWER_AGENT,
-            "runtime_scope_factory": activate_gemini_agent_runtime,
+            "llm_text_streamer_scope_factory": activate_gemini_llm_caller,
             "repository": answer_start,
             "schedule_deadline_check": _schedule_deadline_check,
             "delta_reporter": None,
@@ -401,7 +401,7 @@ def test_build_answering_phases_wires_planner_to_shared_gemini_runtime_scope(
     assert evidence_calls == [
         {
             "agent": EVIDENCE_ANSWER_AGENT,
-            "runtime_scope_factory": activate_gemini_agent_runtime,
+            "llm_text_streamer_scope_factory": activate_gemini_llm_caller,
             "repository": answer_start,
             "schedule_deadline_check": _schedule_deadline_check,
             "delta_reporter": None,
@@ -560,8 +560,8 @@ def test_composition_injects_same_live_controls_into_both_answer_services(
     assert "continuation" not in captured["direct"]
     assert captured["direct"]["agent"] is DIRECT_ANSWER_AGENT
     assert (
-        captured["direct"]["runtime_scope_factory"]
-        is composition.activate_gemini_agent_runtime
+        captured["direct"]["llm_text_streamer_scope_factory"]
+        is composition.activate_gemini_llm_caller
     )
     assert captured["evidence"]["repository"] is answer_start
     assert captured["evidence"]["progress"] is progress
@@ -569,8 +569,8 @@ def test_composition_injects_same_live_controls_into_both_answer_services(
     assert "continuation" not in captured["evidence"]
     assert captured["evidence"]["agent"] is EVIDENCE_ANSWER_AGENT
     assert (
-        captured["evidence"]["runtime_scope_factory"]
-        is composition.activate_gemini_agent_runtime
+        captured["evidence"]["llm_text_streamer_scope_factory"]
+        is composition.activate_gemini_llm_caller
     )
     assert isinstance(phases, AnsweringPhases)
     assert phases.collector.internal_search is internal_search

@@ -84,14 +84,14 @@ def agent_provider_responses(monkeypatch):
     ]
 
     @asynccontextmanager
-    async def runtime_scope():
+    async def caller_scope():
         yield responses
 
     @asynccontextmanager
     async def search_scope():
-        yield ExternalSearchService(query_runtime=responses, search_gateway=responses)
+        yield ExternalSearchService(query_caller=responses, search_gateway=responses)
 
-    monkeypatch.setattr(composition, "activate_gemini_agent_runtime", runtime_scope)
+    monkeypatch.setattr(composition, "activate_gemini_llm_caller", caller_scope)
     monkeypatch.setattr(composition, "activate_external_search", search_scope)
     monkeypatch.setattr(gemini, "GeminiQueryEmbedder", lambda **_: responses)
     monkeypatch.setattr(composition.settings, "gemini_api_key", SecretStr("local-test"))

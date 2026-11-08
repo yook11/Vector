@@ -1,7 +1,7 @@
 """Run内の全taskの選択肢を1回で精査し、Run全体の根拠と不足を見極める工程。
 
 provider clientの構築は composition が所有する scope factory に閉じ、
-この工程は精査のあいだだけ Runtime を借りる。
+この工程は精査のあいだだけ LlmCaller を借りる。
 実装は client の作り方を知らない。
 """
 
@@ -30,7 +30,12 @@ from app.agent.evidence_review.selection import (
     EvidenceReviewerDraft,
     EvidenceReviewerResponse,
 )
-from app.agent.output import AgentOutputInvalidError, validate_output
+from app.agent.llm_call.caller import (
+    LlmCaller,
+    LlmCallerScopeFactory,
+    call_agent,
+)
+from app.agent.output import AgentOutputInvalidError
 from app.agent.recording.evidence_review import (
     EvidenceReviewFailed,
     EvidenceReviewRecorder,
@@ -38,10 +43,6 @@ from app.agent.recording.evidence_review import (
     logfire_evidence_review_recorder,
 )
 from app.agent.retry_prospect import is_resolvable_by_retry
-from app.agent.runtime.contract import (
-    AgentRuntime,
-    AgentRuntimeScopeFactory,
-)
 from app.ai_providers.errors import (
     CLASSIFIED_AI_PROVIDER_ERRORS,
     AIProviderError,
@@ -76,11 +77,11 @@ class EvidenceReviewService:
         self,
         *,
         agent: Agent[EvidenceReviewInput, EvidenceReviewerDraft],
-        runtime_scope_factory: AgentRuntimeScopeFactory,
+        llm_caller_scope_factory: LlmCallerScopeFactory,
         recorder: EvidenceReviewRecorder = logfire_evidence_review_recorder,
     ) -> None:
         self._agent = agent
-        self._runtime_scope_factory = runtime_scope_factory
+        self._llm_caller_scope_factory = llm_caller_scope_factory
         self._recorder = recorder
 
     async def review(
@@ -99,12 +100,12 @@ class EvidenceReviewService:
             timeout = asyncio.timeout(_REVIEW_TIMEOUT_SECONDS)
             try:
                 async with timeout:
-                    async with self._runtime_scope_factory() as reviewer_runtime:
+                    async with self._llm_caller_scope_factory() as reviewer_caller:
                         for attempt_number in range(1, _MAX_REVIEW_ATTEMPTS + 1):
                             try:
                                 reviewer_response = await _review_attempt(
                                     agent=self._agent,
-                                    reviewer_runtime=reviewer_runtime,
+                                    reviewer_caller=reviewer_caller,
                                     review_input=review_input,
                                     attempt_number=attempt_number,
                                 )
@@ -160,17 +161,17 @@ class EvidenceReviewService:
 async def _review_attempt(
     *,
     agent: Agent[EvidenceReviewInput, EvidenceReviewerDraft],
-    reviewer_runtime: AgentRuntime,
+    reviewer_caller: LlmCaller,
     review_input: EvidenceReviewInput,
     attempt_number: int,
 ) -> EvidenceReviewerResponse:
     try:
-        payload = await reviewer_runtime.call(
+        draft = await call_agent(
+            reviewer_caller,
             agent,
             review_input,
             attempt_number=attempt_number,
         )
-        draft = validate_output(agent, payload)
     except _REVIEW_SOURCE_ERRORS as cause:
         raise EvidenceReviewError(cause=cause) from cause
 

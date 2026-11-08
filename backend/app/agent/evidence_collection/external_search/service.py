@@ -35,7 +35,8 @@ from app.agent.evidence_collection.external_search.time_filter import (
     ExternalSearchDateFilterResolutionError,
     resolve_external_search_date_filter,
 )
-from app.agent.output import AgentOutputInvalidError, validate_output
+from app.agent.llm_call.caller import LlmCaller, call_agent
+from app.agent.output import AgentOutputInvalidError
 from app.agent.planning.contract import ExternalResearchTask, TargetTimeWindow
 from app.agent.recording.external_search import (
     ExternalSearchFailed,
@@ -44,7 +45,6 @@ from app.agent.recording.external_search import (
     ExternalSearchSucceeded,
     logfire_external_search_recorder,
 )
-from app.agent.runtime.contract import AgentRuntime
 from app.ai_providers.errors import AIProviderError
 
 __all__ = ["ExternalSearchService"]
@@ -62,7 +62,7 @@ class _PublicationFilterMemo:
 class ExternalSearchService:
     """External search port (`ExternalSearch`) の実装。"""
 
-    query_runtime: AgentRuntime
+    query_caller: LlmCaller
     search_gateway: ExternalSearchGateway
     _filter_memo: _PublicationFilterMemo = field(default_factory=_PublicationFilterMemo)
     _resolve_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
@@ -145,15 +145,15 @@ class ExternalSearchService:
             target_time_window=target_time_window,
         )
         try:
-            payload = await asyncio.wait_for(
-                self.query_runtime.call(
+            draft = await asyncio.wait_for(
+                call_agent(
+                    self.query_caller,
                     EXTERNAL_QUERY_AGENT,
                     query_input,
                     attempt_number=1,
                 ),
                 timeout=QUERY_GENERATE_TIMEOUT_SECONDS,
             )
-            draft = validate_output(EXTERNAL_QUERY_AGENT, payload)
         except (AgentOutputInvalidError, AIProviderError, TimeoutError) as cause:
             raise ExternalQueryGenerationError(cause=cause) from cause
         return clean_generated_queries(draft.queries)

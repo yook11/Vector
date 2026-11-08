@@ -2441,7 +2441,7 @@ async def test_answering_runner_setup_error_marks_generation_unavailable(
                     }
                 ],
             },
-            id="runtime-not-configured",
+            id="caller-not-configured",
         ),
         pytest.param(
             AnsweringRunError(

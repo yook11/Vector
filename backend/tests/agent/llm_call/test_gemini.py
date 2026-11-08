@@ -1,4 +1,4 @@
-"""GeminiAgentRuntime の one-attempt behavior tests."""
+"""GeminiLlmCaller の one-attempt behavior tests."""
 
 from __future__ import annotations
 
@@ -10,12 +10,12 @@ import httpx2
 import pytest
 from google.genai import errors as genai_errors
 
-from app.agent.runtime.gemini import GeminiAgentRuntime
+from app.agent.llm_call.gemini import GeminiLlmCaller
 from app.ai_providers.errors import (
     AIProviderResponseError,
     AIProviderTransportError,
 )
-from tests.agent.runtime._helpers import (
+from tests.agent.llm_call._helpers import (
     FakeGeminiClient,
     FakeResponse,
     make_agent,
@@ -27,11 +27,11 @@ from tests.cloudwatch.records import metric_records
 async def test_call_uses_provider_once_and_returns_the_json_object() -> None:
     """一試行が一度だけ provider を呼び、返った JSON object をそのまま返す。"""
     client = FakeGeminiClient([success_response(result="validated")])
-    runtime = GeminiAgentRuntime(client=client)
+    caller = GeminiLlmCaller(client=client)
 
-    output = await runtime.call(make_agent(), "typed input", attempt_number=1)
+    output = await caller.call(make_agent(), "typed input", attempt_number=1)
 
-    assert output == {"result": "validated", "tags": ["runtime"]}
+    assert output == {"result": "validated", "tags": ["caller"]}
     assert client.models.generate_content.await_count == 1
     client.close.assert_not_awaited()
     client.aclose.assert_not_awaited()
@@ -41,9 +41,9 @@ async def test_call_does_not_validate_the_declared_output_type() -> None:
     """宣言された出力の型に合わない JSON object も、検証せずにそのまま返す。"""
     payload = {"result": 1, "unknown": "kept"}
     client = FakeGeminiClient([FakeResponse(text=json.dumps(payload))])
-    runtime = GeminiAgentRuntime(client=client)
+    caller = GeminiLlmCaller(client=client)
 
-    output = await runtime.call(make_agent(), "typed input", attempt_number=1)
+    output = await caller.call(make_agent(), "typed input", attempt_number=1)
 
     assert output == payload
 
@@ -51,7 +51,7 @@ async def test_call_does_not_validate_the_declared_output_type() -> None:
 async def test_request_separates_instructions_contents_and_thaws_schema() -> None:
     """指示・入力・schema を provider request で独立して保持する。"""
     client = FakeGeminiClient([success_response()])
-    runtime = GeminiAgentRuntime(client=client)
+    caller = GeminiLlmCaller(client=client)
     instructions = "SYSTEM_INSTRUCTIONS_SENTINEL_77ca"
     contents = "TASK_CONTENTS_SENTINEL_158b"
     agent = make_agent(
@@ -61,7 +61,7 @@ async def test_request_separates_instructions_contents_and_thaws_schema() -> Non
         max_output_tokens=456,
     )
 
-    await runtime.call(agent, object(), attempt_number=1)
+    await caller.call(agent, object(), attempt_number=1)
 
     kwargs = client.models.generate_content.await_args.kwargs
     config = kwargs["config"]
@@ -80,15 +80,15 @@ async def test_request_separates_instructions_contents_and_thaws_schema() -> Non
     assert isinstance(response_schema["properties"]["tags"]["items"], dict)
 
 
-async def test_same_runtime_does_not_carry_agent_or_input_state_between_calls() -> None:
-    """同一 runtime の連続呼出しで agent と入力の状態を持ち越さない。"""
+async def test_same_caller_does_not_carry_agent_or_input_state_between_calls() -> None:
+    """同一 caller の連続呼出しで agent と入力の状態を持ち越さない。"""
     client = FakeGeminiClient(
         [
             success_response(result="first", tags=["one"]),
             success_response(result="second", tags=["two"]),
         ]
     )
-    runtime = GeminiAgentRuntime(client=client)
+    caller = GeminiLlmCaller(client=client)
     first_agent = make_agent(
         name="first_agent",
         instructions="FIRST_INSTRUCTIONS_SENTINEL",
@@ -106,8 +106,8 @@ async def test_same_runtime_does_not_carry_agent_or_input_state_between_calls() 
         max_output_tokens=222,
     )
 
-    first_output = await runtime.call(first_agent, "first input", attempt_number=1)
-    second_output = await runtime.call(second_agent, "second input", attempt_number=2)
+    first_output = await caller.call(first_agent, "first input", attempt_number=1)
+    second_output = await caller.call(second_agent, "second input", attempt_number=2)
 
     first_call, second_call = client.models.generate_content.await_args_list
     assert first_output["result"] == "first"
@@ -130,10 +130,10 @@ async def test_known_gemini_failure_uses_existing_error_translation() -> None:
     """既知の Gemini 障害を既存のアプリケーション例外へ翻訳する。"""
     error = httpx2.ReadTimeout("PROVIDER_SENTINEL_TIMEOUT_79ab")
     client = FakeGeminiClient([error])
-    runtime = GeminiAgentRuntime(client=client)
+    caller = GeminiLlmCaller(client=client)
 
     with pytest.raises(AIProviderTransportError) as exc_info:
-        await runtime.call(make_agent(), "typed input", attempt_number=1)
+        await caller.call(make_agent(), "typed input", attempt_number=1)
 
     assert exc_info.value.__cause__ is error
     assert "PROVIDER_SENTINEL_TIMEOUT_79ab" not in str(exc_info.value)
@@ -146,10 +146,10 @@ async def test_unclassified_exception_propagates_with_identity() -> None:
     """未分類例外の同一性を失わずに伝播させる。"""
     error = RuntimeError("UNCLASSIFIED_EXCEPTION_SENTINEL_2c5e")
     client = FakeGeminiClient([error])
-    runtime = GeminiAgentRuntime(client=client)
+    caller = GeminiLlmCaller(client=client)
 
     with pytest.raises(RuntimeError) as exc_info:
-        await runtime.call(make_agent(), "typed input", attempt_number=1)
+        await caller.call(make_agent(), "typed input", attempt_number=1)
 
     assert exc_info.value is error
     assert client.models.generate_content.await_count == 1
@@ -163,10 +163,10 @@ async def test_non_positive_attempt_number_is_rejected_before_provider_call(
 ) -> None:
     """非正の試行番号では provider 呼出し前に拒否する。"""
     client = FakeGeminiClient([success_response()])
-    runtime = GeminiAgentRuntime(client=client)
+    caller = GeminiLlmCaller(client=client)
 
     with pytest.raises(ValueError):
-        await runtime.call(
+        await caller.call(
             make_agent(),
             "typed input",
             attempt_number=attempt_number,
@@ -188,10 +188,10 @@ async def test_renderer_failure_propagates_without_provider_call() -> None:
             input_renderer=lambda _input: (_ for _ in ()).throw(error),
         ),
     )
-    runtime = GeminiAgentRuntime(client=client)
+    caller = GeminiLlmCaller(client=client)
 
     with pytest.raises(RuntimeError) as exc_info:
-        await runtime.call(agent, "typed input", attempt_number=1)
+        await caller.call(agent, "typed input", attempt_number=1)
 
     assert exc_info.value is error
     client.models.generate_content.assert_not_awaited()
@@ -208,10 +208,10 @@ async def test_config_construction_failure_happens_before_provider_call() -> Non
             max_output_tokens=321,
         ),
     )
-    runtime = GeminiAgentRuntime(client=client)
+    caller = GeminiLlmCaller(client=client)
 
     with pytest.raises((TypeError, ValueError)):
-        await runtime.call(agent, "typed input", attempt_number=1)
+        await caller.call(agent, "typed input", attempt_number=1)
 
     client.models.generate_content.assert_not_awaited()
 
@@ -254,10 +254,10 @@ async def test_call_quota_exhausted_sdk_error_emits_ai_provider_exhausted(
 ) -> None:
     """quota 超過 (usage_limit_exhausted 翻訳) は provider=gemini で emit する。"""
     client = FakeGeminiClient([_quota_exhausted_sdk_error()])
-    runtime = GeminiAgentRuntime(client=client)
+    caller = GeminiLlmCaller(client=client)
 
     with pytest.raises(AIProviderResponseError):
-        await runtime.call(make_agent(), "typed input", attempt_number=1)
+        await caller.call(make_agent(), "typed input", attempt_number=1)
 
     records = metric_records(capsys.readouterr().out, _EXHAUSTED_METRIC)
     assert len(records) == 1
@@ -270,9 +270,9 @@ async def test_call_plain_rate_limited_sdk_error_does_not_emit(
 ) -> None:
     """一時的 rate limit (時間経過で回復) は枯渇ではないため emit しない。"""
     client = FakeGeminiClient([_rate_limited_sdk_error()])
-    runtime = GeminiAgentRuntime(client=client)
+    caller = GeminiLlmCaller(client=client)
 
     with pytest.raises(AIProviderResponseError):
-        await runtime.call(make_agent(), "typed input", attempt_number=1)
+        await caller.call(make_agent(), "typed input", attempt_number=1)
 
     assert metric_records(capsys.readouterr().out, _EXHAUSTED_METRIC) == []

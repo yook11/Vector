@@ -37,7 +37,7 @@ from tests.agent.answering_runner._harness import (
     fixed_scope,
     run_identity,
 )
-from tests.agent.runtime._fakes import runtime_payload
+from tests.agent.llm_call._fakes import caller_payload
 
 RUN_ID = UUID("019bd239-1ed4-7fbb-a336-04fe3c197650")
 AS_OF = datetime(2026, 7, 19, 9, 30, tzinfo=UTC)
@@ -81,12 +81,12 @@ def _search_plan() -> SearchPlan:
     )
 
 
-class _EmptyExternalQueryRuntime:
+class _EmptyExternalQueryCaller:
     async def call(
         self, agent: object, input: object, *, attempt_number: int
     ) -> dict[str, Any]:
         del agent, input, attempt_number
-        return runtime_payload(ExternalQueryDraft(queries=[]))
+        return caller_payload(ExternalQueryDraft(queries=[]))
 
 
 class _EmptyExternalSearchScope:
@@ -97,7 +97,7 @@ class _EmptyExternalSearchScope:
     async def __call__(self):
         self._timeline.append("external_search_scope")
         yield ExternalSearchService(
-            query_runtime=_EmptyExternalQueryRuntime(),  # type: ignore[arg-type]
+            query_caller=_EmptyExternalQueryCaller(),  # type: ignore[arg-type]
             search_gateway=object(),  # type: ignore[arg-type]
         )
 
@@ -167,7 +167,7 @@ def _runner(
             evidence_answerer=evidence_answerer,
             reviewer=EvidenceReviewService(
                 agent=EVIDENCE_REVIEWER_AGENT,
-                runtime_scope_factory=fixed_scope(object()),
+                llm_caller_scope_factory=fixed_scope(object()),
             ),
             organizer=PassThroughOrganizer(),
         )

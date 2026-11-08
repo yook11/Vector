@@ -17,13 +17,13 @@ from google.genai.client import AsyncClient
 from logfire.testing import CaptureLogfire
 from opentelemetry.trace import StatusCode
 
+from app.agent.llm_call.caller import LlmCaller
+from app.agent.llm_call.gemini import GeminiLlmCaller
 from app.agent.planning.agent import QUESTION_PLANNER_AGENT
 from app.agent.planning.contract import PlanningInput
 from app.agent.planning.service import QuestionPlanningService
-from app.agent.runtime.contract import AgentRuntime
-from app.agent.runtime.gemini import GeminiAgentRuntime
 from app.logfire.redaction import install_exception_redaction
-from tests.agent.runtime._helpers import FakeGeminiClient, FakeResponse
+from tests.agent.llm_call._helpers import FakeGeminiClient, FakeResponse
 from tests.logfire._span_helpers import (
     domain_attr_keys,
     exception_event,
@@ -66,15 +66,15 @@ def _successful_response() -> FakeResponse:
 
 
 def _service(client: FakeGeminiClient) -> QuestionPlanningService:
-    runtime = GeminiAgentRuntime(client=cast(AsyncClient, client))
+    caller = GeminiLlmCaller(client=cast(AsyncClient, client))
 
     @asynccontextmanager
-    async def runtime_scope() -> AsyncIterator[AgentRuntime]:
-        yield runtime
+    async def caller_scope() -> AsyncIterator[LlmCaller]:
+        yield caller
 
     return QuestionPlanningService(
         agent=QUESTION_PLANNER_AGENT,
-        runtime_scope_factory=runtime_scope,
+        llm_caller_scope_factory=caller_scope,
     )
 
 

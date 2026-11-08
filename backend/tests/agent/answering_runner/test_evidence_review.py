@@ -5,7 +5,7 @@ backend/specs/evidence-review-run-scope-slice.md の Invariants / Test contract 
 
 新しいグループ化option入力・Run全体の通し番号indexは、spec上の field名が
 固定されていないため、この正本テストは以下の安定境界だけを覗く:
-- reviewer呼び出し回数と入力(`ScriptedAgentRuntime.calls`)
+- reviewer呼び出し回数と入力(`ScriptedLlmCaller.calls`)
 - 入力の可視文字列化(`EVIDENCE_REVIEWER_AGENT.prompt.input_renderer`。
   production未変更のAgent宣言契約が持つ安定した拡張点)
 - reviewerの出力型(`EvidenceReviewerDraft`。仕様上変更されない応答契約)
@@ -88,7 +88,7 @@ from tests.agent.answering_runner._harness import (
     review_draft as _draft,
 )
 from tests.agent.evidence_collection._failures import article_search_failed
-from tests.agent.runtime._fakes import ScriptedAgentRuntime
+from tests.agent.llm_call._fakes import ScriptedLlmCaller
 from tests.logfire._span_helpers import exception_event, one_span_named, spans_named
 
 _EMPTY_DRAFT = EvidenceReviewerDraft.model_validate({"selections": [], "missing": []})
@@ -166,8 +166,8 @@ class _FakeInternalSearch:
 def _runner(
     *,
     plan: SearchPlan,
-    query_runtime: object,
-    reviewer_runtime: object,
+    query_caller: object,
+    reviewer_caller: object,
     external_gateway: object,
     internal_search: object,
     events: object | None = None,
@@ -177,7 +177,7 @@ def _runner(
     answerer = answerer or _EvidenceAnswerer()
     factory = _Factory(
         ExternalSearchService(
-            query_runtime=query_runtime,  # type: ignore[arg-type]
+            query_caller=query_caller,  # type: ignore[arg-type]
             search_gateway=external_gateway,  # type: ignore[arg-type]
         )
     )
@@ -190,7 +190,7 @@ def _runner(
         ),
         reviewer=EvidenceReviewService(
             agent=EVIDENCE_REVIEWER_AGENT,
-            runtime_scope_factory=fixed_scope(reviewer_runtime),
+            llm_caller_scope_factory=fixed_scope(reviewer_caller),
         ),
         direct_answerer=_UnreachableDirectAnswerer(),
         evidence_answerer=answerer,
@@ -237,21 +237,21 @@ async def test_review_runs_once_for_a_three_task_search_plan() -> None:
             ],
         }
     )
-    reviewer_runtime = ScriptedAgentRuntime(
+    reviewer_caller = ScriptedLlmCaller(
         [_draft([{"option_index": 0, "claim": "c", "why_selected": "w"}])]
     )
     runner, _answerer, _factory = _runner(
         plan=_plan(*tasks),
-        query_runtime=ScriptedAgentRuntime([_query_draft([]) for _ in tasks]),
-        reviewer_runtime=reviewer_runtime,
+        query_caller=ScriptedLlmCaller([_query_draft([]) for _ in tasks]),
+        reviewer_caller=reviewer_caller,
         external_gateway=_FakeExternalSearchGateway(),
         internal_search=internal_search,
     )
 
     await _run(runner)
 
-    assert len(reviewer_runtime.calls) == 1
-    reviewer_runtime.assert_all_outcomes_consumed()
+    assert len(reviewer_caller.calls) == 1
+    reviewer_caller.assert_all_outcomes_consumed()
 
 
 @pytest.mark.asyncio
@@ -279,13 +279,13 @@ async def test_review_does_not_start_before_every_tasks_collection_completes() -
         _task("goal-B", ["query-b"]),
         _task("goal-C", ["query-c"]),
     ]
-    reviewer_runtime = ScriptedAgentRuntime(
+    reviewer_caller = ScriptedLlmCaller(
         [_draft([{"option_index": 0, "claim": "c", "why_selected": "w"}])]
     )
     runner, _answerer, _factory = _runner(
         plan=_plan(*tasks),
-        query_runtime=ScriptedAgentRuntime([_query_draft([]) for _ in tasks]),
-        reviewer_runtime=reviewer_runtime,
+        query_caller=ScriptedLlmCaller([_query_draft([]) for _ in tasks]),
+        reviewer_caller=reviewer_caller,
         external_gateway=_FakeExternalSearchGateway(),
         internal_search=internal_search,
     )
@@ -294,12 +294,12 @@ async def test_review_does_not_start_before_every_tasks_collection_completes() -
     try:
         await asyncio.wait_for(started_a.wait(), timeout=1.0)
         await asyncio.sleep(0.05)
-        assert reviewer_runtime.calls == []
+        assert reviewer_caller.calls == []
     finally:
         gate_a.set()
         await asyncio.wait_for(running, timeout=1.0)
 
-    assert len(reviewer_runtime.calls) == 1
+    assert len(reviewer_caller.calls) == 1
 
 
 @pytest.mark.asyncio
@@ -313,12 +313,12 @@ async def test_review_is_skipped_when_every_task_has_no_hits() -> None:
         _task("goal-B", ["query-b"]),
         _task("goal-C", ["query-c"]),
     ]
-    reviewer_runtime = ScriptedAgentRuntime([])
+    reviewer_caller = ScriptedLlmCaller([])
     events = _Events()
     runner, answerer, _factory = _runner(
         plan=_plan(*tasks),
-        query_runtime=ScriptedAgentRuntime([_query_draft([]) for _ in tasks]),
-        reviewer_runtime=reviewer_runtime,
+        query_caller=ScriptedLlmCaller([_query_draft([]) for _ in tasks]),
+        reviewer_caller=reviewer_caller,
         external_gateway=_FakeExternalSearchGateway(),
         internal_search=_FakeInternalSearch(),
         events=events,
@@ -329,7 +329,7 @@ async def test_review_is_skipped_when_every_task_has_no_hits() -> None:
     selected = [
         event for event in events.events if event.type == "evidence_review.selected"
     ]
-    assert reviewer_runtime.calls == []
+    assert reviewer_caller.calls == []
     assert answerer.calls == [[]]
     assert result.final_output.status == "insufficient"
     assert selected == []
@@ -356,7 +356,7 @@ async def test_review_still_runs_using_the_hits_that_survive_a_failed_task() -> 
     )
     # task-Bの収集が失敗しヒットゼロになる分、統合index空間から外れる
     # (仮定: task昇順で結合。task-A→0、task-C→1)。
-    reviewer_runtime = ScriptedAgentRuntime(
+    reviewer_caller = ScriptedLlmCaller(
         [
             _draft(
                 [
@@ -368,15 +368,15 @@ async def test_review_still_runs_using_the_hits_that_survive_a_failed_task() -> 
     )
     runner, answerer, _factory = _runner(
         plan=_plan(*tasks),
-        query_runtime=ScriptedAgentRuntime([_query_draft([]) for _ in tasks]),
-        reviewer_runtime=reviewer_runtime,
+        query_caller=ScriptedLlmCaller([_query_draft([]) for _ in tasks]),
+        reviewer_caller=reviewer_caller,
         external_gateway=_FakeExternalSearchGateway(),
         internal_search=internal_search,
     )
 
     await _run(runner)
 
-    assert len(reviewer_runtime.calls) == 1
+    assert len(reviewer_caller.calls) == 1
     titles = {item.source.title for item in answerer.calls[0]}
     assert titles == {"A-hit", "C-hit"}
 
@@ -391,20 +391,20 @@ async def test_task_with_only_internal_hits_still_reaches_review() -> None:
             ]
         }
     )
-    reviewer_runtime = ScriptedAgentRuntime(
+    reviewer_caller = ScriptedLlmCaller(
         [_draft([{"option_index": 0, "claim": "claim", "why_selected": "w"}])]
     )
     runner, answerer, _factory = _runner(
         plan=_plan(_task("internal only task", ["query-a"])),
-        query_runtime=ScriptedAgentRuntime([_query_draft([])]),
-        reviewer_runtime=reviewer_runtime,
+        query_caller=ScriptedLlmCaller([_query_draft([])]),
+        reviewer_caller=reviewer_caller,
         external_gateway=_FakeExternalSearchGateway(),
         internal_search=internal_search,
     )
 
     result = await _run(runner)
 
-    assert len(reviewer_runtime.calls) == 1
+    assert len(reviewer_caller.calls) == 1
     assert [item.source.title for item in answerer.calls[0]] == ["internal only"]
     assert result.final_output.status == "answered"
 
@@ -412,13 +412,13 @@ async def test_task_with_only_internal_hits_still_reaches_review() -> None:
 @pytest.mark.asyncio
 async def test_task_with_only_external_hits_still_reaches_review() -> None:
     """保証するテスト条件 7(外部のみ)。内部失敗でも精査へ進み外部根拠を返す。"""
-    reviewer_runtime = ScriptedAgentRuntime(
+    reviewer_caller = ScriptedLlmCaller(
         [_draft([{"option_index": 0, "claim": "claim", "why_selected": "w"}])]
     )
     runner, answerer, _factory = _runner(
         plan=_plan(_task("external only task", ["query-a"])),
-        query_runtime=ScriptedAgentRuntime([_query_draft(["q"])]),
-        reviewer_runtime=reviewer_runtime,
+        query_caller=ScriptedLlmCaller([_query_draft(["q"])]),
+        reviewer_caller=reviewer_caller,
         external_gateway=_FakeExternalSearchGateway(
             {"q": [_external_hit("https://example.com/only")]}
         ),
@@ -429,7 +429,7 @@ async def test_task_with_only_external_hits_still_reaches_review() -> None:
 
     result = await _run(runner)
 
-    assert len(reviewer_runtime.calls) == 1
+    assert len(reviewer_caller.calls) == 1
     assert [item.source.title for item in answerer.calls[0]] == ["only"]
     # D4-S2: run単位のcollection_failuresは廃止された。このtaskはreview=
     # succeeded(外部ヒットを精査して採用)で完了扱いになるため、内部収集が
@@ -449,7 +449,7 @@ async def test_time_filter_failure_skips_external_search_scope_but_still_reviews
             ]
         }
     )
-    reviewer_runtime = ScriptedAgentRuntime(
+    reviewer_caller = ScriptedLlmCaller(
         [_draft([{"option_index": 0, "claim": "claim", "why_selected": "w"}])]
     )
     runner, answerer, factory = _runner(
@@ -457,8 +457,8 @@ async def test_time_filter_failure_skips_external_search_scope_but_still_reviews
             _task("closed by time filter", ["query-a"]),
             target_time_window=TargetTimeWindow(kind="unsupported_explicit_window"),
         ),
-        query_runtime=ScriptedAgentRuntime([_query_draft([])]),
-        reviewer_runtime=reviewer_runtime,
+        query_caller=ScriptedLlmCaller([_query_draft([])]),
+        reviewer_caller=reviewer_caller,
         external_gateway=_FakeExternalSearchGateway(),
         internal_search=internal_search,
     )
@@ -466,7 +466,7 @@ async def test_time_filter_failure_skips_external_search_scope_but_still_reviews
     await _run(runner)
 
     assert len(factory.scopes) == 1
-    assert len(reviewer_runtime.calls) == 1
+    assert len(reviewer_caller.calls) == 1
     assert [item.source.title for item in answerer.calls[0]] == ["internal hit"]
 
 
@@ -498,11 +498,11 @@ async def test_single_review_call_input_includes_every_tasks_research_goal() -> 
             ],
         }
     )
-    reviewer_runtime = ScriptedAgentRuntime([_EMPTY_DRAFT])
+    reviewer_caller = ScriptedLlmCaller([_EMPTY_DRAFT])
     runner, _answerer, _factory = _runner(
         plan=_plan(*tasks),
-        query_runtime=ScriptedAgentRuntime([_query_draft([]) for _ in tasks]),
-        reviewer_runtime=reviewer_runtime,
+        query_caller=ScriptedLlmCaller([_query_draft([]) for _ in tasks]),
+        reviewer_caller=reviewer_caller,
         external_gateway=_FakeExternalSearchGateway(),
         internal_search=internal_search,
     )
@@ -510,7 +510,7 @@ async def test_single_review_call_input_includes_every_tasks_research_goal() -> 
     await _run(runner)
 
     rendered = EVIDENCE_REVIEWER_AGENT.prompt.input_renderer(
-        reviewer_runtime.calls[0].input
+        reviewer_caller.calls[0].input
     )
     assert all(
         goal in rendered
@@ -545,11 +545,11 @@ async def test_review_input_never_carries_answer_requirements() -> None:
             ],
         }
     )
-    reviewer_runtime = ScriptedAgentRuntime([_EMPTY_DRAFT])
+    reviewer_caller = ScriptedLlmCaller([_EMPTY_DRAFT])
     runner, _answerer, _factory = _runner(
         plan=_plan(*tasks),
-        query_runtime=ScriptedAgentRuntime([_query_draft([]) for _ in tasks]),
-        reviewer_runtime=reviewer_runtime,
+        query_caller=ScriptedLlmCaller([_query_draft([]) for _ in tasks]),
+        reviewer_caller=reviewer_caller,
         external_gateway=_FakeExternalSearchGateway(),
         internal_search=internal_search,
         answer_requirements=(marker,),
@@ -557,10 +557,10 @@ async def test_review_input_never_carries_answer_requirements() -> None:
 
     await _run(runner)
 
-    assert not hasattr(reviewer_runtime.calls[0].input, "answer_requirements")
+    assert not hasattr(reviewer_caller.calls[0].input, "answer_requirements")
     combined = "\n".join(
         EVIDENCE_REVIEWER_AGENT.prompt.input_renderer(call.input)
-        for call in reviewer_runtime.calls
+        for call in reviewer_caller.calls
     )
     assert marker not in combined
 
@@ -575,13 +575,11 @@ async def test_review_input_excludes_external_urls_across_every_task() -> None:
     tasks = [_task("goal-A", ["query-a"]), _task("goal-B", ["query-b"])]
     secret_url_a = "https://example.com/task-a-secret-7f21"
     secret_url_b = "https://example.com/task-b-secret-8c92"
-    reviewer_runtime = ScriptedAgentRuntime([_EMPTY_DRAFT])
+    reviewer_caller = ScriptedLlmCaller([_EMPTY_DRAFT])
     runner, _answerer, _factory = _runner(
         plan=_plan(*tasks),
-        query_runtime=ScriptedAgentRuntime(
-            [_query_draft(["qa"]), _query_draft(["qb"])]
-        ),
-        reviewer_runtime=reviewer_runtime,
+        query_caller=ScriptedLlmCaller([_query_draft(["qa"]), _query_draft(["qb"])]),
+        reviewer_caller=reviewer_caller,
         external_gateway=_FakeExternalSearchGateway(
             {
                 "qa": [_external_hit(secret_url_a, title="task-a headline")],
@@ -595,7 +593,7 @@ async def test_review_input_excludes_external_urls_across_every_task() -> None:
 
     combined = "\n".join(
         EVIDENCE_REVIEWER_AGENT.prompt.input_renderer(call.input)
-        for call in reviewer_runtime.calls
+        for call in reviewer_caller.calls
     )
     assert secret_url_a not in combined
     assert secret_url_b not in combined
@@ -631,7 +629,7 @@ async def test_selection_restores_the_right_hit_and_task_across_groups() -> None
         }
     )
     # 統合index空間(仮定): task-A(0,1) task-B(2内部/3,4外部) task-C(5外部)。
-    reviewer_runtime = ScriptedAgentRuntime(
+    reviewer_caller = ScriptedLlmCaller(
         [
             _draft(
                 [
@@ -656,10 +654,10 @@ async def test_selection_restores_the_right_hit_and_task_across_groups() -> None
     )
     runner, answerer, _factory = _runner(
         plan=_plan(*tasks),
-        query_runtime=ScriptedAgentRuntime(
+        query_caller=ScriptedLlmCaller(
             [_query_draft([]), _query_draft(["qb"]), _query_draft(["qc"])]
         ),
-        reviewer_runtime=reviewer_runtime,
+        reviewer_caller=reviewer_caller,
         external_gateway=_FakeExternalSearchGateway(
             {
                 "qb": [
@@ -683,7 +681,7 @@ async def test_same_url_selected_from_two_tasks_keeps_each_task_evidence() -> No
     """同じURLでもtaskが異なる場合は両方のEvidenceをAnswererへ渡す。"""
     shared_url = "https://example.com/shared-story"
     tasks = [_task("goal-A", ["query-a"]), _task("goal-B", ["query-b"])]
-    reviewer_runtime = ScriptedAgentRuntime(
+    reviewer_caller = ScriptedLlmCaller(
         [
             _draft(
                 [
@@ -695,10 +693,8 @@ async def test_same_url_selected_from_two_tasks_keeps_each_task_evidence() -> No
     )
     runner, answerer, _factory = _runner(
         plan=_plan(*tasks),
-        query_runtime=ScriptedAgentRuntime(
-            [_query_draft(["qa"]), _query_draft(["qb"])]
-        ),
-        reviewer_runtime=reviewer_runtime,
+        query_caller=ScriptedLlmCaller([_query_draft(["qa"]), _query_draft(["qb"])]),
+        reviewer_caller=reviewer_caller,
         external_gateway=_FakeExternalSearchGateway(
             {
                 "qa": [_external_hit(shared_url, title="task0 headline")],
@@ -738,7 +734,7 @@ async def test_same_internal_article_from_two_tasks_keeps_each() -> None:
         }
     )
     # 統合index空間: task昇順で結合し、task0の唯一の選択肢が0、task1が1。
-    reviewer_runtime = ScriptedAgentRuntime(
+    reviewer_caller = ScriptedLlmCaller(
         [
             _draft(
                 [
@@ -754,8 +750,8 @@ async def test_same_internal_article_from_two_tasks_keeps_each() -> None:
     )
     runner, answerer, _factory = _runner(
         plan=_plan(_task("first task", ["query-a"]), _task("second task", ["query-b"])),
-        query_runtime=ScriptedAgentRuntime([_query_draft([]), _query_draft([])]),
-        reviewer_runtime=reviewer_runtime,
+        query_caller=ScriptedLlmCaller([_query_draft([]), _query_draft([])]),
+        reviewer_caller=reviewer_caller,
         external_gateway=_FakeExternalSearchGateway(),
         internal_search=internal_search,
     )
@@ -795,11 +791,11 @@ async def test_missing_flows_as_a_single_run_level_list_not_merged_per_task() ->
         missing=["run全体の不足X"],
     )
     poison_draft = _draft([], missing=["taskごとに混入してはいけない不足Y"])
-    reviewer_runtime = ScriptedAgentRuntime([intended_draft, poison_draft])
+    reviewer_caller = ScriptedLlmCaller([intended_draft, poison_draft])
     runner, answerer, _factory = _runner(
         plan=_plan(*tasks),
-        query_runtime=ScriptedAgentRuntime([_query_draft([]) for _ in tasks]),
-        reviewer_runtime=reviewer_runtime,
+        query_caller=ScriptedLlmCaller([_query_draft([]) for _ in tasks]),
+        reviewer_caller=reviewer_caller,
         external_gateway=_FakeExternalSearchGateway(),
         internal_search=internal_search,
     )
@@ -835,7 +831,7 @@ async def test_incomplete_task_adds_the_fixed_phrase_exactly_once() -> None:
         errors_by_query={"query-c": article_search_failed()},
     )
     # task-Cは収集失敗でヒットゼロのため統合index空間から外れる(task-A→0、task-B→1)。
-    reviewer_runtime = ScriptedAgentRuntime(
+    reviewer_caller = ScriptedLlmCaller(
         [
             _draft(
                 [
@@ -847,8 +843,8 @@ async def test_incomplete_task_adds_the_fixed_phrase_exactly_once() -> None:
     )
     runner, _answerer, _factory = _runner(
         plan=_plan(*tasks),
-        query_runtime=ScriptedAgentRuntime([_query_draft([]) for _ in tasks]),
-        reviewer_runtime=reviewer_runtime,
+        query_caller=ScriptedLlmCaller([_query_draft([]) for _ in tasks]),
+        reviewer_caller=reviewer_caller,
         external_gateway=_FakeExternalSearchGateway(),
         internal_search=internal_search,
     )
@@ -891,12 +887,12 @@ async def test_reviewer_failure_after_two_attempts_empties_the_whole_run() -> No
         }
     )
     success_draft = _draft([{"option_index": 0, "claim": "claim", "why_selected": "w"}])
-    reviewer_runtime = ScriptedAgentRuntime([{}, {}, success_draft])
+    reviewer_caller = ScriptedLlmCaller([{}, {}, success_draft])
     events = _Events()
     runner, answerer, _factory = _runner(
         plan=_plan(*tasks),
-        query_runtime=ScriptedAgentRuntime([_query_draft([]) for _ in tasks]),
-        reviewer_runtime=reviewer_runtime,
+        query_caller=ScriptedLlmCaller([_query_draft([]) for _ in tasks]),
+        reviewer_caller=reviewer_caller,
         external_gateway=_FakeExternalSearchGateway(),
         internal_search=internal_search,
         events=events,
@@ -926,11 +922,11 @@ async def test_reviewer_failure_after_two_attempts_becomes_failed_evidence_run(
     tests/agent/evidence_review/test_service.py が正本。
     """
     captured = _capture_external_outcome(monkeypatch)
-    reviewer_runtime = ScriptedAgentRuntime([{}, {}])
+    reviewer_caller = ScriptedLlmCaller([{}, {}])
     runner, answerer, _factory = _runner(
         plan=_plan(_task("reviewer failure", ["query-a"])),
-        query_runtime=ScriptedAgentRuntime([_query_draft(["q"])]),
-        reviewer_runtime=reviewer_runtime,
+        query_caller=ScriptedLlmCaller([_query_draft(["q"])]),
+        reviewer_caller=reviewer_caller,
         external_gateway=_FakeExternalSearchGateway(
             {"q": [_external_hit("https://example.com/q")]}
         ),
@@ -958,8 +954,8 @@ async def test_failed_evidence_run_keeps_failure_code_out_of_answerer_and_in_spa
     answerer = _ReviewMissingCapturingAnswerer()
     runner, _answerer, _factory = _runner(
         plan=_plan(_task("reviewer failure", ["query-a"])),
-        query_runtime=ScriptedAgentRuntime([_query_draft(["q"])]),
-        reviewer_runtime=ScriptedAgentRuntime([{}, {}]),
+        query_caller=ScriptedLlmCaller([_query_draft(["q"])]),
+        reviewer_caller=ScriptedLlmCaller([{}, {}]),
         external_gateway=_FakeExternalSearchGateway(
             {"q": [_external_hit("https://example.com/q")]}
         ),
@@ -1018,7 +1014,7 @@ async def test_selected_event_fires_once_for_the_whole_run_without_task_index() 
     ]
     events = _Events()
     # 統合index空間(仮定): task-A(0) task-B(1)。task-Cはヒットゼロで現れない。
-    reviewer_runtime = ScriptedAgentRuntime(
+    reviewer_caller = ScriptedLlmCaller(
         [
             _draft(
                 [
@@ -1030,8 +1026,8 @@ async def test_selected_event_fires_once_for_the_whole_run_without_task_index() 
     )
     runner, _answerer, _factory = _runner(
         plan=_plan(*tasks),
-        query_runtime=ScriptedAgentRuntime([_query_draft([]) for _ in tasks]),
-        reviewer_runtime=reviewer_runtime,
+        query_caller=ScriptedLlmCaller([_query_draft([]) for _ in tasks]),
+        reviewer_caller=reviewer_caller,
         external_gateway=_FakeExternalSearchGateway(),
         internal_search=internal_search,
         events=events,
@@ -1060,7 +1056,7 @@ async def test_evidence_selected_event_count_is_internal_plus_external() -> None
             ]
         }
     )
-    reviewer_runtime = ScriptedAgentRuntime(
+    reviewer_caller = ScriptedLlmCaller(
         [
             _draft(
                 [
@@ -1080,8 +1076,8 @@ async def test_evidence_selected_event_count_is_internal_plus_external() -> None
     )
     runner, _answerer, _factory = _runner(
         plan=_plan(_task("combined evidence", ["query-a"])),
-        query_runtime=ScriptedAgentRuntime([_query_draft(["q1"])]),
-        reviewer_runtime=reviewer_runtime,
+        query_caller=ScriptedLlmCaller([_query_draft(["q1"])]),
+        reviewer_caller=reviewer_caller,
         external_gateway=_FakeExternalSearchGateway(
             {"q1": [_external_hit("https://example.com/q1")]}
         ),
@@ -1134,12 +1130,12 @@ async def test_review_spans_and_events_do_not_expose_untrusted_text(
             ],
         }
     )
-    reviewer_runtime = ScriptedAgentRuntime([_EMPTY_DRAFT])
+    reviewer_caller = ScriptedLlmCaller([_EMPTY_DRAFT])
     events = _Events()
     runner, _answerer, _factory = _runner(
         plan=_plan(*tasks),
-        query_runtime=ScriptedAgentRuntime([_query_draft([]) for _ in tasks]),
-        reviewer_runtime=reviewer_runtime,
+        query_caller=ScriptedLlmCaller([_query_draft([]) for _ in tasks]),
+        reviewer_caller=reviewer_caller,
         external_gateway=_FakeExternalSearchGateway(),
         internal_search=internal_search,
         events=events,

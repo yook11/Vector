@@ -177,21 +177,21 @@ class ExternalScopes:
     """1 Run分の外部資源。collectorとreviewerがそれぞれ別に借りる。"""
 
     external_search: ExternalSearch
-    reviewer_runtime: object
+    reviewer_caller: object
 
 
-def external_research_runtime(
+def external_research_caller(
     *,
-    query_runtime: object,
-    reviewer_runtime: object,
+    query_caller: object,
+    reviewer_caller: object,
     gateway: object,
 ) -> ExternalScopes:
     return ExternalScopes(
         external_search=ExternalSearchService(
-            query_runtime=query_runtime,  # type: ignore[arg-type]
+            query_caller=query_caller,  # type: ignore[arg-type]
             search_gateway=gateway,  # type: ignore[arg-type]
         ),
-        reviewer_runtime=reviewer_runtime,
+        reviewer_caller=reviewer_caller,
     )
 
 

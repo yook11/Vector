@@ -1,6 +1,6 @@
-"""GeminiAgentRuntime provider-attempt span 契約。
+"""GeminiLlmCaller provider-attempt span 契約。
 
-SDK I/O だけを fake にし、span 生成と結果分類は production Runtime を通す。
+SDK I/O だけを fake にし、span 生成と結果分類は production Caller を通す。
 """
 
 from __future__ import annotations
@@ -17,14 +17,14 @@ from logfire.testing import CaptureLogfire
 from opentelemetry.sdk.trace import ReadableSpan
 from opentelemetry.trace import SpanKind, StatusCode
 
-import app.agent.runtime.gemini as gemini_runtime_module
-from app.agent.runtime.gemini import GeminiAgentRuntime
+import app.agent.llm_call.gemini as gemini_caller_module
+from app.agent.llm_call.gemini import GeminiLlmCaller
 from app.ai_providers.errors import (
     AIProviderResultError,
     AIProviderTransportError,
 )
 from app.logfire.redaction import install_exception_redaction
-from tests.agent.runtime._helpers import (
+from tests.agent.llm_call._helpers import (
     FakeGeminiClient,
     FakeResponse,
     blocked_response,
@@ -32,7 +32,7 @@ from tests.agent.runtime._helpers import (
     make_agent,
     success_response,
 )
-from tests.agent.runtime._tracing_helpers import (
+from tests.agent.llm_call._tracing_helpers import (
     application_attribute_keys,
     exception_events,
     one_provider_attempt_span,
@@ -87,7 +87,7 @@ async def test_success_span_is_client_with_allowlisted_attributes_and_no_text(
         ]
     )
 
-    await GeminiAgentRuntime(client=cast(AsyncClient, client)).call(
+    await GeminiLlmCaller(client=cast(AsyncClient, client)).call(
         agent,
         "INPUT_OBJECT_SENTINEL_648a",
         attempt_number=2,
@@ -124,7 +124,7 @@ async def test_success_span_records_each_present_usage_field_once(
     """存在する各使用量を成功 span に一度ずつ記録する。"""
     client = FakeGeminiClient([success_response(usage_metadata=_full_usage())])
 
-    await GeminiAgentRuntime(client=cast(AsyncClient, client)).call(
+    await GeminiLlmCaller(client=cast(AsyncClient, client)).call(
         make_agent(),
         "typed input",
         attempt_number=1,
@@ -152,7 +152,7 @@ async def test_missing_usage_fields_are_not_zero_filled(
     )
     client = FakeGeminiClient([success_response(usage_metadata=usage)])
 
-    await GeminiAgentRuntime(client=cast(AsyncClient, client)).call(
+    await GeminiLlmCaller(client=cast(AsyncClient, client)).call(
         make_agent(),
         "typed input",
         attempt_number=1,
@@ -174,7 +174,7 @@ async def test_blocked_response_records_usage_and_classified_error_span(
     )
 
     with pytest.raises(AIProviderResultError):
-        await GeminiAgentRuntime(client=cast(AsyncClient, client)).call(
+        await GeminiLlmCaller(client=cast(AsyncClient, client)).call(
             make_agent(),
             "typed input",
             attempt_number=1,
@@ -211,7 +211,7 @@ async def test_truncated_response_records_usage_and_is_not_succeeded(
     )
 
     with pytest.raises(AIProviderResultError):
-        await GeminiAgentRuntime(client=cast(AsyncClient, client)).call(
+        await GeminiLlmCaller(client=cast(AsyncClient, client)).call(
             make_agent(),
             "typed input",
             attempt_number=1,
@@ -252,7 +252,7 @@ async def test_invalid_response_records_usage_before_classification(
     )
 
     with pytest.raises(AIProviderResultError):
-        await GeminiAgentRuntime(client=cast(AsyncClient, client)).call(
+        await GeminiLlmCaller(client=cast(AsyncClient, client)).call(
             make_agent(),
             "typed input",
             attempt_number=1,
@@ -282,7 +282,7 @@ async def test_classified_provider_error_has_no_usage_or_exception_event(
     client = FakeGeminiClient([httpx2.ReadTimeout("PROVIDER_ERROR_SENTINEL_267e")])
 
     with pytest.raises(AIProviderTransportError):
-        await GeminiAgentRuntime(client=cast(AsyncClient, client)).call(
+        await GeminiLlmCaller(client=cast(AsyncClient, client)).call(
             make_agent(),
             "typed input",
             attempt_number=1,
@@ -315,7 +315,7 @@ async def test_unclassified_error_keeps_redacted_exception_event_without_result(
     client = FakeGeminiClient([error])
 
     with pytest.raises(RuntimeError) as exc_info:
-        await GeminiAgentRuntime(client=cast(AsyncClient, client)).call(
+        await GeminiLlmCaller(client=cast(AsyncClient, client)).call(
             make_agent(),
             "typed input",
             attempt_number=1,
@@ -353,14 +353,14 @@ async def test_sequential_calls_do_not_carry_usage_between_spans(
             success_response(result="second", usage_metadata=None),
         ]
     )
-    runtime = GeminiAgentRuntime(client=cast(AsyncClient, client))
+    caller = GeminiLlmCaller(client=cast(AsyncClient, client))
 
-    await runtime.call(
+    await caller.call(
         make_agent(name="first_agent", model_name="first-model"),
         "first input",
         attempt_number=1,
     )
-    await runtime.call(
+    await caller.call(
         make_agent(name="second_agent", model_name="second-model"),
         "second input",
         attempt_number=2,
@@ -395,7 +395,7 @@ async def test_renderer_failure_creates_no_provider_span(
     )
 
     with pytest.raises(RuntimeError):
-        await GeminiAgentRuntime(client=cast(AsyncClient, client)).call(
+        await GeminiLlmCaller(client=cast(AsyncClient, client)).call(
             agent,
             "typed input",
             attempt_number=1,
@@ -420,7 +420,7 @@ async def test_config_failure_creates_no_provider_span(
     )
 
     with pytest.raises((TypeError, ValueError)):
-        await GeminiAgentRuntime(client=cast(AsyncClient, client)).call(
+        await GeminiLlmCaller(client=cast(AsyncClient, client)).call(
             agent,
             "typed input",
             attempt_number=1,
@@ -438,7 +438,7 @@ async def test_non_gemini_agent_is_rejected_before_renderer_config_and_span(
     config_factory = MagicMock(
         side_effect=AssertionError("config must not be constructed")
     )
-    monkeypatch.setattr(gemini_runtime_module, "GenerateContentConfig", config_factory)
+    monkeypatch.setattr(gemini_caller_module, "GenerateContentConfig", config_factory)
     renderer = MagicMock(return_value="contents must not be rendered")
     client = FakeGeminiClient([success_response()])
     agent = make_agent()
@@ -453,7 +453,7 @@ async def test_non_gemini_agent_is_rejected_before_renderer_config_and_span(
     )
 
     with pytest.raises(ValueError):
-        await GeminiAgentRuntime(client=cast(AsyncClient, client)).call(
+        await GeminiLlmCaller(client=cast(AsyncClient, client)).call(
             agent,
             "typed input",
             attempt_number=1,
@@ -474,7 +474,7 @@ async def test_invalid_attempt_number_creates_no_provider_span(
     client = FakeGeminiClient([success_response()])
 
     with pytest.raises(ValueError):
-        await GeminiAgentRuntime(client=cast(AsyncClient, client)).call(
+        await GeminiLlmCaller(client=cast(AsyncClient, client)).call(
             make_agent(),
             "typed input",
             attempt_number=attempt_number,

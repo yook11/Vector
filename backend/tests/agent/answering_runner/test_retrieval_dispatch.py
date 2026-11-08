@@ -64,10 +64,10 @@ from tests.agent.answering_runner._harness import (
     run_identity,
 )
 from tests.agent.evidence_collection._failures import article_search_failed
-from tests.agent.runtime._fakes import (
-    GoalKeyedAgentRuntime,
-    ScriptedAgentRuntime,
-    runtime_payload,
+from tests.agent.llm_call._fakes import (
+    GoalKeyedLlmCaller,
+    ScriptedLlmCaller,
+    caller_payload,
 )
 from tests.logfire._metric_helpers import collected_metrics
 
@@ -257,7 +257,7 @@ class _FakeExternalSearchGateway:
             self.finished.set()
 
 
-class _BlockingQueryRuntime:
+class _BlockingQueryCaller:
     def __init__(self) -> None:
         self.started = asyncio.Event()
         self.finished = asyncio.Event()
@@ -277,7 +277,7 @@ class _BlockingQueryRuntime:
             self.finished.set()
 
 
-class _ControlledQueryRuntime:
+class _ControlledQueryCaller:
     def __init__(
         self,
         *,
@@ -310,7 +310,7 @@ class _ControlledQueryRuntime:
                     self._raised.set()
                 raise self._error
             self.completed = True
-            return runtime_payload(self._result)
+            return caller_payload(self._result)
         except asyncio.CancelledError as exc:
             self.cancelled_error = exc
             raise
@@ -320,7 +320,7 @@ class _ControlledQueryRuntime:
             self.finished.set()
 
 
-class _TaskFailureAfterSiblingStartsRuntime:
+class _TaskFailureAfterSiblingStartsCaller:
     def __init__(self, *, error: BaseException, timeline: list[str]) -> None:
         self._error = error
         self._timeline = timeline
@@ -397,7 +397,7 @@ class _Factory:
         exit_reached: asyncio.Event | None = None,
     ) -> None:
         self._searches = [scope.external_search for scope in scopes]
-        self._reviewer_runtime = scopes[0].reviewer_runtime
+        self._reviewer_caller = scopes[0].reviewer_caller
         self._timeline = timeline
         self.scopes: list[_Scope] = []
         self.activated = asyncio.Event()
@@ -409,7 +409,7 @@ class _Factory:
 
     def reviewer_scope(self) -> AbstractAsyncContextManager[object]:
         """reviewerは外部検索とは別のscopeを開くため、fakeも別口で貸す。"""
-        return fixed_scope(self._reviewer_runtime)()
+        return fixed_scope(self._reviewer_caller)()
 
     def __call__(self) -> _Scope:
         self.activate_calls += 1
@@ -491,18 +491,18 @@ class _UnreachableDirectAnswerer:
         raise AssertionError(f"direct answer must not run: {input!r}")
 
 
-def _runtime(
-    query_runtime: object,
+def _caller(
+    query_caller: object,
     *,
-    reviewer_runtime: object | None = None,
+    reviewer_caller: object | None = None,
     gateway: _FakeExternalSearchGateway | None = None,
 ) -> ExternalScopes:
     return ExternalScopes(
         external_search=ExternalSearchService(
-            query_runtime=query_runtime,  # type: ignore[arg-type]
+            query_caller=query_caller,  # type: ignore[arg-type]
             search_gateway=(gateway or _FakeExternalSearchGateway()),  # type: ignore[arg-type]
         ),
-        reviewer_runtime=(reviewer_runtime or ScriptedAgentRuntime([])),
+        reviewer_caller=(reviewer_caller or ScriptedLlmCaller([])),
     )
 
 
@@ -527,7 +527,8 @@ def _runner(
         direct_answerer=_UnreachableDirectAnswerer(),
         evidence_answerer=_EvidenceAnswerer(error=answer_error, timeline=timeline),
         reviewer=EvidenceReviewService(
-            agent=EVIDENCE_REVIEWER_AGENT, runtime_scope_factory=factory.reviewer_scope
+            agent=EVIDENCE_REVIEWER_AGENT,
+            llm_caller_scope_factory=factory.reviewer_scope,
         ),
         organizer=PassThroughOrganizer(),
     )
@@ -627,7 +628,7 @@ def _plan_with_tasks(
 @pytest.mark.asyncio
 async def test_external_scope_exits_before_evidence_answering_starts() -> None:
     timeline: list[str] = []
-    factory = _Factory([_runtime(ScriptedAgentRuntime([_query_draft()]))], timeline)
+    factory = _Factory([_caller(ScriptedLlmCaller([_query_draft()]))], timeline)
     runner = _runner(
         plan=_search_plan(),
         internal=_InternalSearch(),
@@ -653,7 +654,7 @@ async def test_scope_stays_open_until_pending_internal_branch_settles() -> None:
     internal = _InternalSearch(release=release_internal, timeline=timeline)
     gateway = _FakeExternalSearchGateway({"NVIDIA supply": []}, timeline=timeline)
     factory = _Factory(
-        [_runtime(ScriptedAgentRuntime([_query_draft()]), gateway=gateway)],
+        [_caller(ScriptedLlmCaller([_query_draft()]), gateway=gateway)],
         timeline,
     )
     runner = _runner(
@@ -683,8 +684,8 @@ async def test_answer_failure_closes_fresh_external_scope_each_run() -> None:
     timeline: list[str] = []
     factory = _Factory(
         [
-            _runtime(ScriptedAgentRuntime([_query_draft()])),
-            _runtime(ScriptedAgentRuntime([_query_draft()])),
+            _caller(ScriptedLlmCaller([_query_draft()])),
+            _caller(ScriptedLlmCaller([_query_draft()])),
         ],
         timeline,
     )
@@ -718,8 +719,8 @@ async def test_answer_failure_closes_fresh_external_scope_each_run() -> None:
 @pytest.mark.asyncio
 async def test_outer_cancellation_joins_external_query_before_scope_close() -> None:
     timeline: list[str] = []
-    query_runtime = _BlockingQueryRuntime()
-    factory = _Factory([_runtime(query_runtime)], timeline)
+    query_caller = _BlockingQueryCaller()
+    factory = _Factory([_caller(query_caller)], timeline)
     runner = _runner(
         plan=_search_plan(target_time_window=None),
         internal=_InternalSearch(),
@@ -728,14 +729,14 @@ async def test_outer_cancellation_joins_external_query_before_scope_close() -> N
     )
     running = asyncio.create_task(_run(runner))
 
-    await asyncio.wait_for(query_runtime.started.wait(), timeout=0.5)
+    await asyncio.wait_for(query_caller.started.wait(), timeout=0.5)
     running.cancel()
     with pytest.raises(asyncio.CancelledError):
         await asyncio.wait_for(running, timeout=0.5)
 
     assert (
-        query_runtime.cancelled,
-        query_runtime.finished.is_set(),
+        query_caller.cancelled,
+        query_caller.finished.is_set(),
         factory.scopes[0].exit_calls,
     ) == (True, True, 1)
 
@@ -745,7 +746,7 @@ async def test_search_plan_activates_external_scope_and_resolves_time_filter_met
     capfire: CaptureLogfire,
 ) -> None:
     timeline: list[str] = []
-    factory = _Factory([_runtime(ScriptedAgentRuntime([_query_draft()]))], timeline)
+    factory = _Factory([_caller(ScriptedLlmCaller([_query_draft()]))], timeline)
     runner = _runner(
         plan=_search_plan(article_search_queries=["NVIDIA"]),
         internal=_InternalSearch(),
@@ -769,7 +770,7 @@ async def test_search_plan_selects_both_retrieval_dependencies() -> None:
     plan = _search_plan()
     timeline: list[str] = []
     internal = _InternalSearch()
-    factory = _Factory([_runtime(ScriptedAgentRuntime([_query_draft()]))], timeline)
+    factory = _Factory([_caller(ScriptedLlmCaller([_query_draft()]))], timeline)
 
     await _run(
         _runner(plan=plan, internal=internal, factory=factory, timeline=timeline)
@@ -785,7 +786,7 @@ async def test_runner_preserves_internal_query_order() -> None:
     runner = _runner(
         plan=_search_plan(article_search_queries=["NVIDIA", "OpenAI", "Apple"]),
         internal=internal,
-        factory=_Factory([_runtime(ScriptedAgentRuntime([_query_draft()]))], timeline),
+        factory=_Factory([_caller(ScriptedLlmCaller([_query_draft()]))], timeline),
         timeline=timeline,
     )
 
@@ -801,12 +802,12 @@ async def test_runner_preserves_internal_hit_order_into_synthesis() -> None:
     """D4-S1: reviewerが両方の内部ヒットを採用する前提でindex順を検証する。"""
     timeline: list[str] = []
     answerer = _EvidenceAnswerer(timeline=timeline)
-    reviewer_runtime = ScriptedAgentRuntime([_review_draft_selecting([0, 1])])
+    reviewer_caller = ScriptedLlmCaller([_review_draft_selecting([0, 1])])
     factory = _Factory(
         [
-            _runtime(
-                ScriptedAgentRuntime([_query_draft()]),
-                reviewer_runtime=reviewer_runtime,
+            _caller(
+                ScriptedLlmCaller([_query_draft()]),
+                reviewer_caller=reviewer_caller,
             )
         ],
         timeline,
@@ -825,7 +826,8 @@ async def test_runner_preserves_internal_hit_order_into_synthesis() -> None:
         direct_answerer=_UnreachableDirectAnswerer(),
         evidence_answerer=answerer,
         reviewer=EvidenceReviewService(
-            agent=EVIDENCE_REVIEWER_AGENT, runtime_scope_factory=factory.reviewer_scope
+            agent=EVIDENCE_REVIEWER_AGENT,
+            llm_caller_scope_factory=factory.reviewer_scope,
         ),
         organizer=PassThroughOrganizer(),
     )
@@ -849,14 +851,14 @@ async def test_runner_forwards_review_missing_to_the_evidence_answerer() -> None
     """
     timeline: list[str] = []
     answerer = _EvidenceAnswerer(timeline=timeline)
-    reviewer_runtime = ScriptedAgentRuntime(
+    reviewer_caller = ScriptedLlmCaller(
         [_review_draft_selecting_with_missing([0], ["観点Aを確認できませんでした"])]
     )
     factory = _Factory(
         [
-            _runtime(
-                ScriptedAgentRuntime([_query_draft()]),
-                reviewer_runtime=reviewer_runtime,
+            _caller(
+                ScriptedLlmCaller([_query_draft()]),
+                reviewer_caller=reviewer_caller,
             )
         ],
         timeline,
@@ -872,7 +874,8 @@ async def test_runner_forwards_review_missing_to_the_evidence_answerer() -> None
         direct_answerer=_UnreachableDirectAnswerer(),
         evidence_answerer=answerer,
         reviewer=EvidenceReviewService(
-            agent=EVIDENCE_REVIEWER_AGENT, runtime_scope_factory=factory.reviewer_scope
+            agent=EVIDENCE_REVIEWER_AGENT,
+            llm_caller_scope_factory=factory.reviewer_scope,
         ),
         organizer=PassThroughOrganizer(),
     )
@@ -891,17 +894,17 @@ async def test_runner_passes_search_plan_values_to_query_input() -> None:
     """planのgoal/time windowをquery agentへの実際の入力で検証する。"""
     timeline: list[str] = []
     task = _task("verify typed input")
-    runtime = ScriptedAgentRuntime([_query_draft()])
+    caller = ScriptedLlmCaller([_query_draft()])
     runner = _runner(
         plan=_search_plan(task),
         internal=_InternalSearch(),
-        factory=_Factory([_runtime(runtime)], timeline),
+        factory=_Factory([_caller(caller)], timeline),
         timeline=timeline,
     )
 
     await _run(runner)
 
-    query_input = runtime.calls[0].input
+    query_input = caller.calls[0].input
     assert (
         query_input.task,
         query_input.as_of,
@@ -916,8 +919,8 @@ async def test_scope_exits_after_unclassified_task_sibling_joins() -> None:
     """
     error = RuntimeError("task failure")
     timeline: list[str] = []
-    runtime = _TaskFailureAfterSiblingStartsRuntime(error=error, timeline=timeline)
-    factory = _Factory([_runtime(runtime)], timeline)
+    caller = _TaskFailureAfterSiblingStartsCaller(error=error, timeline=timeline)
+    factory = _Factory([_caller(caller)], timeline)
     runner = _runner(
         plan=_search_plan(_task("failing"), _task("blocking")),
         internal=_InternalSearch(),
@@ -930,8 +933,8 @@ async def test_scope_exits_after_unclassified_task_sibling_joins() -> None:
 
     assert (
         raised.value is error,
-        runtime.sibling_cancelled,
-        runtime.sibling_finished.is_set(),
+        caller.sibling_cancelled,
+        caller.sibling_finished.is_set(),
         factory.scopes[0].exited.is_set(),
         timeline.index("sibling.finished") < timeline.index("scope.exit"),
     ) == (True, True, True, True, True)
@@ -944,7 +947,7 @@ async def test_pre_dispatch_failure_does_not_activate_external_scope(
 ) -> None:
     error = RuntimeError(f"{failure_stage} failure")
     timeline: list[str] = []
-    factory = _Factory([_runtime(ScriptedAgentRuntime([_query_draft()]))], timeline)
+    factory = _Factory([_caller(ScriptedLlmCaller([_query_draft()]))], timeline)
     progress = (
         _Progress(timeline, error_stage="evidence_collection", error=error)
         if failure_stage == "evidence_collection"
@@ -976,7 +979,7 @@ async def test_classified_external_failure_is_an_outcome_and_scope_closes_once(
     timeline: list[str] = []
     captured = _capture_external_outcome(monkeypatch)
     factory = _Factory(
-        [_runtime(ScriptedAgentRuntime([{}]))],
+        [_caller(ScriptedLlmCaller([{}]))],
         timeline,
     )
     runner = _runner(
@@ -1001,7 +1004,7 @@ async def test_external_unknown_error_closes_scope_before_identity_propagation()
 ):
     error = RuntimeError("external unknown")
     timeline: list[str] = []
-    factory = _Factory([_runtime(ScriptedAgentRuntime([error]))], timeline)
+    factory = _Factory([_caller(ScriptedLlmCaller([error]))], timeline)
     runner = _runner(
         plan=_search_plan(),
         internal=_InternalSearch(),
@@ -1024,8 +1027,8 @@ async def test_search_starts_internal_and_external_branches_concurrently() -> No
     timeline: list[str] = []
     internal_release = asyncio.Event()
     internal = _InternalSearch(release=internal_release)
-    query = _BlockingQueryRuntime()
-    factory = _Factory([_runtime(query)], timeline)
+    query = _BlockingQueryCaller()
+    factory = _Factory([_caller(query)], timeline)
     runner = _runner(
         plan=_search_plan(),
         internal=internal,
@@ -1058,7 +1061,7 @@ async def test_search_converts_internal_search_error_to_failed_report_value(
     runner = _runner(
         plan=_search_plan(article_search_queries=["NVIDIA"]),
         internal=_InternalSearch(error=article_search_failed()),
-        factory=_Factory([_runtime(ScriptedAgentRuntime([_query_draft()]))], timeline),
+        factory=_Factory([_caller(ScriptedLlmCaller([_query_draft()]))], timeline),
         timeline=timeline,
     )
 
@@ -1076,11 +1079,11 @@ async def test_search_classified_internal_failure_keeps_external_outcome(
 ) -> None:
     timeline: list[str] = []
     captured = _capture_external_outcome(monkeypatch)
-    query = ScriptedAgentRuntime([_query_draft()])
+    query = ScriptedLlmCaller([_query_draft()])
     runner = _runner(
         plan=_search_plan(),
         internal=_InternalSearch(error=article_search_failed()),
-        factory=_Factory([_runtime(query)], timeline),
+        factory=_Factory([_caller(query)], timeline),
         timeline=timeline,
     )
 
@@ -1109,7 +1112,7 @@ async def test_zero_internal_hits_remain_successful_under_search(
     await _runner(
         plan=_search_plan(article_search_queries=["NVIDIA"]),
         internal=_InternalSearch(),
-        factory=_Factory([_runtime(ScriptedAgentRuntime([_query_draft()]))], timeline),
+        factory=_Factory([_caller(ScriptedLlmCaller([_query_draft()]))], timeline),
         timeline=timeline,
     ).run(
         RunInput(question="NVIDIA の見通しは？", history=()),
@@ -1137,7 +1140,7 @@ async def test_internal_search_events_are_emitted_per_task_with_task_index() -> 
     # S1: reviewerはRun単位1回。統合index空間(仮定: task昇順)ではtask0の2件が
     # 0,1、task1の1件が2になる。task単位で呼ぶ旧経路が残っていても2件目の
     # callがscript枯渇crashにならないよう空draftを1件足す。
-    reviewer_runtime = ScriptedAgentRuntime(
+    reviewer_caller = ScriptedLlmCaller(
         [_review_draft_selecting([0, 1, 2]), _review_draft_selecting([])]
     )
     runner = _runner(
@@ -1149,14 +1152,14 @@ async def test_internal_search_events_are_emitted_per_task_with_task_index() -> 
         internal=_KeyedInternalSearch(),
         factory=_Factory(
             [
-                _runtime(
-                    GoalKeyedAgentRuntime(
+                _caller(
+                    GoalKeyedLlmCaller(
                         {
                             "first task": _query_draft(),
                             "second task": _query_draft(),
                         }
                     ),
-                    reviewer_runtime=reviewer_runtime,
+                    reviewer_caller=reviewer_caller,
                 )
             ],
             timeline,
@@ -1206,7 +1209,7 @@ async def test_internal_search_failure_reports_started_without_completed() -> No
     runner = _runner(
         plan=_search_plan(article_search_queries=["NVIDIA"]),
         internal=_InternalSearch(error=article_search_failed()),
-        factory=_Factory([_runtime(ScriptedAgentRuntime([_query_draft()]))], timeline),
+        factory=_Factory([_caller(ScriptedLlmCaller([_query_draft()]))], timeline),
         timeline=timeline,
         events=events,
     )
@@ -1229,15 +1232,15 @@ async def test_internal_search_failure_reports_started_without_completed() -> No
 async def test_internal_search_events_do_not_expose_query_text() -> None:
     timeline: list[str] = []
     events = _Events()
-    reviewer_runtime = ScriptedAgentRuntime([_review_draft_selecting([0])])
+    reviewer_caller = ScriptedLlmCaller([_review_draft_selecting([0])])
     runner = _runner(
         plan=_search_plan(article_search_queries=["SECRET raw user question"]),
         internal=_InternalSearch(hits=[_hit(assessment_id=1001, title="hit")]),
         factory=_Factory(
             [
-                _runtime(
-                    ScriptedAgentRuntime([_query_draft()]),
-                    reviewer_runtime=reviewer_runtime,
+                _caller(
+                    ScriptedLlmCaller([_query_draft()]),
+                    reviewer_caller=reviewer_caller,
                 )
             ],
             timeline,
@@ -1266,8 +1269,8 @@ async def test_unknown_search_branch_error_propagates_by_identity(branch: str) -
         internal=_InternalSearch(error=error if branch == "internal" else None),
         factory=_Factory(
             [
-                _runtime(
-                    ScriptedAgentRuntime(
+                _caller(
+                    ScriptedLlmCaller(
                         [error if branch == "external" else _query_draft()]
                     )
                 )
@@ -1290,7 +1293,7 @@ async def test_search_waits_for_internal_before_external_error() -> None:
     internal_release = asyncio.Event()
     external_raised = asyncio.Event()
     internal = _InternalSearch(release=internal_release)
-    external = _ControlledQueryRuntime(
+    external = _ControlledQueryCaller(
         error=error,
         release=internal.started,
         raised=external_raised,
@@ -1298,7 +1301,7 @@ async def test_search_waits_for_internal_before_external_error() -> None:
     runner = _runner(
         plan=_search_plan(),
         internal=internal,
-        factory=_Factory([_runtime(external)], timeline),
+        factory=_Factory([_caller(external)], timeline),
         timeline=timeline,
     )
     running = asyncio.create_task(_run(runner))
@@ -1318,7 +1321,7 @@ async def test_search_waits_for_external_before_internal_error() -> None:
     timeline: list[str] = []
     external_release = asyncio.Event()
     internal_raised = asyncio.Event()
-    external = _ControlledQueryRuntime(release=external_release)
+    external = _ControlledQueryCaller(release=external_release)
     internal = _InternalSearch(
         error=error,
         release=external.started,
@@ -1327,7 +1330,7 @@ async def test_search_waits_for_external_before_internal_error() -> None:
     runner = _runner(
         plan=_search_plan(),
         internal=internal,
-        factory=_Factory([_runtime(external)], timeline),
+        factory=_Factory([_caller(external)], timeline),
         timeline=timeline,
     )
     running = asyncio.create_task(_run(runner))
@@ -1346,12 +1349,12 @@ async def test_search_run_prefers_internal_error_after_both_branches_finish() ->
     internal_error = RuntimeError("internal unknown")
     external_error = RuntimeError("external unknown")
     timeline: list[str] = []
-    external = _ControlledQueryRuntime(error=external_error)
+    external = _ControlledQueryCaller(error=external_error)
     internal = _InternalSearch(error=internal_error, release=external.started)
     runner = _runner(
         plan=_search_plan(),
         internal=internal,
-        factory=_Factory([_runtime(external)], timeline),
+        factory=_Factory([_caller(external)], timeline),
         timeline=timeline,
     )
 
@@ -1366,7 +1369,7 @@ async def test_search_close_failure_propagates_same_sentinel() -> None:
     close_error = RuntimeError("external close failure")
     timeline: list[str] = []
     factory = _Factory(
-        [_runtime(ScriptedAgentRuntime([_query_draft()]))],
+        [_caller(ScriptedLlmCaller([_query_draft()]))],
         timeline,
         exit_error=close_error,
     )
@@ -1395,7 +1398,7 @@ async def test_search_close_failure_replaces_unknown_body_error() -> None:
     close_error = RuntimeError("external close failure")
     timeline: list[str] = []
     factory = _Factory(
-        [_runtime(ScriptedAgentRuntime([body_error]))],
+        [_caller(ScriptedLlmCaller([body_error]))],
         timeline,
         exit_error=close_error,
     )
@@ -1426,10 +1429,10 @@ async def test_outer_cancellation_joins_task_before_scope_close_then_raises() ->
     """
     timeline: list[str] = []
     internal = _InternalSearch(release=asyncio.Event(), timeline=timeline)
-    external = _ControlledQueryRuntime(release=asyncio.Event(), timeline=timeline)
+    external = _ControlledQueryCaller(release=asyncio.Event(), timeline=timeline)
     scope_exit_reached = asyncio.Event()
     factory = _Factory(
-        [_runtime(external)],
+        [_caller(external)],
         timeline,
         exit_reached=scope_exit_reached,
     )
@@ -1472,7 +1475,7 @@ async def test_search_outer_cancellation_wins_over_completed_unknown_failure(
     timeline: list[str] = []
     blocked = asyncio.Event()
     if first_failure == "internal":
-        external = _ControlledQueryRuntime(release=blocked, timeline=timeline)
+        external = _ControlledQueryCaller(release=blocked, timeline=timeline)
         internal = _InternalSearch(
             error=first_error,
             release=external.started,
@@ -1481,7 +1484,7 @@ async def test_search_outer_cancellation_wins_over_completed_unknown_failure(
         )
     else:
         internal = _InternalSearch(release=blocked, timeline=timeline)
-        external = _ControlledQueryRuntime(
+        external = _ControlledQueryCaller(
             error=first_error,
             release=internal.started,
             raised=first_raised,
@@ -1489,7 +1492,7 @@ async def test_search_outer_cancellation_wins_over_completed_unknown_failure(
         )
     scope_exit_reached = asyncio.Event()
     factory = _Factory(
-        [_runtime(external)],
+        [_caller(external)],
         timeline,
         exit_reached=scope_exit_reached,
     )
@@ -1527,15 +1530,15 @@ async def test_scope_closes_after_reviewer_failure_exhausts_attempts() -> None:
     (収集失敗・想定外例外・cancelの解放経路は他テストが既に覆う)。
     """
     timeline: list[str] = []
-    reviewer_runtime = ScriptedAgentRuntime([{}, {}])
+    reviewer_caller = ScriptedLlmCaller([{}, {}])
     gateway = _FakeExternalSearchGateway(
         {"NVIDIA supply": [_external_hit("https://example.com/ext", title="ext title")]}
     )
     factory = _Factory(
         [
-            _runtime(
-                ScriptedAgentRuntime([_query_draft()]),
-                reviewer_runtime=reviewer_runtime,
+            _caller(
+                ScriptedLlmCaller([_query_draft()]),
+                reviewer_caller=reviewer_caller,
                 gateway=gateway,
             )
         ],
@@ -1581,13 +1584,13 @@ async def test_internal_failure_still_reaches_reviewer_and_produces_evidence() -
     timeline: list[str] = []
     events = _Events()
     answerer = _EvidenceAnswerer(timeline=timeline)
-    query_runtime = ScriptedAgentRuntime([_query_draft()])
-    reviewer_runtime = ScriptedAgentRuntime([_review_draft_selecting([0])])
+    query_caller = ScriptedLlmCaller([_query_draft()])
+    reviewer_caller = ScriptedLlmCaller([_review_draft_selecting([0])])
     gateway = _FakeExternalSearchGateway(
         {"NVIDIA supply": [_external_hit("https://example.com/ext", title="ext title")]}
     )
     factory = _Factory(
-        [_runtime(query_runtime, reviewer_runtime=reviewer_runtime, gateway=gateway)],
+        [_caller(query_caller, reviewer_caller=reviewer_caller, gateway=gateway)],
         timeline,
     )
     phases = AnsweringPhases(
@@ -1600,7 +1603,8 @@ async def test_internal_failure_still_reaches_reviewer_and_produces_evidence() -
         direct_answerer=_UnreachableDirectAnswerer(),
         evidence_answerer=answerer,
         reviewer=EvidenceReviewService(
-            agent=EVIDENCE_REVIEWER_AGENT, runtime_scope_factory=factory.reviewer_scope
+            agent=EVIDENCE_REVIEWER_AGENT,
+            llm_caller_scope_factory=factory.reviewer_scope,
         ),
         organizer=PassThroughOrganizer(),
     )
@@ -1629,15 +1633,15 @@ async def test_external_provider_failure_keeps_internal_hits_in_final_evidence()
     """
     timeline: list[str] = []
     answerer = _EvidenceAnswerer(timeline=timeline)
-    query_runtime = ScriptedAgentRuntime([_query_draft()])
-    reviewer_runtime = ScriptedAgentRuntime([_review_draft_selecting([0])])
+    query_caller = ScriptedLlmCaller([_query_draft()])
+    reviewer_caller = ScriptedLlmCaller([_review_draft_selecting([0])])
     gateway = _FakeExternalSearchGateway(
         errors={
             "NVIDIA": ExternalSearchProviderError(reason="external_search_http_error")
         }
     )
     factory = _Factory(
-        [_runtime(query_runtime, reviewer_runtime=reviewer_runtime, gateway=gateway)],
+        [_caller(query_caller, reviewer_caller=reviewer_caller, gateway=gateway)],
         timeline,
     )
     phases = AnsweringPhases(
@@ -1651,7 +1655,8 @@ async def test_external_provider_failure_keeps_internal_hits_in_final_evidence()
         direct_answerer=_UnreachableDirectAnswerer(),
         evidence_answerer=answerer,
         reviewer=EvidenceReviewService(
-            agent=EVIDENCE_REVIEWER_AGENT, runtime_scope_factory=factory.reviewer_scope
+            agent=EVIDENCE_REVIEWER_AGENT,
+            llm_caller_scope_factory=factory.reviewer_scope,
         ),
         organizer=PassThroughOrganizer(),
     )
@@ -1684,13 +1689,13 @@ async def test_time_filter_failure_still_collects_internal_hits_for_every_task(
     )
     # S1: reviewerはRun単位1回。統合index空間(仮定: task昇順)ではtask0の唯一の
     # 内部ヒットが0、task1の唯一の内部ヒットが1。
-    reviewer_runtime = ScriptedAgentRuntime([_review_draft_selecting([0, 1])])
+    reviewer_caller = ScriptedLlmCaller([_review_draft_selecting([0, 1])])
     query_failure: dict[str, object] = {}
     factory = _Factory(
         [
-            _runtime(
-                ScriptedAgentRuntime([query_failure, query_failure]),
-                reviewer_runtime=reviewer_runtime,
+            _caller(
+                ScriptedLlmCaller([query_failure, query_failure]),
+                reviewer_caller=reviewer_caller,
             )
         ],
         [],
@@ -1731,7 +1736,7 @@ async def test_runner_routes_each_tasks_queries_to_only_that_tasks_search() -> N
         plan=plan,
         internal=internal,
         factory=_Factory(
-            [_runtime(ScriptedAgentRuntime([query_failure, query_failure]))],
+            [_caller(ScriptedLlmCaller([query_failure, query_failure]))],
             [],
         ),
         timeline=[],
@@ -1766,13 +1771,13 @@ async def test_runner_isolates_one_tasks_total_failure_from_sibling_evidence() -
         ("succeeding goal", ["succeeding query"]),
         target_time_window=TargetTimeWindow(kind="unsupported_explicit_window"),
     )
-    reviewer_runtime = ScriptedAgentRuntime([_review_draft_selecting([0])])
+    reviewer_caller = ScriptedLlmCaller([_review_draft_selecting([0])])
     query_failure: dict[str, object] = {}
     factory = _Factory(
         [
-            _runtime(
-                ScriptedAgentRuntime([query_failure, query_failure]),
-                reviewer_runtime=reviewer_runtime,
+            _caller(
+                ScriptedLlmCaller([query_failure, query_failure]),
+                reviewer_caller=reviewer_caller,
             )
         ],
         [],
@@ -1786,7 +1791,8 @@ async def test_runner_isolates_one_tasks_total_failure_from_sibling_evidence() -
         direct_answerer=_UnreachableDirectAnswerer(),
         evidence_answerer=answerer,
         reviewer=EvidenceReviewService(
-            agent=EVIDENCE_REVIEWER_AGENT, runtime_scope_factory=factory.reviewer_scope
+            agent=EVIDENCE_REVIEWER_AGENT,
+            llm_caller_scope_factory=factory.reviewer_scope,
         ),
         organizer=PassThroughOrganizer(),
     )
@@ -1847,7 +1853,7 @@ async def test_internal_hits_are_kept_per_task_when_the_same_article_appears(
     # 0,1(task0-shared, task0-unique)、task1の2件が2,3(task1-shared, task1-unique)。
     # task単位で呼ぶ旧経路が残っていても2件目のcallがscript枯渇crashにならない
     # よう空draftを1件足す。
-    reviewer_runtime = ScriptedAgentRuntime(
+    reviewer_caller = ScriptedLlmCaller(
         [_review_draft_selecting([0, 1, 2, 3]), _review_draft_selecting([])]
     )
     query_failure: dict[str, object] = {}
@@ -1856,9 +1862,9 @@ async def test_internal_hits_are_kept_per_task_when_the_same_article_appears(
         internal=_RaceControlledInternalSearch(),
         factory=_Factory(
             [
-                _runtime(
-                    ScriptedAgentRuntime([query_failure, query_failure]),
-                    reviewer_runtime=reviewer_runtime,
+                _caller(
+                    ScriptedLlmCaller([query_failure, query_failure]),
+                    reviewer_caller=reviewer_caller,
                 )
             ],
             [],
@@ -1905,7 +1911,7 @@ async def test_all_tasks_incomplete_adds_the_fixed_incomplete_phrase_once(
         plan=plan,
         internal=internal,
         factory=_Factory(
-            [_runtime(ScriptedAgentRuntime([{}, {}]))],
+            [_caller(ScriptedLlmCaller([{}, {}]))],
             [],
         ),
         timeline=[],
@@ -1947,16 +1953,16 @@ async def test_some_tasks_incomplete_keeps_the_phrase_to_one_line_and_keeps_sour
         ("goal1", ["task1 query"]),
         target_time_window=TargetTimeWindow(kind="unsupported_explicit_window"),
     )
-    reviewer_runtime = ScriptedAgentRuntime([_review_draft_selecting([0])])
+    reviewer_caller = ScriptedLlmCaller([_review_draft_selecting([0])])
     query_failure: dict[str, object] = {}
     runner = _runner(
         plan=plan,
         internal=internal,
         factory=_Factory(
             [
-                _runtime(
-                    ScriptedAgentRuntime([query_failure, query_failure]),
-                    reviewer_runtime=reviewer_runtime,
+                _caller(
+                    ScriptedLlmCaller([query_failure, query_failure]),
+                    reviewer_caller=reviewer_caller,
                 )
             ],
             [],

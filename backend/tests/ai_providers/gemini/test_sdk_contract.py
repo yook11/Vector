@@ -13,7 +13,7 @@ from httpcore2._backends.auto import AutoBackend
 from pydantic import SecretStr
 
 from app.agent import composition
-from app.agent.runtime.gemini import GeminiAgentRuntime
+from app.agent.llm_call.gemini import GeminiLlmCaller
 from app.ai_providers.errors import (
     AIProviderResponseError,
     AIProviderResponseReason,
@@ -27,7 +27,7 @@ from app.http.failure import (
     HttpTransportFailureReason,
     HttpTransportStage,
 )
-from tests.agent.runtime._helpers import make_agent
+from tests.agent.llm_call._helpers import make_agent
 from tests.ai_providers.gemini._sdk_exchange import install_sdk_exchange
 from tests.ai_providers.gemini._sdk_exchange import (
     open_gemini_test_client as _open_client,
@@ -103,8 +103,8 @@ async def test_generation_decodes_text_usage_and_finish_reason(exchange):
 
 
 @pytest.mark.asyncio
-async def test_runtime_structured_output_survives_sdk_serialization(exchange):
-    """runtimeのschemaが送信され、実SDKの応答をJSON objectとして返す。"""
+async def test_caller_structured_output_survives_sdk_serialization(exchange):
+    """callerのschemaが送信され、実SDKの応答をJSON objectとして返す。"""
     exchange.respond_json(
         {
             "candidates": [
@@ -118,7 +118,7 @@ async def test_runtime_structured_output_survives_sdk_serialization(exchange):
         }
     )
     async with _open_client() as client:
-        output = await GeminiAgentRuntime(client=client).call(
+        output = await GeminiLlmCaller(client=client).call(
             make_agent(), "input", attempt_number=1
         )
     assert output == {"result": "accepted", "tags": ["sdk"]}
@@ -194,10 +194,10 @@ async def test_stream_normal_completion_closes_response(exchange):
 
 
 @pytest.mark.asyncio
-async def test_runtime_scope_exit_closes_connection_after_early_stream_exit(
+async def test_caller_scope_exit_closes_connection_after_early_stream_exit(
     monkeypatch,
 ):
-    """途中終了したstreamの接続も本番runtimeの利用範囲を抜けると閉じる。"""
+    """途中終了したstreamの接続も本番callerの利用範囲を抜けると閉じる。"""
     first = {"candidates": [{"content": {"parts": [{"text": "first fragment"}]}}]}
     events = [
         f"data: {json.dumps(payload)}\n\n".encode() for payload in (first, _GENERATED)
@@ -224,8 +224,8 @@ async def test_runtime_scope_exit_closes_connection_after_early_stream_exit(
         composition.settings, "gemini_api_key", SecretStr("synthetic-test-key")
     )
 
-    async with composition.activate_gemini_agent_runtime() as runtime:
-        stream = runtime.stream_text(
+    async with composition.activate_gemini_llm_caller() as caller:
+        stream = caller.stream_text(
             make_agent(response_schema=None), "input", attempt_number=1
         )
         assert await anext(stream) == "first fragment"
@@ -245,7 +245,7 @@ async def test_stream_read_cancellation_closes_response_and_client(exchange):
 
     async def consume():
         async with _open_client() as client:
-            stream = GeminiAgentRuntime(client=client).stream_text(
+            stream = GeminiLlmCaller(client=client).stream_text(
                 make_agent(response_schema=None), "input", attempt_number=1
             )
             async for _ in stream:
