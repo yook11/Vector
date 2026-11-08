@@ -213,7 +213,7 @@ class AnsweringRunner:
                     final_output=answer,
                     research_handoff=research_handoff,
                 )
-            # runtimeの開閉で起きるAIの失敗は工程の外なので、ここで包む。
+            # LLM呼び出し口の開閉で起きるAIの失敗は工程の外なので、ここで包む。
             except (
                 PlanningError,
                 DirectAnswerError,

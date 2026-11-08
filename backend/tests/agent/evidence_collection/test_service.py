@@ -25,7 +25,6 @@ from app.agent.evidence_collection.internal_search.query_embedding import (
     InternalSearchQueries,
 )
 from app.agent.planning.contract import ResearchTask, SearchPlan, TargetTimeWindow
-from app.agent.runtime.contract import AgentResponseDefect, AgentResponseInvalidError
 from app.analysis.analyzed_article import InScopeAnalyzedArticle
 from app.analysis.assessment.domain.result import InScope, InScopeCategory
 from tests.agent.answering_runner._harness import fixed_scope
@@ -33,8 +32,8 @@ from tests.agent.evidence_collection._failures import (
     article_search_failed,
     query_embedding_failed,
 )
+from tests.agent.llm_call._fakes import GoalKeyedLlmCaller, ScriptedLlmCaller
 from tests.agent.recording._fakes import RecordingEvidenceCollectionRecorder
-from tests.agent.runtime._fakes import GoalKeyedAgentRuntime, ScriptedAgentRuntime
 from tests.logfire._metric_helpers import collected_metrics
 
 _AS_OF = datetime(2026, 7, 20, 9, 30, tzinfo=UTC)
@@ -188,12 +187,12 @@ def _time_filter_metric_points(
 
 
 def _external_search(
-    query_runtime: object,
+    query_caller: object,
     *,
     gateway: _FakeExternalSearchGateway | None = None,
 ) -> ExternalSearch:
     return ExternalSearchService(
-        query_runtime=query_runtime,  # type: ignore[arg-type]
+        query_caller=query_caller,  # type: ignore[arg-type]
         search_gateway=(gateway or _FakeExternalSearchGateway()),  # type: ignore[arg-type]
     )
 
@@ -259,10 +258,10 @@ async def test_internal_failure_still_collects_external_hits() -> None:
     gateway = _FakeExternalSearchGateway(
         {"nvidia supply": [_external_hit("https://example.com/a")]}
     )
-    query_runtime = ScriptedAgentRuntime([_query_draft(["nvidia supply"])])
+    query_caller = ScriptedLlmCaller([_query_draft(["nvidia supply"])])
     service = _service(
         internal_search=_FakeInternalSearch(error=article_search_failed()),
-        external=_external_search(query_runtime, gateway=gateway),
+        external=_external_search(query_caller, gateway=gateway),
         events=events,
     )
 
@@ -292,10 +291,10 @@ async def test_external_provider_failure_keeps_internal_hits() -> None:
             "q": ExternalSearchProviderError(reason="external_search_http_error")
         }
     )
-    query_runtime = ScriptedAgentRuntime([_query_draft(["q"])])
+    query_caller = ScriptedLlmCaller([_query_draft(["q"])])
     service = _service(
         internal_search=_FakeInternalSearch(hits=hits),
-        external=_external_search(query_runtime, gateway=gateway),
+        external=_external_search(query_caller, gateway=gateway),
     )
 
     [collected] = await _collect_tasks(service, _task("goal", "internal query"))
@@ -319,10 +318,10 @@ async def test_time_filter_failure_still_searches_without_date_filter(
     gateway = _FakeExternalSearchGateway(
         {"nvidia supply": [_external_hit("https://example.com/a")]}
     )
-    query_runtime = ScriptedAgentRuntime([_query_draft(["nvidia supply"])])
+    query_caller = ScriptedLlmCaller([_query_draft(["nvidia supply"])])
     service = _service(
         internal_search=_FakeInternalSearch(hits=hits),
-        external=_external_search(query_runtime, gateway=gateway),
+        external=_external_search(query_caller, gateway=gateway),
     )
 
     [collected] = await _collect_tasks(
@@ -338,7 +337,7 @@ async def test_time_filter_failure_still_searches_without_date_filter(
         collected.report.external_collection,
         [str(hit.url) for hit in collected.external_hits],
         [call.date_filter for call in gateway.calls],
-        [call.input.target_time_window for call in query_runtime.calls],
+        [call.input.target_time_window for call in query_caller.calls],
         _time_filter_metric_points(metrics),
         [
             entry.get("reason")
@@ -366,12 +365,12 @@ async def test_time_filter_failure_records_one_metric_for_multiple_goals(
             "q2": [_external_hit("https://example.com/2")],
         }
     )
-    query_runtime = GoalKeyedAgentRuntime(
+    query_caller = GoalKeyedLlmCaller(
         {"first": _query_draft(["q1"]), "second": _query_draft(["q2"])}
     )
     service = _service(
         internal_search=_FakeInternalSearch(),
-        external=_external_search(query_runtime, gateway=gateway),
+        external=_external_search(query_caller, gateway=gateway),
     )
 
     collected = await _collect_tasks(
@@ -396,12 +395,10 @@ async def test_time_filter_failure_records_one_metric_for_multiple_goals(
 @pytest.mark.asyncio
 async def test_empty_queries_skip_gateway_even_when_time_filter_fails() -> None:
     gateway = _FakeExternalSearchGateway()
-    query_runtime = ScriptedAgentRuntime(
-        [AgentResponseInvalidError(AgentResponseDefect.OUTPUT_SCHEMA_MISMATCH)]
-    )
+    query_caller = ScriptedLlmCaller([{}])
     service = _service(
         internal_search=_FakeInternalSearch(),
-        external=_external_search(query_runtime, gateway=gateway),
+        external=_external_search(query_caller, gateway=gateway),
     )
 
     [collected] = await _collect_tasks(
@@ -457,7 +454,7 @@ async def test_independent_collect_calls_do_not_leak_failure_between_tasks() -> 
     service = _service(
         internal_search=_KeyedInternalSearch(),
         external=_external_search(
-            GoalKeyedAgentRuntime(
+            GoalKeyedLlmCaller(
                 {
                     "failing": _query_draft(["bad"]),
                     "succeeding": _query_draft(["good"]),
@@ -573,12 +570,10 @@ async def test_external_events_fire_in_order_with_task_index_and_payload() -> No
             ]
         }
     )
-    query_runtime = ScriptedAgentRuntime(
-        [_query_draft(["  good query  ", "good query"])]
-    )
+    query_caller = ScriptedLlmCaller([_query_draft(["  good query  ", "good query"])])
     service = _service(
         internal_search=_FakeInternalSearch(),
-        external=_external_search(query_runtime, gateway=gateway),
+        external=_external_search(query_caller, gateway=gateway),
         events=events,
     )
 
@@ -612,12 +607,10 @@ async def test_executed_queries_holds_generated_queries_in_order_on_success() ->
             "second query": [_external_hit("https://example.com/2")],
         }
     )
-    query_runtime = ScriptedAgentRuntime(
-        [_query_draft(["first query", "second query"])]
-    )
+    query_caller = ScriptedLlmCaller([_query_draft(["first query", "second query"])])
     service = _service(
         internal_search=_FakeInternalSearch(),
-        external=_external_search(query_runtime, gateway=gateway),
+        external=_external_search(query_caller, gateway=gateway),
     )
 
     [collected] = await _collect_tasks(service, _task("goal", "internal query"))
@@ -641,10 +634,10 @@ async def test_executed_queries_drops_only_the_failed_query_preserving_order() -
             "q2": ExternalSearchProviderError(reason="external_search_http_error")
         },
     )
-    query_runtime = ScriptedAgentRuntime([_query_draft(["q1", "q2", "q3"])])
+    query_caller = ScriptedLlmCaller([_query_draft(["q1", "q2", "q3"])])
     service = _service(
         internal_search=_FakeInternalSearch(),
-        external=_external_search(query_runtime, gateway=gateway),
+        external=_external_search(query_caller, gateway=gateway),
     )
 
     [collected] = await _collect_tasks(service, _task("goal", "internal query"))
@@ -666,10 +659,10 @@ async def test_executed_queries_is_empty_when_every_provider_call_fails() -> Non
             "q2": ExternalSearchProviderError(reason="external_search_http_error"),
         }
     )
-    query_runtime = ScriptedAgentRuntime([_query_draft(["q1", "q2"])])
+    query_caller = ScriptedLlmCaller([_query_draft(["q1", "q2"])])
     service = _service(
         internal_search=_FakeInternalSearch(),
-        external=_external_search(query_runtime, gateway=gateway),
+        external=_external_search(query_caller, gateway=gateway),
     )
 
     [collected] = await _collect_tasks(service, _task("goal", "internal query"))
@@ -684,12 +677,10 @@ async def test_executed_queries_is_empty_when_query_generation_fails() -> None:
 
     provider呼び出しが一度も起きないためexecuted_queriesは空tupleになる。
     """
-    query_runtime = ScriptedAgentRuntime(
-        [AgentResponseInvalidError(AgentResponseDefect.OUTPUT_SCHEMA_MISMATCH)]
-    )
+    query_caller = ScriptedLlmCaller([{}])
     service = _service(
         internal_search=_FakeInternalSearch(),
-        external=_external_search(query_runtime),
+        external=_external_search(query_caller),
     )
 
     [collected] = await _collect_tasks(service, _task("goal", "internal query"))

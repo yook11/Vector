@@ -24,13 +24,15 @@ from opentelemetry.semconv.attributes.error_attributes import ERROR_TYPE
 from opentelemetry.trace import SpanKind, StatusCode
 
 from app.agent.recording.types import PhaseStatus, Usage
-from app.agent.runtime.llm_failure import UNCLASSIFIED_FAILURE_CODE, LlmAttemptFailed
 
 __all__ = [
+    "UNCLASSIFIED_FAILURE_CODE",
+    "LlmAttemptFailed",
     "LlmCallMode",
     "LlmCallRecorder",
     "LlmCallRecording",
     "LogfireLlmCallRecorder",
+    "llm_attempt_failed_from",
     "logfire_llm_call_recorder",
 ]
 
@@ -58,6 +60,29 @@ _tokens_counter = logfire.metric_counter(
 )
 
 type LlmCallMode = Literal["call", "stream"]
+
+# 想定外の失敗は種類を名乗らず、この固定の値で記録する。
+UNCLASSIFIED_FAILURE_CODE = "unclassified"
+
+
+@dataclass(frozen=True, slots=True)
+class LlmAttemptFailed:
+    """失敗で終了した provider attempt。"""
+
+    failure_code: str
+
+    def __post_init__(self) -> None:
+        if not self.failure_code:
+            raise ValueError("failure_code must not be empty")
+
+
+def llm_attempt_failed_from(error: BaseException) -> LlmAttemptFailed:
+    """CODE から failure_code を決める。クラス名へは落とさない。"""
+
+    code = getattr(error, "CODE", None)
+    if isinstance(code, str) and code:
+        return LlmAttemptFailed(failure_code=code)
+    raise ValueError("classified failure requires CODE")
 
 
 class LlmCallRecording(Protocol):

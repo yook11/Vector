@@ -224,13 +224,13 @@ async def main():
         ]
 
         @asynccontextmanager
-        async def runtime_scope():
+        async def caller_scope():
             yield responses
 
         @asynccontextmanager
         async def search_scope():
             yield ExternalSearchService(
-                query_runtime=responses, search_gateway=responses
+                query_caller=responses, search_gateway=responses
             )
 
         with ExitStack() as patches:
@@ -238,9 +238,7 @@ async def main():
                 patch.object(broker_agent, "_ack_generator", observe_ack)
             )
             patches.enter_context(
-                patch.object(
-                    composition, "activate_gemini_agent_runtime", runtime_scope
-                )
+                patch.object(composition, "activate_gemini_llm_caller", caller_scope)
             )
             patches.enter_context(
                 patch.object(composition, "activate_external_search", search_scope)

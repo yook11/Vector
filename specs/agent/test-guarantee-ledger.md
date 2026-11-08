@@ -1,5 +1,7 @@
 # Agent テスト保証台帳 + 所有マップ
 
+> 2026-11-08追記: `app/agent/runtime/` の `AgentRuntime` / `StreamingAgentRuntime` / `GeminiAgentRuntime` と、それぞれの scope factory は改名前の名前である。現在は `app/agent/llm_call/` の `LlmCaller` / `LlmTextStreamer` / `GeminiLlmCaller` と `LlmCallerScopeFactory` / `LlmTextStreamerScopeFactory` で、工程は `call_agent` で呼び出しと出力の検証をまとめて行う。
+
 Status: Draft v0.1 (不変条件群とmodule traceは棚卸し済み / 各PR対象IDの実装可能化は要レビュー)
 Scope: `backend/tests/agent/` の test module 62ファイル + runtime共有helper 4ファイル + worker経路
 Date: 2026-07-20

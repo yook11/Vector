@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Callable
-from dataclasses import replace
 from datetime import datetime
 from uuid import UUID
 
@@ -16,7 +15,6 @@ from app.agent.answering.direct_answer.contract import (
     DirectAnswerInvalidError,
 )
 from app.agent.answering.direct_answer.failure import DirectAnswerError
-from app.agent.answering.failure import is_output_truncated
 from app.agent.answering.live_delivery import (
     BestEffortAnswerDeltaReporter,
     close_answer_stream,
@@ -27,19 +25,20 @@ from app.agent.contract import (
     AnswerDeltaReporter,
     AnswerProgressReporter,
 )
+from app.agent.llm_call.caller import (
+    AgentTextStream,
+    LlmTextStreamer,
+    LlmTextStreamerScopeFactory,
+)
 from app.agent.recording.direct_answer import (
     DirectAnswerFailed,
     DirectAnswerRecorder,
     DirectAnswerSucceeded,
     logfire_direct_answer_recorder,
 )
+from app.agent.retry_prospect import is_resolvable_by_retry
 from app.agent.running.answer_generation import (
     AnswerGenerationRepository,
-)
-from app.agent.runtime.contract import (
-    AgentTextStream,
-    StreamingAgentRuntime,
-    StreamingAgentRuntimeScopeFactory,
 )
 from app.ai_providers.errors import AIProviderError
 
@@ -59,7 +58,7 @@ class DirectAnswerService:
         self,
         *,
         agent: Agent[DirectAnswerInput, DirectAnswerDraft],
-        runtime_scope_factory: StreamingAgentRuntimeScopeFactory,
+        llm_text_streamer_scope_factory: LlmTextStreamerScopeFactory,
         repository: AnswerGenerationRepository,
         schedule_deadline_check: Callable[[UUID, datetime], None],
         delta_reporter: AnswerDeltaReporter | None = None,
@@ -67,7 +66,7 @@ class DirectAnswerService:
         recorder: DirectAnswerRecorder = logfire_direct_answer_recorder,
     ) -> None:
         self._agent = agent
-        self._runtime_scope_factory = runtime_scope_factory
+        self._llm_text_streamer_scope_factory = llm_text_streamer_scope_factory
         self._repository = repository
         self._schedule_deadline_check = schedule_deadline_check
         self._delta = BestEffortAnswerDeltaReporter(delta_reporter)
@@ -75,7 +74,7 @@ class DirectAnswerService:
         self._recorder = recorder
 
     async def answer(self, input: DirectAnswerInput) -> DirectAnswerDraft:
-        """Return a valid direct draft, retrying only blank response defects."""
+        """完成した回答を返す。空の回答と、呼び直せば解消しうる失敗だけ再試行する。"""
 
         result = await self._repository.start_answer_generation()
 
@@ -92,7 +91,7 @@ class DirectAnswerService:
                         )
                         if self._progress is not None:
                             await self._progress.stage_changed("answering")
-                        async with self._runtime_scope_factory() as runtime:
+                        async with self._llm_text_streamer_scope_factory() as streamer:
                             for attempt_number in range(1, _MAX_ATTEMPTS + 1):
                                 if attempt_number > 1:
                                     await (
@@ -100,21 +99,17 @@ class DirectAnswerService:
                                     )
                                 try:
                                     draft = await self._generate_draft(
-                                        runtime=runtime,
+                                        streamer=streamer,
                                         input=input,
                                         attempt_number=attempt_number,
                                     )
                                 except _DIRECT_ANSWER_SOURCE_ERRORS as cause:
-                                    # 打ち切りと空の回答は書き方次第で収まる。
+                                    # 空の回答は生成し直せば解消しうる。
                                     retriable = (
-                                        is_output_truncated(cause)
-                                        or isinstance(cause, DirectAnswerInvalidError)
+                                        isinstance(cause, DirectAnswerInvalidError)
+                                        or is_resolvable_by_retry(cause)
                                     ) and attempt_number < _MAX_ATTEMPTS
                                     if retriable:
-                                        if is_output_truncated(cause):
-                                            input = replace(
-                                                input, previous_output_truncated=True
-                                            )
                                         continue
                                     raise DirectAnswerError(cause=cause) from cause
                                 break
@@ -143,7 +138,7 @@ class DirectAnswerService:
     async def _generate_draft(
         self,
         *,
-        runtime: StreamingAgentRuntime,
+        streamer: LlmTextStreamer,
         input: DirectAnswerInput,
         attempt_number: int,
     ) -> DirectAnswerDraft:
@@ -154,7 +149,7 @@ class DirectAnswerService:
                 generation=attempt_number,
                 delta_reporter=self._delta,
             ) as live_draft:
-                stream = runtime.stream_text(
+                stream = streamer.stream_text(
                     self._agent,
                     input,
                     attempt_number=attempt_number,

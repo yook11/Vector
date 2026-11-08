@@ -21,8 +21,8 @@ from app.agent.contract import (
     RESEARCH_TASK_LIMIT,
     PlanType,
 )
+from app.agent.output import AgentOutputDefect, AgentOutputInvalidError
 from app.agent.research_handoff.handoff import ResearchHandoff
-from app.agent.runtime.contract import AgentResponseDefect, AgentResponseInvalidError
 from app.agent.threads.contracts import ThreadMessageSnapshot
 
 __all__ = [
@@ -348,8 +348,8 @@ def _trim_query_budget(
     ]
 
 
-def _response_defect() -> AgentResponseInvalidError:
-    return AgentResponseInvalidError(
-        AgentResponseDefect.OUTPUT_SCHEMA_MISMATCH,
+def _response_defect() -> AgentOutputInvalidError:
+    return AgentOutputInvalidError(
+        AgentOutputDefect.OUTPUT_SCHEMA_MISMATCH,
         repair_hint="plan fields are inconsistent",
     )

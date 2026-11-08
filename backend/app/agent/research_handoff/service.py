@@ -9,6 +9,8 @@ from __future__ import annotations
 from typing import Protocol
 
 from app.agent.agent import Agent
+from app.agent.llm_call.caller import LlmCallerScopeFactory, call_agent
+from app.agent.output import AgentOutputInvalidError
 from app.agent.recording.research_handoff import (
     ResearchHandoffFailed,
     ResearchHandoffRecorder,
@@ -18,15 +20,11 @@ from app.agent.recording.research_handoff import (
 from app.agent.research_handoff.failure import ResearchHandoffError
 from app.agent.research_handoff.handoff import ResearchHandoff, ResearchHandoffDraft
 from app.agent.research_handoff.handoff_input import ResearchHandoffInput
-from app.agent.runtime.contract import (
-    AgentResponseInvalidError,
-    AgentRuntimeScopeFactory,
-)
 from app.ai_providers.errors import AIProviderError
 
 __all__ = ["ResearchHandoffOrganizer", "ResearchHandoffService"]
 
-_CLASSIFIED_FAILURES = (AIProviderError, AgentResponseInvalidError)
+_CLASSIFIED_FAILURES = (AIProviderError, AgentOutputInvalidError)
 
 
 class ResearchHandoffOrganizer(Protocol):
@@ -40,19 +38,21 @@ class ResearchHandoffService:
         self,
         *,
         agent: Agent[ResearchHandoffInput, ResearchHandoffDraft],
-        runtime_scope_factory: AgentRuntimeScopeFactory,
+        llm_caller_scope_factory: LlmCallerScopeFactory,
         recorder: ResearchHandoffRecorder = logfire_research_handoff_recorder,
     ) -> None:
         self._agent = agent
-        self._runtime_scope_factory = runtime_scope_factory
+        self._llm_caller_scope_factory = llm_caller_scope_factory
         self._recorder = recorder
 
     async def organize(self, input: ResearchHandoffInput) -> ResearchHandoff:
         """整理を書き直したhandoffを返す。失敗時は受け取ったものをそのまま返す。"""
         async with self._recorder.record(agent_name=self._agent.name) as recording:
             try:
-                async with self._runtime_scope_factory() as runtime:
-                    draft = await runtime.call(self._agent, input, attempt_number=1)
+                async with self._llm_caller_scope_factory() as caller:
+                    draft = await call_agent(
+                        caller, self._agent, input, attempt_number=1
+                    )
             except _CLASSIFIED_FAILURES as cause:
                 error = ResearchHandoffError(cause=cause)
                 recording.report_outcome(ResearchHandoffFailed(failure_code=error.code))

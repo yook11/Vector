@@ -1,5 +1,7 @@
 # Direct / Evidence Answer Agent と streaming runtime slice 仕様
 
+> 2026-11-08追記: `app/agent/runtime/` の `AgentRuntime` / `StreamingAgentRuntime` / `GeminiAgentRuntime` と、それぞれの scope factory は改名前の名前である。現在は `app/agent/llm_call/` の `LlmCaller` / `LlmTextStreamer` / `GeminiLlmCaller` と `LlmCallerScopeFactory` / `LlmTextStreamerScopeFactory` で、工程は `call_agent` で呼び出しと出力の検証をまとめて行う。
+
 更新日: 2026-07-19
 
 実装状況: Implemented（PR7）
@@ -90,7 +92,7 @@ class StreamingAgentRuntimeScopeFactory(Protocol):
     def __call__(self) -> AbstractAsyncContextManager[StreamingAgentRuntime]: ...
 ```
 
-- 契約は意図的に非対称とする: `call`は検証済み`OutputT`を返し、`stream_text`は
+- 契約は意図的に非対称とする: `call`はJSON objectを返して工程が`validate_output`で検証し、`stream_text`は
   model text fragmentの列を返す。streamingの最終validation / finalizeはworkflowデータ
   (evidence、requirement_ids)を要するためruntimeへ置けない。`StreamingAgentRuntime`は`OutputT`を
   返す契約を持たず、Flowが`agent.output_type`を最終parse / draft構築の正本として使用する。

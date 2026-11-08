@@ -73,7 +73,7 @@ class AgentProviderResponses:
         response = outputs[agent.name]
         if isinstance(response, AIProviderError):
             raise response
-        return agent.output_type.model_validate(response)
+        return response
 
     async def stream_text(self, agent, input, *, attempt_number):
         self.calls.append(agent.name)

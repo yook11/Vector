@@ -18,18 +18,18 @@ from app.agent.answering.direct_answer.agent import DIRECT_ANSWER_AGENT
 from app.agent.answering.direct_answer.contract import DirectAnswerInput
 from app.agent.answering.direct_answer.failure import DirectAnswerError
 from app.agent.answering.direct_answer.service import DirectAnswerService
+from app.agent.llm_call.caller import LlmTextStreamer
+from app.agent.llm_call.gemini import GeminiLlmCaller
 from app.agent.running.state import RunRejected, RunRejectionReason
 from app.agent.running.stop import AnswerGenerationStopped
 from app.agent.running.types import AgentRunStatus
-from app.agent.runtime.contract import StreamingAgentRuntime
-from app.agent.runtime.gemini import GeminiAgentRuntime
 from app.logfire.redaction import install_exception_redaction
 from tests.agent.answering_runner._harness import (
     AllowAnswerGenerationStart,
     ScriptedAnswerGenerationRepository,
 )
-from tests.agent.runtime._helpers import FakeGeminiClient
-from tests.agent.runtime._tracing_helpers import (
+from tests.agent.llm_call._helpers import FakeGeminiClient
+from tests.agent.llm_call._tracing_helpers import (
     application_attribute_keys,
     exception_events,
     span_text,
@@ -84,13 +84,13 @@ async def test_phase_owns_detached_streaming_attempt_without_model_text(
     client = FakeGeminiClient([], streams=[sdk_stream])
 
     @asynccontextmanager
-    async def runtime_scope() -> AsyncIterator[StreamingAgentRuntime]:
-        yield GeminiAgentRuntime(client=cast(AsyncClient, client))
+    async def streamer_scope() -> AsyncIterator[LlmTextStreamer]:
+        yield GeminiLlmCaller(client=cast(AsyncClient, client))
 
     draft = await DirectAnswerService(
         schedule_deadline_check=lambda *_: None,
         agent=DIRECT_ANSWER_AGENT,
-        runtime_scope_factory=runtime_scope,
+        llm_text_streamer_scope_factory=streamer_scope,
         repository=AllowAnswerGenerationStart(),
     ).answer(_input())
 
@@ -162,14 +162,14 @@ async def test_unclassified_stream_error_is_redacted_in_phase_and_attempt(
     client = FakeGeminiClient([], streams=[sdk_stream])
 
     @asynccontextmanager
-    async def runtime_scope() -> AsyncIterator[StreamingAgentRuntime]:
-        yield GeminiAgentRuntime(client=cast(AsyncClient, client))
+    async def streamer_scope() -> AsyncIterator[LlmTextStreamer]:
+        yield GeminiLlmCaller(client=cast(AsyncClient, client))
 
     with pytest.raises(RuntimeError) as exc_info:
         await DirectAnswerService(
             schedule_deadline_check=lambda *_: None,
             agent=DIRECT_ANSWER_AGENT,
-            runtime_scope_factory=runtime_scope,
+            llm_text_streamer_scope_factory=streamer_scope,
             repository=AllowAnswerGenerationStart(),
         ).answer(_input())
 
@@ -217,13 +217,13 @@ async def test_retry_provider_request_does_not_add_repair_context() -> None:
     client = FakeGeminiClient([], streams=[first_stream, second_stream])
 
     @asynccontextmanager
-    async def runtime_scope() -> AsyncIterator[StreamingAgentRuntime]:
-        yield GeminiAgentRuntime(client=cast(AsyncClient, client))
+    async def streamer_scope() -> AsyncIterator[LlmTextStreamer]:
+        yield GeminiLlmCaller(client=cast(AsyncClient, client))
 
     draft = await DirectAnswerService(
         schedule_deadline_check=lambda *_: None,
         agent=DIRECT_ANSWER_AGENT,
-        runtime_scope_factory=runtime_scope,
+        llm_text_streamer_scope_factory=streamer_scope,
         repository=AllowAnswerGenerationStart(),
     ).answer(_input())
 
@@ -251,14 +251,14 @@ async def test_terminal_failure_closes_phase_with_code_without_exception_event(
     client = FakeGeminiClient([], streams=[first_stream, second_stream])
 
     @asynccontextmanager
-    async def runtime_scope() -> AsyncIterator[StreamingAgentRuntime]:
-        yield GeminiAgentRuntime(client=cast(AsyncClient, client))
+    async def streamer_scope() -> AsyncIterator[LlmTextStreamer]:
+        yield GeminiLlmCaller(client=cast(AsyncClient, client))
 
     with pytest.raises(DirectAnswerError) as exc_info:
         await DirectAnswerService(
             schedule_deadline_check=lambda *_: None,
             agent=DIRECT_ANSWER_AGENT,
-            runtime_scope_factory=runtime_scope,
+            llm_text_streamer_scope_factory=streamer_scope,
             repository=AllowAnswerGenerationStart(),
         ).answer(_input())
 
@@ -292,18 +292,18 @@ async def test_terminal_failure_closes_phase_with_code_without_exception_event(
 async def test_start_rejection_does_not_open_phase_or_attempt(
     capfire: CaptureLogfire,
 ) -> None:
-    class UnusedRuntime:
+    class UnusedStreamer:
         def stream_text(self, *_args: object, **_kwargs: object) -> object:
             raise AssertionError("stream must not start")
 
     @asynccontextmanager
-    async def runtime_scope() -> AsyncIterator[StreamingAgentRuntime]:
-        yield cast(StreamingAgentRuntime, UnusedRuntime())
+    async def streamer_scope() -> AsyncIterator[LlmTextStreamer]:
+        yield cast(LlmTextStreamer, UnusedStreamer())
 
     service = DirectAnswerService(
         schedule_deadline_check=lambda *_: None,
         agent=DIRECT_ANSWER_AGENT,
-        runtime_scope_factory=runtime_scope,
+        llm_text_streamer_scope_factory=streamer_scope,
         repository=ScriptedAnswerGenerationRepository(
             start=AnswerGenerationStopped(
                 RunRejected(

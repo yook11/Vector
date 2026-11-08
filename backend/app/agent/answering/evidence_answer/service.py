@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Callable
-from dataclasses import replace
 from datetime import datetime
 from uuid import UUID
 
@@ -19,7 +18,6 @@ from app.agent.answering.evidence_answer.failure import EvidenceAnswerError
 from app.agent.answering.evidence_answer.validation import (
     finalize_evidence_answer_draft,
 )
-from app.agent.answering.failure import is_output_truncated
 from app.agent.answering.live_delivery import (
     BestEffortAnswerDeltaReporter,
     close_answer_stream,
@@ -29,19 +27,20 @@ from app.agent.contract import (
     AnswerDeltaReporter,
     AnswerProgressReporter,
 )
+from app.agent.llm_call.caller import (
+    AgentTextStream,
+    LlmTextStreamer,
+    LlmTextStreamerScopeFactory,
+)
 from app.agent.recording.evidence_answer import (
     EvidenceAnswerFailed,
     EvidenceAnswerRecorder,
     EvidenceAnswerSucceeded,
     logfire_evidence_answer_recorder,
 )
+from app.agent.retry_prospect import is_resolvable_by_retry
 from app.agent.running.answer_generation import (
     AnswerGenerationRepository,
-)
-from app.agent.runtime.contract import (
-    AgentTextStream,
-    StreamingAgentRuntime,
-    StreamingAgentRuntimeScopeFactory,
 )
 from app.ai_providers.errors import AIProviderError
 
@@ -61,7 +60,7 @@ class EvidenceAnswerService:
         self,
         *,
         agent: Agent[EvidenceAnswerInput, EvidenceAnswerDraft],
-        runtime_scope_factory: StreamingAgentRuntimeScopeFactory,
+        llm_text_streamer_scope_factory: LlmTextStreamerScopeFactory,
         repository: AnswerGenerationRepository,
         schedule_deadline_check: Callable[[UUID, datetime], None],
         delta_reporter: AnswerDeltaReporter | None = None,
@@ -69,7 +68,7 @@ class EvidenceAnswerService:
         recorder: EvidenceAnswerRecorder = logfire_evidence_answer_recorder,
     ) -> None:
         self._agent = agent
-        self._runtime_scope_factory = runtime_scope_factory
+        self._llm_text_streamer_scope_factory = llm_text_streamer_scope_factory
         self._repository = repository
         self._schedule_deadline_check = schedule_deadline_check
         self._delta = BestEffortAnswerDeltaReporter(delta_reporter)
@@ -94,31 +93,25 @@ class EvidenceAnswerService:
                         )
                         if self._progress is not None:
                             await self._progress.stage_changed("answering")
-                        async with self._runtime_scope_factory() as runtime:
+                        async with self._llm_text_streamer_scope_factory() as streamer:
                             for attempt_number in range(1, _MAX_ATTEMPTS + 1):
                                 try:
                                     draft = await self._generate_strict_draft(
-                                        runtime=runtime,
+                                        streamer=streamer,
                                         input=input,
                                         attempt_number=attempt_number,
                                     )
                                 except _EVIDENCE_ANSWER_CLASSIFIED_ERRORS as exc:
-                                    # 打ち切りと接地違反は書き方次第で収まる。
+                                    # 接地違反は生成し直せば解消しうる。
                                     retriable = (
-                                        is_output_truncated(exc)
-                                        or isinstance(
-                                            exc, EvidenceAnswerDraftInvalidError
-                                        )
+                                        isinstance(exc, EvidenceAnswerDraftInvalidError)
+                                        or is_resolvable_by_retry(exc)
                                     ) and attempt_number < _MAX_ATTEMPTS
                                     if not retriable:
                                         raise EvidenceAnswerError(cause=exc) from exc
                                     await self._start_revision(
                                         generation=attempt_number + 1
                                     )
-                                    if is_output_truncated(exc):
-                                        input = replace(
-                                            input, previous_output_truncated=True
-                                        )
                                     continue
                                 break
                             else:
@@ -145,7 +138,7 @@ class EvidenceAnswerService:
     async def _generate_strict_draft(
         self,
         *,
-        runtime: StreamingAgentRuntime,
+        streamer: LlmTextStreamer,
         input: EvidenceAnswerInput,
         attempt_number: int,
     ) -> EvidenceAnswerDraft:
@@ -156,7 +149,7 @@ class EvidenceAnswerService:
                 generation=attempt_number,
                 delta_reporter=self._delta,
             ) as live_draft:
-                stream = runtime.stream_text(
+                stream = streamer.stream_text(
                     self._agent,
                     input,
                     attempt_number=attempt_number,

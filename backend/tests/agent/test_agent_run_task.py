@@ -45,6 +45,7 @@ from app.agent.live_updates.stream import (
     AgentRunLiveStreamStageEvent,
     AgentRunLiveStreamTerminalEvent,
 )
+from app.agent.output import AgentOutputDefect, AgentOutputInvalidError
 from app.agent.planning.failure import PlanningError
 from app.agent.research_handoff import (
     ResearchHandoff,
@@ -62,7 +63,6 @@ from app.agent.running.state import (
 from app.agent.running.state_repository import AgentRunStateRepository
 from app.agent.running.stop import AnswerGenerationStopped
 from app.agent.running.types import AgentRunErrorCode, AgentRunStatus
-from app.agent.runtime.contract import AgentResponseDefect, AgentResponseInvalidError
 from app.agent.threads.contracts import ThreadMessageSnapshot
 from app.agent.threads.repository import AgentThreadRepository
 from app.ai_providers.errors import (
@@ -2441,7 +2441,7 @@ async def test_answering_runner_setup_error_marks_generation_unavailable(
                     }
                 ],
             },
-            id="runtime-not-configured",
+            id="caller-not-configured",
         ),
         pytest.param(
             AnsweringRunError(
@@ -2612,7 +2612,7 @@ async def test_unwrapped_agent_response_invalid_error_marks_internal_error(
     async with session_factory() as session:
         _thread, _message, run = await _create_thread_message_run(session)
     fake_agent = FakeAgent(
-        exc=AgentResponseInvalidError(AgentResponseDefect.OUTPUT_SCHEMA_MISMATCH)
+        exc=AgentOutputInvalidError(AgentOutputDefect.OUTPUT_SCHEMA_MISMATCH)
     )
     _patch_worker_execution(monkeypatch, lambda **_kwargs: fake_agent)
 

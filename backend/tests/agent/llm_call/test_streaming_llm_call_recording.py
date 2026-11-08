@@ -8,26 +8,26 @@ from typing import cast
 import pytest
 from google.genai.client import AsyncClient
 
+from app.agent.llm_call.gemini import GeminiLlmCaller
+from app.agent.recording.llm import UNCLASSIFIED_FAILURE_CODE, LlmAttemptFailed
 from app.agent.recording.types import Usage
-from app.agent.runtime.gemini import GeminiAgentRuntime
-from app.agent.runtime.llm_failure import UNCLASSIFIED_FAILURE_CODE, LlmAttemptFailed
 from app.ai_providers.errors import (
     AIProviderResultError,
 )
-from tests.agent.recording._fakes import RecordingLlmCallRecorder
-from tests.agent.runtime._helpers import FakeGeminiClient, make_agent
-from tests.agent.runtime.test_streaming_contract import (
+from tests.agent.llm_call._helpers import FakeGeminiClient, make_agent
+from tests.agent.llm_call.test_streaming_contract import (
     FakeSdkStream,
     _stream_chunk,
     _usage,
 )
+from tests.agent.recording._fakes import RecordingLlmCallRecorder
 
 
-def _runtime(
+def _caller(
     stream: FakeSdkStream,
     recorder: RecordingLlmCallRecorder,
-) -> GeminiAgentRuntime:
-    return GeminiAgentRuntime(
+) -> GeminiLlmCaller:
+    return GeminiLlmCaller(
         client=cast(
             AsyncClient,
             FakeGeminiClient([], streams=[stream]),
@@ -40,7 +40,7 @@ async def test_normal_stream_eof_records_usage_without_failure() -> None:
     """正常終端の stream は失敗型なしで閉じる。"""
 
     recorder = RecordingLlmCallRecorder()
-    runtime = _runtime(
+    caller = _caller(
         FakeSdkStream(
             [
                 _stream_chunk(
@@ -52,7 +52,7 @@ async def test_normal_stream_eof_records_usage_without_failure() -> None:
         ),
         recorder,
     )
-    stream = runtime.stream_text(
+    stream = caller.stream_text(
         make_agent(response_schema=None),
         "typed input",
         attempt_number=1,
@@ -79,11 +79,11 @@ async def test_blocked_stream_records_failed_with_code() -> None:
     """出力 block の stream は分類済み失敗と CODE で閉じる。"""
 
     recorder = RecordingLlmCallRecorder()
-    runtime = _runtime(
+    caller = _caller(
         FakeSdkStream([_stream_chunk(finish_reason="SAFETY", usage_metadata=_usage())]),
         recorder,
     )
-    stream = runtime.stream_text(
+    stream = caller.stream_text(
         make_agent(response_schema=None),
         "typed input",
         attempt_number=1,
@@ -107,8 +107,8 @@ async def test_unclassified_stream_records_unclassified_failure() -> None:
 
     error = RuntimeError("UNCLASSIFIED_STREAM")
     recorder = RecordingLlmCallRecorder()
-    runtime = _runtime(FakeSdkStream([error]), recorder)
-    stream = runtime.stream_text(
+    caller = _caller(FakeSdkStream([error]), recorder)
+    stream = caller.stream_text(
         make_agent(response_schema=None),
         "typed input",
         attempt_number=1,
@@ -127,11 +127,11 @@ async def test_consumer_aclose_records_stopped_and_keeps_usage() -> None:
     """途中 aclose は停止にし、既に見た usage は残す。"""
 
     recorder = RecordingLlmCallRecorder()
-    runtime = _runtime(
+    caller = _caller(
         FakeSdkStream([_stream_chunk(text="fragment", usage_metadata=_usage())]),
         recorder,
     )
-    stream = runtime.stream_text(
+    stream = caller.stream_text(
         make_agent(response_schema=None),
         "typed input",
         attempt_number=1,
@@ -157,11 +157,11 @@ async def test_cancellation_records_stopped_without_failure() -> None:
     """stream 中の cancel は停止、失敗型なし。"""
 
     recorder = RecordingLlmCallRecorder()
-    runtime = _runtime(
+    caller = _caller(
         FakeSdkStream([asyncio.CancelledError()]),
         recorder,
     )
-    stream = runtime.stream_text(
+    stream = caller.stream_text(
         make_agent(response_schema=None),
         "typed input",
         attempt_number=1,

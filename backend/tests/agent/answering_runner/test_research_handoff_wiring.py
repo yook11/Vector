@@ -53,13 +53,12 @@ from app.agent.research_handoff import ResearchHandoff, ResearchHandoffInput
 from app.agent.running.state import RunRejected, RunRejectionReason
 from app.agent.running.stop import AnswerGenerationStopped
 from app.agent.running.types import AgentRunStatus
-from app.agent.runtime.contract import AgentResponseDefect, AgentResponseInvalidError
 from tests.agent.answering_runner._harness import (
     PassThroughOrganizer,
     fixed_scope,
     run_identity,
 )
-from tests.agent.runtime._fakes import ScriptedAgentRuntime
+from tests.agent.llm_call._fakes import ScriptedLlmCaller
 
 RUN_ID = UUID("019bd239-1ed4-7fbb-a336-04fe3c197660")
 AS_OF = datetime(2026, 8, 3, 9, 0, tzinfo=UTC)
@@ -167,8 +166,8 @@ class _FakeExternalSearchGateway:
 def _search_runner(
     *,
     plan: SearchPlan,
-    query_runtime: ScriptedAgentRuntime,
-    reviewer_runtime: ScriptedAgentRuntime,
+    query_caller: ScriptedLlmCaller,
+    reviewer_caller: ScriptedLlmCaller,
     gateway: _FakeExternalSearchGateway,
     organizer: object | None = None,
     evidence_answerer: object | None = None,
@@ -179,14 +178,14 @@ def _search_runner(
             internal_search=_FakeInternalSearch(),
             external_search_scope_factory=fixed_scope(
                 ExternalSearchService(
-                    query_runtime=query_runtime,  # type: ignore[arg-type]
+                    query_caller=query_caller,  # type: ignore[arg-type]
                     search_gateway=gateway,  # type: ignore[arg-type]
                 )
             ),
         ),
         reviewer=EvidenceReviewService(
             agent=EVIDENCE_REVIEWER_AGENT,
-            runtime_scope_factory=fixed_scope(reviewer_runtime),
+            llm_caller_scope_factory=fixed_scope(reviewer_caller),
         ),
         direct_answerer=_UnreachableDirectAnswerer(),
         evidence_answerer=evidence_answerer or _EvidenceAnswerer(),  # type: ignore[arg-type]
@@ -211,7 +210,7 @@ async def test_search_plan_records_goal_and_queries_that_reached_a_provider() ->
         results_by_query={"q-ok": [_external_hit("https://example.com/a")]},
         failing_queries=("q-fail",),
     )
-    reviewer_runtime = ScriptedAgentRuntime(
+    reviewer_caller = ScriptedLlmCaller(
         [
             _review_draft(
                 [
@@ -227,8 +226,8 @@ async def test_search_plan_records_goal_and_queries_that_reached_a_provider() ->
     )
     runner = _search_runner(
         plan=_plan(research_goal=goal),
-        query_runtime=ScriptedAgentRuntime([_query_draft(["q-ok", "q-fail"])]),
-        reviewer_runtime=reviewer_runtime,
+        query_caller=ScriptedLlmCaller([_query_draft(["q-ok", "q-fail"])]),
+        reviewer_caller=reviewer_caller,
         gateway=gateway,
     )
 
@@ -256,7 +255,7 @@ async def test_direct_answer_plan_leaves_handoff_none() -> None:
             external_search_scope_factory=_UnreachableScope(),
         ),
         reviewer=EvidenceReviewService(
-            agent=EVIDENCE_REVIEWER_AGENT, runtime_scope_factory=_UnreachableScope()
+            agent=EVIDENCE_REVIEWER_AGENT, llm_caller_scope_factory=_UnreachableScope()
         ),
         direct_answerer=_DirectAnswerer(),
         evidence_answerer=_UnreachableEvidenceAnswerer(),
@@ -276,11 +275,10 @@ async def test_evidence_review_failure_leaves_handoff_none() -> None:
     gateway = _FakeExternalSearchGateway(
         results_by_query={"q": [_external_hit("https://example.com/a")]}
     )
-    failure = AgentResponseInvalidError(AgentResponseDefect.OUTPUT_SCHEMA_MISMATCH)
     runner = _search_runner(
         plan=_plan(research_goal="調査目標"),
-        query_runtime=ScriptedAgentRuntime([_query_draft(["q"])]),
-        reviewer_runtime=ScriptedAgentRuntime([failure, failure]),
+        query_caller=ScriptedLlmCaller([_query_draft(["q"])]),
+        reviewer_caller=ScriptedLlmCaller([{}, {}]),
         gateway=gateway,
     )
 
@@ -295,11 +293,11 @@ async def test_a_run_that_found_nothing_still_records_the_query_it_executed() ->
     次のRunが同じqueryを繰り返さないために要る。review失敗経路と違いNoneにならない。
     """
     gateway = _FakeExternalSearchGateway(results_by_query={})
-    reviewer_runtime = ScriptedAgentRuntime([])
+    reviewer_caller = ScriptedLlmCaller([])
     runner = _search_runner(
         plan=_plan(research_goal="調査目標"),
-        query_runtime=ScriptedAgentRuntime([_query_draft(["q"])]),
-        reviewer_runtime=reviewer_runtime,
+        query_caller=ScriptedLlmCaller([_query_draft(["q"])]),
+        reviewer_caller=reviewer_caller,
         gateway=gateway,
     )
 
@@ -313,7 +311,7 @@ async def test_a_run_that_found_nothing_still_records_the_query_it_executed() ->
         record.tasks[0].research_goal,
         record.tasks[0].executed_queries,
     ) == ("調査目標", ("q",))
-    assert reviewer_runtime.calls == []
+    assert reviewer_caller.calls == []
 
 
 async def test_builder_exception_yields_none_handoff_and_continues_answering(
@@ -331,13 +329,13 @@ async def test_builder_exception_yields_none_handoff_and_continues_answering(
     gateway = _FakeExternalSearchGateway(
         results_by_query={"q": [_external_hit("https://example.com/a")]}
     )
-    reviewer_runtime = ScriptedAgentRuntime(
+    reviewer_caller = ScriptedLlmCaller(
         [_review_draft([{"option_index": 0, "claim": "claim", "why_selected": "w"}])]
     )
     runner = _search_runner(
         plan=_plan(research_goal="調査目標"),
-        query_runtime=ScriptedAgentRuntime([_query_draft(["q"])]),
-        reviewer_runtime=reviewer_runtime,
+        query_caller=ScriptedLlmCaller([_query_draft(["q"])]),
+        reviewer_caller=reviewer_caller,
         gateway=gateway,
     )
 
@@ -406,8 +404,8 @@ class _NeverFinishingOrganizer:
 def _searching_runner(organizer: object) -> AnsweringRunner:
     return _search_runner(
         plan=_plan(research_goal="調査目標"),
-        query_runtime=ScriptedAgentRuntime([_query_draft(["q"])]),
-        reviewer_runtime=ScriptedAgentRuntime([_review_draft([])]),
+        query_caller=ScriptedLlmCaller([_query_draft(["q"])]),
+        reviewer_caller=ScriptedLlmCaller([_review_draft([])]),
         gateway=_FakeExternalSearchGateway(
             results_by_query={"q": [_external_hit("https://example.com/a")]}
         ),
@@ -478,8 +476,8 @@ async def test_stopping_the_answer_cancels_the_organizer_and_writes_nothing() ->
     organizer = _NeverFinishingOrganizer()
     runner = _search_runner(
         plan=_plan(research_goal="調査目標"),
-        query_runtime=ScriptedAgentRuntime([_query_draft(["q"])]),
-        reviewer_runtime=ScriptedAgentRuntime([_review_draft([])]),
+        query_caller=ScriptedLlmCaller([_query_draft(["q"])]),
+        reviewer_caller=ScriptedLlmCaller([_review_draft([])]),
         gateway=_FakeExternalSearchGateway(
             results_by_query={"q": [_external_hit("https://example.com/a")]}
         ),
@@ -499,8 +497,8 @@ async def test_a_failed_answer_cancels_the_organizer_and_fails_the_run() -> None
     evidence_answerer = _FailingEvidenceAnswerer()
     runner = _search_runner(
         plan=_plan(research_goal="調査目標"),
-        query_runtime=ScriptedAgentRuntime([_query_draft(["q"])]),
-        reviewer_runtime=ScriptedAgentRuntime([_review_draft([])]),
+        query_caller=ScriptedLlmCaller([_query_draft(["q"])]),
+        reviewer_caller=ScriptedLlmCaller([_review_draft([])]),
         gateway=_FakeExternalSearchGateway(
             results_by_query={"q": [_external_hit("https://example.com/a")]}
         ),

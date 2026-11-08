@@ -196,7 +196,7 @@ class _PhasesFactory:
             evidence_answerer=_UnreachableEvidenceAnswerer(),
             reviewer=EvidenceReviewService(
                 agent=EVIDENCE_REVIEWER_AGENT,
-                runtime_scope_factory=_UnreachableExternalSearchScope(),
+                llm_caller_scope_factory=_UnreachableExternalSearchScope(),
             ),
             organizer=PassThroughOrganizer(),
         )
@@ -361,7 +361,7 @@ async def test_phase_exception_propagates_same_instance(error: BaseException) ->
         pytest.param(
             AIProviderNotSentError(reason=AIProviderNotSentReason.NOT_CONFIGURED),
             "未到達",
-            id="runtime-not-configured",
+            id="caller-not-configured",
         ),
     ],
 )

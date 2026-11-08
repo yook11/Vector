@@ -21,7 +21,6 @@ from app.agent.evidence_review.agent import EVIDENCE_REVIEWER_AGENT
 from app.agent.planning.agent import QUESTION_PLANNER_AGENT
 from app.agent.planning.failure import PlanningError
 from app.agent.planning.service import QuestionPlanningService
-from app.agent.runtime.contract import AgentResponseDefect, AgentResponseInvalidError
 from app.ai_providers.errors import (
     AIProviderResultError,
     AIProviderResultReason,
@@ -73,7 +72,7 @@ ERRORS = {
 }
 
 
-class WaitingRuntime:
+class WaitingCaller:
     def __init__(self, stage: str, mode: str) -> None:
         self.stage = stage
         self.mode = mode
@@ -87,12 +86,15 @@ class WaitingRuntime:
         if self.mode == "retry":
             await asyncio.sleep(0.12)
             if attempt_number == 1:
-                raise AgentResponseInvalidError(AgentResponseDefect.RESPONSE_NOT_JSON)
-            return (
+                raise AIProviderResultError(
+                    reason=AIProviderResultReason.RESPONSE_UNPARSEABLE
+                )
+            draft = (
                 _draft(plan_type="direct_answer")
                 if self.stage == "planning"
                 else _ANY_REVIEWER_DRAFT
             )
+            return draft.model_dump(mode="json")
         await asyncio.Event().wait()
 
     async def stream_text(self, agent: Any, input: Any, *, attempt_number: int):
@@ -117,18 +119,16 @@ class WaitingRuntime:
 
 
 def _stage(stage: str, mode: str = "blocked") -> SimpleNamespace:
-    runtime = WaitingRuntime(stage, mode)
-    state = SimpleNamespace(
-        runtime=runtime, closed=False, delta=RecordingDeltaReporter()
-    )
+    caller = WaitingCaller(stage, mode)
+    state = SimpleNamespace(caller=caller, closed=False, delta=RecordingDeltaReporter())
 
     @asynccontextmanager
     async def scope():
         try:
             if mode == "setup":
-                runtime.started.set()
+                caller.started.set()
                 await asyncio.Event().wait()
-            yield runtime
+            yield caller
         finally:
             state.closed = True
 
@@ -136,7 +136,7 @@ def _stage(stage: str, mode: str = "blocked") -> SimpleNamespace:
         state.recorder = RecordingPlanningRecorder()
         service = QuestionPlanningService(
             agent=QUESTION_PLANNER_AGENT,
-            runtime_scope_factory=scope,
+            llm_caller_scope_factory=scope,
             recorder=state.recorder,
         )
         state.run = lambda: service.plan(planning_input())
@@ -144,7 +144,7 @@ def _stage(stage: str, mode: str = "blocked") -> SimpleNamespace:
         state.recorder = RecordingEvidenceReviewRecorder()
         service = EvidenceReviewService(
             agent=EVIDENCE_REVIEWER_AGENT,
-            runtime_scope_factory=scope,
+            llm_caller_scope_factory=scope,
             recorder=state.recorder,
         )
         state.run = lambda: service.review(tasks=[_internal_task()], as_of=AS_OF)
@@ -153,7 +153,7 @@ def _stage(stage: str, mode: str = "blocked") -> SimpleNamespace:
         service = DirectAnswerService(
             schedule_deadline_check=lambda *_: None,
             agent=DIRECT_ANSWER_AGENT,
-            runtime_scope_factory=scope,
+            llm_text_streamer_scope_factory=scope,
             repository=AllowAnswerGenerationStart(),
             recorder=state.recorder,
             delta_reporter=state.delta,
@@ -164,7 +164,7 @@ def _stage(stage: str, mode: str = "blocked") -> SimpleNamespace:
         service = EvidenceAnswerService(
             schedule_deadline_check=lambda *_: None,
             agent=EVIDENCE_ANSWER_AGENT,
-            runtime_scope_factory=scope,
+            llm_text_streamer_scope_factory=scope,
             repository=AllowAnswerGenerationStart(),
             recorder=state.recorder,
             delta_reporter=state.delta,
@@ -204,7 +204,7 @@ async def test_stage_budget_includes_setup_and_retries(
     await _assert_timeout(stage, state)
 
     expected_attempts = 0 if mode == "setup" else 2 if mode == "retry" else 1
-    assert state.runtime.calls == list(range(1, expected_attempts + 1))
+    assert state.caller.calls == list(range(1, expected_attempts + 1))
     assert state.closed
     outcomes = state.recorder.records[0].outcomes
     assert len(outcomes) == 1
@@ -213,7 +213,7 @@ async def test_stage_budget_includes_setup_and_retries(
         expected_attempts,
     )
     if stage in ERRORS and stage != "planning" and mode != "setup":
-        assert state.runtime.stream_closed
+        assert state.caller.stream_closed
         assert state.delta.aborted[-1] == expected_attempts
         assert state.delta.finished == []
 
@@ -232,7 +232,7 @@ async def test_continuous_fragments_do_not_extend_answer_budget(
     assert len(state.delta.appended) > 1
     assert state.delta.aborted == [1]
     assert state.delta.finished == []
-    assert state.runtime.stream_closed
+    assert state.caller.stream_closed
 
 
 @pytest.mark.asyncio
@@ -240,7 +240,7 @@ async def test_continuous_fragments_do_not_extend_answer_budget(
 async def test_external_cancellation_is_not_a_stage_timeout(stage: str) -> None:
     state = _stage(stage)
     task = asyncio.create_task(state.run())
-    await asyncio.wait_for(state.runtime.started.wait(), 1)
+    await asyncio.wait_for(state.caller.started.wait(), 1)
     task.cancel()
     with pytest.raises(asyncio.CancelledError):
         await task

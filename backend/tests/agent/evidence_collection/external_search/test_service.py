@@ -23,10 +23,9 @@ from app.agent.recording.external_search import (
     ExternalSearchFailed,
     ExternalSearchSucceeded,
 )
-from app.agent.runtime.contract import AgentResponseDefect, AgentResponseInvalidError
 from app.ai_providers.errors import AIProviderResultError, AIProviderResultReason
+from tests.agent.llm_call._fakes import ScriptedLlmCaller
 from tests.agent.recording._fakes import RecordingExternalSearchRecorder
-from tests.agent.runtime._fakes import ScriptedAgentRuntime
 from tests.logfire._span_helpers import exception_event, spans_named
 
 _AS_OF = datetime(2026, 7, 20, 9, 30, tzinfo=UTC)
@@ -59,13 +58,13 @@ class _FakeGateway:
 
 
 def _service(
-    runtime: ScriptedAgentRuntime,
+    caller: ScriptedLlmCaller,
     gateway: _FakeGateway | None = None,
     recorder: RecordingExternalSearchRecorder | None = None,
 ) -> tuple[ExternalSearchService, RecordingExternalSearchRecorder]:
     recording = recorder or RecordingExternalSearchRecorder()
     service = ExternalSearchService(
-        query_runtime=runtime,
+        query_caller=caller,
         search_gateway=gateway or _FakeGateway(),
         recorder=recording,
     )
@@ -84,7 +83,7 @@ async def _search(service: ExternalSearchService) -> Any:
 async def test_search_records_completed_succeeded_when_hits_return() -> None:
     gateway = _FakeGateway({"q": [_hit("https://example.com/a")]})
     service, recorder = _service(
-        ScriptedAgentRuntime([_query_draft(["q"])]),
+        ScriptedLlmCaller([_query_draft(["q"])]),
         gateway,
     )
 
@@ -99,7 +98,7 @@ async def test_search_records_completed_succeeded_when_hits_return() -> None:
 
 
 async def test_search_records_completed_succeeded_for_zero_hits() -> None:
-    service, recorder = _service(ScriptedAgentRuntime([_query_draft(["q"])]))
+    service, recorder = _service(ScriptedLlmCaller([_query_draft(["q"])]))
 
     execution = await _search(service)
 
@@ -117,7 +116,7 @@ async def test_search_records_completed_on_partial_provider_failure() -> None:
         },
     )
     service, recorder = _service(
-        ScriptedAgentRuntime([_query_draft(["ok", "bad"])]),
+        ScriptedLlmCaller([_query_draft(["ok", "bad"])]),
         gateway,
     )
 
@@ -131,11 +130,7 @@ async def test_search_records_completed_on_partial_provider_failure() -> None:
 
 
 async def test_search_records_completed_when_query_generation_fails() -> None:
-    service, recorder = _service(
-        ScriptedAgentRuntime(
-            [AgentResponseInvalidError(AgentResponseDefect.OUTPUT_SCHEMA_MISMATCH)]
-        )
-    )
+    service, recorder = _service(ScriptedLlmCaller([{}]))
 
     execution = await _search(service)
 
@@ -152,11 +147,7 @@ async def test_search_records_completed_when_query_generation_fails() -> None:
 @pytest.mark.parametrize(
     ("failure", "expected_error_type"),
     [
-        pytest.param(
-            AgentResponseInvalidError(AgentResponseDefect.RESPONSE_NOT_JSON),
-            "response_not_json",
-            id="response-defect",
-        ),
+        pytest.param({}, "output_schema_mismatch", id="output-defect"),
         pytest.param(
             AIProviderResultError(reason=AIProviderResultReason.RESPONSE_UNPARSEABLE),
             "ai_provider_result_error",
@@ -166,13 +157,13 @@ async def test_search_records_completed_when_query_generation_fails() -> None:
     ],
 )
 async def test_failed_query_generation_closes_its_phase_as_failed_with_the_cause(
-    failure: Exception,
+    failure: object,
     expected_error_type: str,
     capfire: CaptureLogfire,
 ) -> None:
     """クエリ生成の失敗は工程のspanを原因のcodeつきの失敗で閉じ、検索は空の結果で続ける。"""
     service = ExternalSearchService(
-        query_runtime=ScriptedAgentRuntime([failure]),
+        query_caller=ScriptedLlmCaller([failure]),
         search_gateway=_FakeGateway(),
     )
 
@@ -206,7 +197,7 @@ async def test_search_records_completed_when_every_provider_call_fails() -> None
         }
     )
     service, recorder = _service(
-        ScriptedAgentRuntime([_query_draft(["q1", "q2"])]),
+        ScriptedLlmCaller([_query_draft(["q1", "q2"])]),
         gateway,
     )
 
@@ -221,7 +212,7 @@ async def test_search_records_completed_when_every_provider_call_fails() -> None
 
 
 async def test_search_records_stopped_on_cancel() -> None:
-    service, recorder = _service(ScriptedAgentRuntime([asyncio.CancelledError()]))
+    service, recorder = _service(ScriptedLlmCaller([asyncio.CancelledError()]))
 
     with pytest.raises(asyncio.CancelledError):
         await _search(service)
@@ -234,7 +225,7 @@ async def test_search_records_stopped_on_cancel() -> None:
 async def test_search_records_failed_without_outcome_for_unclassified_error() -> None:
     gateway = _FakeGateway(errors_by_query={"q": RuntimeError("gateway bug")})
     service, recorder = _service(
-        ScriptedAgentRuntime([_query_draft(["q"])]),
+        ScriptedLlmCaller([_query_draft(["q"])]),
         gateway,
     )
 

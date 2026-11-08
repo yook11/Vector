@@ -9,7 +9,7 @@ from pydantic import SecretStr
 
 from app.agent import composition
 from app.agent.composition import activate_external_search
-from app.agent.runtime.contract import AgentResponseDefect, AgentResponseInvalidError
+from app.agent.output import AgentOutputDefect, AgentOutputInvalidError
 from app.ai_providers.gemini.settings import GeminiConnectionSettings
 
 
@@ -119,21 +119,21 @@ class _TrackedSearchClientFactory:
         return context
 
 
-class _RuntimeSpy:
+class _CallerSpy:
     def __init__(self, *, client: object) -> None:
         self.client = client
 
 
-class _RuntimeSpyFactory:
+class _CallerSpyFactory:
     def __init__(self, *, fail_on_construction: int | None = None) -> None:
         self._fail_on_construction = fail_on_construction
         self.calls: list[object] = []
 
-    def __call__(self, *, client: object) -> _RuntimeSpy:
+    def __call__(self, *, client: object) -> _CallerSpy:
         self.calls.append(client)
         if len(self.calls) == self._fail_on_construction:
-            raise RuntimeError(f"runtime construction {len(self.calls)} failed")
-        return _RuntimeSpy(client=client)
+            raise RuntimeError(f"caller construction {len(self.calls)} failed")
+        return _CallerSpy(client=client)
 
 
 class _GatewaySpy:
@@ -160,27 +160,27 @@ def _install_factory_dependencies(
     *,
     gemini: _TrackedGeminiClientFactory | None = None,
     search_http: _TrackedSearchClientFactory | None = None,
-    runtime: _RuntimeSpyFactory | None = None,
+    caller: _CallerSpyFactory | None = None,
     gateway: _GatewaySpyFactory | None = None,
 ) -> tuple[
     _TrackedGeminiClientFactory,
     _TrackedSearchClientFactory,
-    _RuntimeSpyFactory,
+    _CallerSpyFactory,
     _GatewaySpyFactory,
 ]:
     from app.agent.evidence_collection.external_search import (
         agentcore as agentcore_module,
     )
-    from app.agent.runtime import gemini as gemini_runtime_module
+    from app.agent.llm_call import gemini as gemini_caller_module
     from app.ai_providers.gemini import client as gemini_client_module
 
     gemini = gemini or _TrackedGeminiClientFactory()
     search_http = search_http or _TrackedSearchClientFactory()
-    runtime = runtime or _RuntimeSpyFactory()
+    caller = caller or _CallerSpyFactory()
     gateway = gateway or _GatewaySpyFactory()
     monkeypatch.setattr(gemini_client_module, "open_gemini_client", gemini)
     monkeypatch.setattr(composition, "make_internal_async_client", search_http)
-    monkeypatch.setattr(gemini_runtime_module, "GeminiAgentRuntime", runtime)
+    monkeypatch.setattr(gemini_caller_module, "GeminiLlmCaller", caller)
     monkeypatch.setattr(agentcore_module, "AgentCoreWebSearchGateway", gateway)
     monkeypatch.setattr(
         composition.settings,
@@ -193,17 +193,17 @@ def _install_factory_dependencies(
         "https://gw-sentinel.gateway.bedrock-agentcore.ap-northeast-1.amazonaws.com",
     )
     monkeypatch.setattr(composition.settings, "aws_region", "ap-northeast-1")
-    return gemini, search_http, runtime, gateway
+    return gemini, search_http, caller, gateway
 
 
 @pytest.mark.asyncio
 async def test_external_search_scope_is_lazy_and_closes_each_client_once(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    gemini, search_http, runtime, gateway = _install_factory_dependencies(monkeypatch)
+    gemini, search_http, caller, gateway = _install_factory_dependencies(monkeypatch)
     scope = activate_external_search()
 
-    assert (gemini.clients, search_http.clients, runtime.calls, gateway.calls) == (
+    assert (gemini.clients, search_http.clients, caller.calls, gateway.calls) == (
         [],
         [],
         [],
@@ -215,7 +215,7 @@ async def test_external_search_scope_is_lazy_and_closes_each_client_once(
             len(gemini.clients),
             len(search_http.clients),
             gemini.clients[0].kwargs,
-            external_search.query_runtime.client is gemini.clients[0],
+            external_search.query_caller.client is gemini.clients[0],
             external_search.search_gateway.client is search_http.clients[0],
         ) == (
             1,
@@ -240,7 +240,7 @@ async def test_external_search_scope_is_lazy_and_closes_each_client_once(
     [
         pytest.param(None, id="normal"),
         pytest.param(
-            AgentResponseInvalidError(AgentResponseDefect.RESPONSE_NOT_JSON),
+            AgentOutputInvalidError(AgentOutputDefect.OUTPUT_SCHEMA_MISMATCH),
             id="classified-failure",
         ),
         pytest.param(RuntimeError("unclassified body failure"), id="unexpected"),
@@ -251,7 +251,7 @@ async def test_external_search_scope_closes_acquired_clients_for_every_exit(
     monkeypatch: pytest.MonkeyPatch,
     body_error: BaseException | None,
 ) -> None:
-    gemini, search_http, _runtime, _gateway = _install_factory_dependencies(monkeypatch)
+    gemini, search_http, _caller, _gateway = _install_factory_dependencies(monkeypatch)
 
     if body_error is None:
         async with activate_external_search():
@@ -272,7 +272,7 @@ async def test_external_search_scope_closes_acquired_clients_for_every_exit(
 @pytest.mark.parametrize(
     ("stage", "expected_gemini_closes", "expected_search_closes"),
     [
-        pytest.param("query-runtime", 1, 0, id="query-runtime"),
+        pytest.param("query-caller", 1, 0, id="query-caller"),
         pytest.param("search-http-entry", 1, 0, id="search-http-entry"),
         pytest.param("gateway", 1, 1, id="gateway"),
     ],
@@ -283,8 +283,8 @@ async def test_external_search_scope_closes_only_acquired_clients_on_failure(
     expected_gemini_closes: int,
     expected_search_closes: int,
 ) -> None:
-    runtime = _RuntimeSpyFactory(
-        fail_on_construction=1 if stage == "query-runtime" else None
+    caller = _CallerSpyFactory(
+        fail_on_construction=1 if stage == "query-caller" else None
     )
     search_http = _TrackedSearchClientFactory(
         entry_error=RuntimeError("search http entry failed")
@@ -294,10 +294,10 @@ async def test_external_search_scope_closes_only_acquired_clients_on_failure(
     gateway_error = (
         RuntimeError("gateway construction failed") if stage == "gateway" else None
     )
-    gemini, search_http, _runtime, _gateway = _install_factory_dependencies(
+    gemini, search_http, _caller, _gateway = _install_factory_dependencies(
         monkeypatch,
         search_http=search_http,
-        runtime=runtime,
+        caller=caller,
         gateway=_GatewaySpyFactory(construction_error=gateway_error),
     )
 
@@ -317,7 +317,7 @@ async def test_external_search_scope_attempts_gemini_close_when_http_close_fails
 ) -> None:
     close_error = RuntimeError("search http close failure")
     search_http = _TrackedSearchClientFactory(close_error=close_error)
-    gemini, search_http, _runtime, _gateway = _install_factory_dependencies(
+    gemini, search_http, _caller, _gateway = _install_factory_dependencies(
         monkeypatch,
         search_http=search_http,
     )
@@ -340,7 +340,7 @@ async def test_external_search_scope_allows_close_failure_to_replace_body_error(
     body_error = RuntimeError("body failure")
     close_error = RuntimeError("search http close failure")
     search_http = _TrackedSearchClientFactory(close_error=close_error)
-    _gemini, _search_http, _runtime, _gateway = _install_factory_dependencies(
+    _gemini, _search_http, _caller, _gateway = _install_factory_dependencies(
         monkeypatch,
         search_http=search_http,
     )
@@ -359,7 +359,7 @@ async def test_external_search_scope_allows_close_failure_to_replace_body_error(
 async def test_external_search_scope_creates_fresh_clients_for_each_activation(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    gemini, search_http, _runtime, _gateway = _install_factory_dependencies(monkeypatch)
+    gemini, search_http, _caller, _gateway = _install_factory_dependencies(monkeypatch)
 
     async with activate_external_search() as first:
         pass
@@ -367,7 +367,7 @@ async def test_external_search_scope_creates_fresh_clients_for_each_activation(
         pass
 
     assert (
-        first.query_runtime.client is not second.query_runtime.client,
+        first.query_caller.client is not second.query_caller.client,
         first.search_gateway.client is not second.search_gateway.client,
         [client.close_count for client in gemini.clients],
         [client.close_count for client in search_http.clients],

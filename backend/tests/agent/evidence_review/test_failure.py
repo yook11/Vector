@@ -10,10 +10,7 @@ from app.agent.evidence_review.failure import EvidenceReviewError
 from app.agent.evidence_review.preparation import EvidenceReviewInput
 from app.agent.evidence_review.selection import EvidenceReviewerResponse
 from app.agent.evidence_review.service import _review_attempt
-from app.agent.runtime.contract import (
-    AgentResponseDefect,
-    AgentResponseInvalidError,
-)
+from app.agent.output import AgentOutputDefect, AgentOutputInvalidError
 from app.ai_providers.errors import (
     AIProviderResultError,
     AIProviderResultReason,
@@ -26,19 +23,19 @@ from app.http.failure import (
     HttpTransportStage,
 )
 from tests.agent.evidence_review._builders import AS_OF
-from tests.agent.runtime._fakes import ScriptedAgentRuntime
+from tests.agent.llm_call._fakes import ScriptedLlmCaller
 
 
 @pytest.mark.parametrize(
     ("cause", "expected_code"),
     [
         pytest.param(
-            AgentResponseInvalidError(
-                AgentResponseDefect.RESPONSE_NOT_JSON,
+            AgentOutputInvalidError(
+                AgentOutputDefect.OUTPUT_SCHEMA_MISMATCH,
                 repair_hint="SECRET_REPAIR_HINT_MUST_NOT_LEAK",
             ),
-            "response_not_json",
-            id="runtime-defect",
+            "output_schema_mismatch",
+            id="output-defect",
         ),
         pytest.param(
             AIProviderTransportError(
@@ -61,7 +58,7 @@ from tests.agent.runtime._fakes import ScriptedAgentRuntime
 )
 def test_evidence_review_error_names_the_cause_as_safe_code(
     cause: (
-        AgentResponseInvalidError
+        AgentOutputInvalidError
         | AIProviderTransportError
         | AIProviderResultError
         | TimeoutError
@@ -97,15 +94,16 @@ def test_evidence_review_error_names_draft_validation_error_as_schema_mismatch()
 
 @pytest.mark.asyncio
 async def test_review_attempt_preserves_classified_source_as_cause() -> None:
-    cause = AgentResponseInvalidError(AgentResponseDefect.RESPONSE_NOT_OBJECT)
+    """LlmCallerが返した分類済みの失敗は、そのまま原因として包まれreasonを名乗る。"""
+    cause = AIProviderResultError(reason=AIProviderResultReason.RESPONSE_UNPARSEABLE)
 
     with pytest.raises(EvidenceReviewError) as raised:
         await _review_attempt(
             agent=EVIDENCE_REVIEWER_AGENT,
-            reviewer_runtime=ScriptedAgentRuntime([cause]),
+            reviewer_caller=ScriptedLlmCaller([cause]),
             review_input=EvidenceReviewInput(task_groups=(), as_of=AS_OF),
             attempt_number=1,
         )
 
-    assert raised.value.code == "response_not_object"
+    assert raised.value.code == "response_unparseable"
     assert raised.value.__cause__ is cause

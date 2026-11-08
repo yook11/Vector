@@ -101,7 +101,7 @@ def _evidence(ref: str = "1") -> AnswerInputEvidence:
 
 
 def _truncated_error() -> AIProviderResultError:
-    """S1 runtimeが実際に送出する形 (reason付き) を再現する。"""
+    """S1 streamerが実際に送出する形 (reason付き) を再現する。"""
     return AIProviderResultError(reason=AIProviderResultReason.OUTPUT_TRUNCATED)
 
 
@@ -257,7 +257,7 @@ async def _answer(
 ) -> EvidenceAnswerDraft:
     service_kwargs: dict[str, Any] = {
         "agent": EVIDENCE_ANSWER_AGENT,
-        "runtime_scope_factory": generator.activate,
+        "llm_text_streamer_scope_factory": generator.activate,
         "repository": (
             AllowAnswerGenerationStart() if answer_start is None else answer_start
         ),
@@ -492,7 +492,8 @@ async def test_generation_failure_raises_typed_error_with_code() -> None:
             AIProviderTransportError(
                 http_error=HttpTransportError(
                     failure=HttpTransportFailure(
-                        HttpTransportStage.RECEIVE, HttpTransportFailureReason.TIMEOUT
+                        HttpTransportStage.CONNECT,
+                        HttpTransportFailureReason.CERTIFICATE_VERIFICATION,
                     )
                 )
             )
@@ -507,15 +508,17 @@ async def test_generation_failure_raises_typed_error_with_code() -> None:
 
 
 @pytest.mark.asyncio
-async def test_provider_error_raises_without_retry(
+async def test_unresolvable_provider_error_raises_without_retry(
     capfire: CaptureLogfire,
 ) -> None:
+    """呼び直しても解消しないAIの失敗は再試行せず、1回目の失敗として記録して回答の失敗にする。"""
     generator = FakeGenerator(
         [
             AIProviderTransportError(
                 http_error=HttpTransportError(
                     failure=HttpTransportFailure(
-                        HttpTransportStage.RECEIVE, HttpTransportFailureReason.TIMEOUT
+                        HttpTransportStage.CONNECT,
+                        HttpTransportFailureReason.CERTIFICATE_VERIFICATION,
                     )
                 )
             )
@@ -587,10 +590,10 @@ async def test_unexpected_exception_propagates_without_fallback(
 
 
 @pytest.mark.asyncio
-async def test_runtime_scope_activation_failure_is_not_attempt_fallback(
+async def test_streamer_scope_activation_failure_is_not_attempt_fallback(
     capfire: CaptureLogfire,
 ) -> None:
-    failure = RuntimeError("runtime scope unavailable")
+    failure = RuntimeError("streamer scope unavailable")
     reporter = RecordingDeltaReporter()
 
     @asynccontextmanager
@@ -601,7 +604,7 @@ async def test_runtime_scope_activation_failure_is_not_attempt_fallback(
     service = EvidenceAnswerService(
         schedule_deadline_check=lambda *_: None,
         agent=EVIDENCE_ANSWER_AGENT,
-        runtime_scope_factory=failing_scope,
+        llm_text_streamer_scope_factory=failing_scope,
         repository=AllowAnswerGenerationStart(),
         delta_reporter=reporter,
     )
@@ -643,7 +646,8 @@ async def test_runtime_scope_activation_failure_is_not_attempt_fallback(
             AIProviderTransportError(
                 http_error=HttpTransportError(
                     failure=HttpTransportFailure(
-                        HttpTransportStage.RECEIVE, HttpTransportFailureReason.TIMEOUT
+                        HttpTransportStage.CONNECT,
+                        HttpTransportFailureReason.CERTIFICATE_VERIFICATION,
                     )
                 )
             ),
@@ -651,11 +655,11 @@ async def test_runtime_scope_activation_failure_is_not_attempt_fallback(
         ),
     ],
 )
-async def test_runtime_scope_exit_failure_discards_selected_outcome(
+async def test_streamer_scope_exit_failure_discards_selected_outcome(
     stream_outcome: StreamOutcome,
     capfire: CaptureLogfire,
 ) -> None:
-    close_error = RuntimeError("runtime scope exit failed")
+    close_error = RuntimeError("streamer scope exit failed")
     generator = FakeGenerator([stream_outcome])
 
     @asynccontextmanager
@@ -668,7 +672,7 @@ async def test_runtime_scope_exit_failure_discards_selected_outcome(
     service = EvidenceAnswerService(
         schedule_deadline_check=lambda *_: None,
         agent=EVIDENCE_ANSWER_AGENT,
-        runtime_scope_factory=broken_scope,
+        llm_text_streamer_scope_factory=broken_scope,
         repository=AllowAnswerGenerationStart(),
     )
 
@@ -727,7 +731,8 @@ async def test_outcome_metric_records_succeeded_once(
             AIProviderTransportError(
                 http_error=HttpTransportError(
                     failure=HttpTransportFailure(
-                        HttpTransportStage.RECEIVE, HttpTransportFailureReason.TIMEOUT
+                        HttpTransportStage.CONNECT,
+                        HttpTransportFailureReason.CERTIFICATE_VERIFICATION,
                     )
                 )
             )
@@ -815,7 +820,8 @@ async def test_provider_error_aborts_without_live_fallback() -> None:
             AIProviderTransportError(
                 http_error=HttpTransportError(
                     failure=HttpTransportFailure(
-                        HttpTransportStage.RECEIVE, HttpTransportFailureReason.TIMEOUT
+                        HttpTransportStage.CONNECT,
+                        HttpTransportFailureReason.CERTIFICATE_VERIFICATION,
                     )
                 )
             )
@@ -882,7 +888,8 @@ async def test_provider_error_closes_stream_without_retry(
             AIProviderTransportError(
                 http_error=HttpTransportError(
                     failure=HttpTransportFailure(
-                        HttpTransportStage.RECEIVE, HttpTransportFailureReason.TIMEOUT
+                        HttpTransportStage.CONNECT,
+                        HttpTransportFailureReason.CERTIFICATE_VERIFICATION,
                     )
                 )
             )
@@ -919,17 +926,16 @@ async def test_provider_error_closes_stream_without_retry(
 
 
 @pytest.mark.asyncio
-async def test_truncated_first_attempt_retries_with_trusted_truncation_notice(
+async def test_resolvable_provider_failure_retries_once_with_the_same_input(
     capfire: CaptureLogfire,
 ) -> None:
-    """MAX_TOKENS打ち切りはrequest内でretryされ、通知はtrusted側の入力で運ばれる。"""
+    """呼び直せば解消しうるAIの失敗(出力の打ち切り)は同じ入力で1回だけ再試行し、2回目の回答を返す。"""
     generator = FakeGenerator([_truncated_error(), "根拠から確認できます。[[1]]"])
 
     draft = await _answer(generator)
 
     assert len(generator.calls) == 2
-    assert generator.inputs[0].previous_output_truncated is False
-    assert generator.inputs[1].previous_output_truncated is True
+    assert generator.inputs[0] is generator.inputs[1]
     assert draft == _expected_draft(
         answer="根拠から確認できます。[[1]]",
         cited_refs=["1"],
@@ -942,22 +948,6 @@ async def test_truncated_first_attempt_retries_with_trusted_truncation_notice(
             "failure_code": "none",
         }
     ]
-
-
-@pytest.mark.asyncio
-async def test_non_truncation_retry_does_not_carry_truncation_notice() -> None:
-    """打ち切り以外が原因のretryでは打ち切り通知フラグを立てない。"""
-    generator = FakeGenerator(["引用がありません。", "根拠から確認できます。[[1]]"])
-
-    draft = await _answer(generator)
-
-    assert len(generator.calls) == 2
-    assert generator.inputs[0] is generator.inputs[1]
-    assert generator.inputs[1].previous_output_truncated is False
-    assert draft == _expected_draft(
-        answer="根拠から確認できます。[[1]]",
-        cited_refs=["1"],
-    )
 
 
 @pytest.mark.asyncio
@@ -1034,7 +1024,8 @@ async def test_classified_failure_records_failed_outcome() -> None:
             AIProviderTransportError(
                 http_error=HttpTransportError(
                     failure=HttpTransportFailure(
-                        HttpTransportStage.RECEIVE, HttpTransportFailureReason.TIMEOUT
+                        HttpTransportStage.CONNECT,
+                        HttpTransportFailureReason.CERTIFICATE_VERIFICATION,
                     )
                 )
             )
@@ -1118,7 +1109,8 @@ async def test_provider_error_records_failure_without_fallback() -> None:
             AIProviderTransportError(
                 http_error=HttpTransportError(
                     failure=HttpTransportFailure(
-                        HttpTransportStage.RECEIVE, HttpTransportFailureReason.TIMEOUT
+                        HttpTransportStage.CONNECT,
+                        HttpTransportFailureReason.CERTIFICATE_VERIFICATION,
                     )
                 )
             )

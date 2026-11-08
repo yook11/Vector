@@ -9,7 +9,7 @@ from app.agent.answering.direct_answer.contract import DirectAnswerInput
 from app.agent.threads.contracts import ThreadMessageSnapshot
 from app.analysis.prompt_safety import sanitize_for_untrusted_block
 
-DIRECT_ANSWER_PROMPT_VERSION: Final[str] = "v6"
+DIRECT_ANSWER_PROMPT_VERSION: Final[str] = "v7"
 
 DIRECT_ANSWER_INSTRUCTIONS: Final[str] = """\
 ユーザーの質問に、検索を行わず日本語で回答してください。
@@ -51,28 +51,17 @@ as_of: {as_of}
 </untrusted_input>
 """
 
-# runtimeが観測した機械的事実であり、model出力由来ではないためtrusted (sanitize不要)。
-_TRUNCATION_REPAIR_BLOCK: Final[str] = """
-
-# Output Length
-前回の生成は文字数上限に達して途中で打ち切られました。
-今回は上限内に収まる長さで、要点を絞って最初から結論まで書き切ってください。
-"""
-
 
 def render_direct_answer_input(input: DirectAnswerInput) -> str:
     request = input.request
     # HTMLではないLLM promptであり、外部入力は境界用sanitizerを通す。
     # nosemgrep: python.django.security.injection.raw-html-format.raw-html-format  # noqa: E501
-    rendered = DIRECT_ANSWER_INPUT_TEMPLATE.format(
+    return DIRECT_ANSWER_INPUT_TEMPLATE.format(
         question=sanitize_for_untrusted_block(request.question),
         as_of=request.as_of.isoformat(),
         history=_render_history(request.history),
         previous_answer=sanitize_for_untrusted_block(input.previous_answer),
     )
-    if input.previous_output_truncated:
-        return rendered + _TRUNCATION_REPAIR_BLOCK
-    return rendered
 
 
 def _render_history(history: tuple[ThreadMessageSnapshot, ...]) -> str:

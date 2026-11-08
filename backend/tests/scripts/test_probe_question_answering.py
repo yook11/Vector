@@ -124,7 +124,7 @@ def test_probe_uses_answering_runner_without_removed_external_pipeline_seams() -
         "RunIdentity",
         "RunInput",
         "activate_external_search",
-        "activate_gemini_agent_runtime",
+        "activate_gemini_llm_caller",
         "create_cli_engine",
         "caller_managed_session_factory",
         "EvidenceCollectionService",
@@ -341,9 +341,9 @@ def test_search_probe_passes_actual_internal_and_external_dependencies_to_phases
     assert external_search_scope.id == "activate_external_search"
     reviewer = _keyword_value(phase, "reviewer")
     assert isinstance(reviewer, ast.Call)
-    reviewer_scope = _keyword_value(reviewer, "runtime_scope_factory")
+    reviewer_scope = _keyword_value(reviewer, "llm_caller_scope_factory")
     assert isinstance(reviewer_scope, ast.Name)
-    assert reviewer_scope.id == "activate_gemini_agent_runtime"
+    assert reviewer_scope.id == "activate_gemini_llm_caller"
     evidence_answerer = _keyword_value(phase, "evidence_answerer")
     assert isinstance(evidence_answerer, ast.Call)
     assert _call_name(evidence_answerer) == "EvidenceAnswerService"
@@ -403,14 +403,14 @@ def test_direct_probe_keeps_dependencies_unreachable_and_uses_plan_summary() -> 
     assert isinstance(direct_answerer, ast.Call)
     assert _call_name(direct_answerer) == "DirectAnswerService"
     direct_agent = _keyword_value(direct_answerer, "agent")
-    direct_runtime_scope_factory = _keyword_value(
+    direct_scope_factory = _keyword_value(
         direct_answerer,
-        "runtime_scope_factory",
+        "llm_text_streamer_scope_factory",
     )
     assert isinstance(direct_agent, ast.Name)
     assert direct_agent.id == "DIRECT_ANSWER_AGENT"
-    assert isinstance(direct_runtime_scope_factory, ast.Name)
-    assert direct_runtime_scope_factory.id == "activate_gemini_agent_runtime"
+    assert isinstance(direct_scope_factory, ast.Name)
+    assert direct_scope_factory.id == "activate_gemini_llm_caller"
     direct_answer_start = _keyword_value(direct_answerer, "repository")
     assert isinstance(direct_answer_start, ast.Call)
     assert _call_name(direct_answer_start) == "_ProbeAnswerGenerationStart"

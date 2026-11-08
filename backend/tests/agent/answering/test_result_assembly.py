@@ -351,7 +351,7 @@ def test_failed_evidence_run_adds_incomplete_missing_without_leaking_reason() ->
                 internal_hit_count=1,
             )
         ],
-        failure_code="response_not_json",
+        failure_code="response_unparseable",
     )
 
     result = _assemble(
@@ -367,7 +367,7 @@ def test_failed_evidence_run_adds_incomplete_missing_without_leaking_reason() ->
     assert (
         result.status,
         result.missing_aspects,
-        "response_not_json" in result.missing_aspects,
+        "response_unparseable" in result.missing_aspects,
     ) == (
         "insufficient",
         [

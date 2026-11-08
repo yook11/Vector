@@ -1,18 +1,17 @@
-"""Provider-neutralなstructured output parseとvalidation。"""
+"""Agentが宣言した出力の型へ、providerが返したJSON objectを検証する。"""
 
 from __future__ import annotations
 
-import json
 from collections.abc import Mapping
+from enum import StrEnum
 from typing import Any, get_args
 
 from pydantic import BaseModel, TypeAdapter, ValidationError
 
 from app.agent.agent import Agent
-from app.agent.runtime.contract import (
-    AgentResponseDefect,
-    AgentResponseInvalidError,
-)
+from app.shared.errors import ApplicationError
+
+__all__ = ["AgentOutputDefect", "AgentOutputInvalidError", "validate_output"]
 
 _SAFE_CONSTRAINT_KEYS = frozenset(
     {
@@ -27,35 +26,34 @@ _SAFE_CONSTRAINT_KEYS = frozenset(
 )
 
 
-def thaw_schema(value: Any) -> Any:
-    """Agentの凍結schemaをprovider request用のJSON互換値へ戻す。"""
-    if isinstance(value, Mapping):
-        return {key: thaw_schema(item) for key, item in value.items()}
-    if isinstance(value, (list, tuple)):
-        return [thaw_schema(item) for item in value]
-    return value
+class AgentOutputDefect(StrEnum):
+    """Agentの出力が契約を満たさなかった種類。"""
+
+    OUTPUT_SCHEMA_MISMATCH = "output_schema_mismatch"
 
 
-def parse_json_object(raw_json: str) -> dict[str, Any]:
-    """JSON文字列をobjectへ変換し、共通defectへ分類する。"""
-    try:
-        payload = json.loads(raw_json)
-    except (json.JSONDecodeError, TypeError):
-        defect = AgentResponseDefect.RESPONSE_NOT_JSON
-        repair_hint = "response must be valid JSON"
-    else:
-        if isinstance(payload, dict):
-            return payload
-        defect = AgentResponseDefect.RESPONSE_NOT_OBJECT
-        repair_hint = "response root must be a JSON object"
-    raise AgentResponseInvalidError(defect, repair_hint=repair_hint)
+class AgentOutputInvalidError(ApplicationError):
+    """Agentの出力を、宣言されたPythonの契約へ変換できない。"""
+
+    def __init__(
+        self,
+        defect: AgentOutputDefect,
+        *,
+        repair_hint: str | None = None,
+    ) -> None:
+        self.defect = defect
+        self.repair_hint = repair_hint
+        message = self.defect.value
+        if self.repair_hint is not None:
+            message = f"{message}: {self.repair_hint}"
+        super().__init__(message, details={"defect": self.defect.value})
 
 
 def validate_output[InputT, OutputT](
     agent: Agent[InputT, OutputT],
     payload: dict[str, Any],
 ) -> OutputT:
-    """JSON objectをAgentが宣言したPython outputへ検証する。"""
+    """JSON objectをAgentが宣言したPythonの出力へ検証する。"""
     try:
         return TypeAdapter(agent.output_type).validate_python(payload)
     except ValidationError as exc:
@@ -63,8 +61,8 @@ def validate_output[InputT, OutputT](
             exc,
             allowed_locations=_declared_location_names(agent.output_type),
         )
-    raise AgentResponseInvalidError(
-        AgentResponseDefect.OUTPUT_SCHEMA_MISMATCH,
+    raise AgentOutputInvalidError(
+        AgentOutputDefect.OUTPUT_SCHEMA_MISMATCH,
         repair_hint=repair_hint,
     )
 

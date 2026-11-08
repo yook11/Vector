@@ -1,9 +1,9 @@
-"""Gemini-backed one-attempt Agent runtime."""
+"""Geminiで1 provider attemptを実行するLLM呼び出しの本物。"""
 
 from __future__ import annotations
 
 import asyncio
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Mapping
 from typing import Any, cast
 
 from google.genai.client import AsyncClient
@@ -11,37 +11,26 @@ from google.genai.types import GenerateContentConfig
 from opentelemetry import context as otel_context
 
 from app.agent.agent import Agent
+from app.agent.llm_call.caller import AgentTextStream
 from app.agent.recording.llm import (
+    UNCLASSIFIED_FAILURE_CODE,
+    LlmAttemptFailed,
     LlmCallRecorder,
     LlmCallRecording,
+    llm_attempt_failed_from,
     logfire_llm_call_recorder,
 )
 from app.agent.recording.types import Usage, _usage_from_optional_counts
-from app.agent.runtime._structured_output import (
-    parse_json_object,
-    thaw_schema,
-    validate_output,
-)
-from app.agent.runtime.contract import AgentResponseInvalidError, AgentTextStream
-from app.agent.runtime.llm_failure import (
-    UNCLASSIFIED_FAILURE_CODE,
-    LlmAttemptFailed,
-    llm_attempt_failed_from,
-)
-from app.ai_providers.errors import (
-    AIProviderError,
-    AIProviderResultError,
-    AIProviderResultReason,
-)
-from app.ai_providers.gemini.error_translator import (
-    OUTPUT_BLOCKED_FINISH_REASONS,
-    output_blocked_reason,
-    translate_gemini_error,
+from app.ai_providers.errors import AIProviderError, AIProviderResultError
+from app.ai_providers.gemini.error_translator import translate_gemini_error
+from app.ai_providers.gemini.response import (
+    GeminiStreamReader,
+    read_gemini_json_object,
 )
 from app.analysis.ai_provider_exhaustion import record_ai_provider_exhausted
 
 
-class GeminiAgentRuntime:
+class GeminiLlmCaller:
     """借りたGemini async clientで1 provider attemptだけを実行する。"""
 
     __slots__ = ("_client", "_llm_calls")
@@ -55,13 +44,13 @@ class GeminiAgentRuntime:
         self._client = client
         self._llm_calls = llm_calls
 
-    async def call[InputT, OutputT](
+    async def call[InputT](
         self,
-        agent: Agent[InputT, OutputT],
+        agent: Agent[InputT, Any],
         input: InputT,
         *,
         attempt_number: int,
-    ) -> OutputT:
+    ) -> dict[str, Any]:
         if (
             not isinstance(attempt_number, int)
             or isinstance(attempt_number, bool)
@@ -69,9 +58,9 @@ class GeminiAgentRuntime:
         ):
             raise ValueError("attempt_number must be a positive integer")
         if agent.model.provider != "gemini":
-            raise ValueError("GeminiAgentRuntime requires a Gemini Agent")
+            raise ValueError("GeminiLlmCaller requires a Gemini Agent")
         if agent.response_schema is None:
-            raise ValueError("GeminiAgentRuntime.call requires response_schema")
+            raise ValueError("GeminiLlmCaller.call requires response_schema")
 
         contents = agent.prompt.input_renderer(input)
         config = _build_config(agent, structured=True)
@@ -105,25 +94,10 @@ class GeminiAgentRuntime:
                     recording,
                     _usage_from_metadata(getattr(response, "usage_metadata", None)),
                 )
-                if _has_prompt_block(response):
-                    classified_error = AIProviderResultError(
-                        reason=AIProviderResultReason.INPUT_BLOCKED,
-                    )
-                else:
-                    finish_reason = _finish_reason_name(response)
-                    if finish_reason in OUTPUT_BLOCKED_FINISH_REASONS:
-                        classified_error = AIProviderResultError(
-                            reason=output_blocked_reason(finish_reason),
-                        )
-                    elif finish_reason == "MAX_TOKENS":
-                        classified_error = AIProviderResultError(
-                            reason=AIProviderResultReason.OUTPUT_TRUNCATED
-                        )
-                    else:
-                        try:
-                            return _parse_output(agent, response)
-                        except AgentResponseInvalidError as exc:
-                            classified_error = exc
+                try:
+                    return read_gemini_json_object(response)
+                except AIProviderResultError as exc:
+                    classified_error = exc
 
             if classified_error is not None:
                 _report_classified(
@@ -150,7 +124,7 @@ class GeminiAgentRuntime:
         ):
             raise ValueError("attempt_number must be a positive integer")
         if agent.model.provider != "gemini":
-            raise ValueError("GeminiAgentRuntime requires a Gemini Agent")
+            raise ValueError("GeminiLlmCaller requires a Gemini Agent")
 
         contents = agent.prompt.input_renderer(input)
         config = _build_config(
@@ -193,7 +167,7 @@ class GeminiAgentRuntime:
             classified_error: Exception | None = None
             translated_cause: Exception | None = None
             unknown_error: Exception | None = None
-            terminal_reason_seen = False
+            reader = GeminiStreamReader()
             try:
                 sdk_stream = await self._client.models.generate_content_stream(
                     model=agent.model.name,
@@ -205,43 +179,10 @@ class GeminiAgentRuntime:
                         recording,
                         _usage_from_metadata(getattr(chunk, "usage_metadata", None)),
                     )
-                    if _has_prompt_block(chunk):
-                        classified_error = AIProviderResultError(
-                            reason=AIProviderResultReason.INPUT_BLOCKED,
-                        )
-                        break
-
-                    finish_reason_names = _extract_finish_reason_names(chunk)
-                    blocked_reason_name = next(
-                        (
-                            reason
-                            for reason in finish_reason_names
-                            if reason in OUTPUT_BLOCKED_FINISH_REASONS
-                        ),
-                        None,
-                    )
-                    if blocked_reason_name is not None:
-                        classified_error = AIProviderResultError(
-                            reason=output_blocked_reason(blocked_reason_name),
-                        )
-                        break
-                    if "MAX_TOKENS" in finish_reason_names:
-                        classified_error = AIProviderResultError(
-                            reason=AIProviderResultReason.OUTPUT_TRUNCATED
-                        )
-                        break
-                    terminal_reason_seen = terminal_reason_seen or bool(
-                        finish_reason_names
-                    )
-
-                    text = getattr(chunk, "text", None)
+                    text = reader.read(chunk)
                     if text:
                         yield text
-
-                if classified_error is None and not terminal_reason_seen:
-                    classified_error = AIProviderResultError(
-                        reason=AIProviderResultReason.STREAM_INCOMPLETE
-                    )
+                reader.finish()
             except (GeneratorExit, asyncio.CancelledError):
                 raise
             except AIProviderError as exc:
@@ -302,40 +243,13 @@ def _build_config(
             raise ValueError("structured Gemini request requires response_schema")
         config.update(
             response_mime_type="application/json",
-            response_schema=thaw_schema(agent.response_schema),
+            response_schema=_thaw_schema(agent.response_schema),
         )
     if agent.model_settings.temperature is not None:
         config["temperature"] = agent.model_settings.temperature
     if agent.model_settings.max_output_tokens is not None:
         config["max_output_tokens"] = agent.model_settings.max_output_tokens
     return GenerateContentConfig(**config)
-
-
-def _has_prompt_block(response: object) -> bool:
-    prompt_feedback = getattr(response, "prompt_feedback", None)
-    return (
-        prompt_feedback is not None
-        and getattr(prompt_feedback, "block_reason", None) is not None
-    )
-
-
-def _extract_finish_reason_names(response: object) -> list[str]:
-    names: list[str] = []
-    for candidate in getattr(response, "candidates", None) or []:
-        finish_reason = getattr(candidate, "finish_reason", None)
-        if finish_reason is None:
-            continue
-        if isinstance(finish_reason, str):
-            names.append(finish_reason)
-            continue
-        name = getattr(finish_reason, "name", None)
-        if isinstance(name, str) and name:
-            names.append(name)
-            continue
-        value = getattr(finish_reason, "value", None)
-        if isinstance(value, str) and value:
-            names.append(value)
-    return names
 
 
 async def _close_sdk_stream(stream: AsyncIterator[object] | None) -> None:
@@ -352,28 +266,6 @@ async def _close_sdk_stream(stream: AsyncIterator[object] | None) -> None:
         return
 
 
-def _finish_reason_name(response: object) -> str | None:
-    candidates = getattr(response, "candidates", None) or []
-    if not candidates:
-        return None
-    finish_reason = getattr(candidates[0], "finish_reason", None)
-    if isinstance(finish_reason, str):
-        return finish_reason
-    for attribute in ("name", "value"):
-        value = getattr(finish_reason, attribute, None)
-        if isinstance(value, str):
-            return value
-    return None
-
-
-def _parse_output[InputT, OutputT](
-    agent: Agent[InputT, OutputT],
-    response: object,
-) -> OutputT:
-    text = getattr(response, "text", None) or ""
-    return validate_output(agent, parse_json_object(text))
-
-
 def _usage_from_metadata(usage: object | None) -> Usage | None:
     return _usage_from_optional_counts(
         input_tokens=getattr(usage, "prompt_token_count", None),
@@ -381,3 +273,12 @@ def _usage_from_metadata(usage: object | None) -> Usage | None:
         cache_read_input_tokens=getattr(usage, "cached_content_token_count", None),
         reasoning_output_tokens=getattr(usage, "thoughts_token_count", None),
     )
+
+
+def _thaw_schema(value: Any) -> Any:
+    """Agentの凍結schemaをprovider request用のJSON互換値へ戻す。"""
+    if isinstance(value, Mapping):
+        return {key: _thaw_schema(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_thaw_schema(item) for item in value]
+    return value

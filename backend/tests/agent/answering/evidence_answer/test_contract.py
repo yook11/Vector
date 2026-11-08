@@ -22,13 +22,13 @@ def test_review_missing_is_required_on_evidence_answer_input() -> None:
     assert review_missing.default_factory is MISSING
 
 
-def test_evidence_answer_input_is_frozen_and_keeps_attempt_state_together() -> None:
+def test_evidence_answer_input_is_frozen_with_typed_fields() -> None:
+    """回答の入力は再試行の状態を持たない4項目の不変の値である。"""
     assert [field.name for field in fields(EvidenceAnswerInput)] == [
         "request",
         "evidence",
         "target_time_window",
         "review_missing",
-        "previous_output_truncated",
     ]
     type_hints = get_type_hints(EvidenceAnswerInput)
     assert type_hints["target_time_window"] == TargetTimeWindow | None
@@ -39,7 +39,6 @@ def test_evidence_answer_input_is_frozen_and_keeps_attempt_state_together() -> N
         target_time_window=None,
         review_missing=(),
     )
-    assert input.previous_output_truncated is False
     with pytest.raises(FrozenInstanceError):
         input.target_time_window = TargetTimeWindow(kind="today")  # type: ignore[misc]
 

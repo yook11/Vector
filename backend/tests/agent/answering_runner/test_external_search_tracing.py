@@ -43,6 +43,7 @@ from app.agent.evidence_collection.internal_search.query_embedding import (
 )
 from app.agent.evidence_review import EvidenceReviewService
 from app.agent.evidence_review.agent import EVIDENCE_REVIEWER_AGENT
+from app.agent.llm_call.gemini import GeminiLlmCaller
 from app.agent.planning.contract import (
     DirectAnswerPlan,
     PlanningInput,
@@ -50,8 +51,6 @@ from app.agent.planning.contract import (
     SearchPlan,
     TargetTimeWindow,
 )
-from app.agent.runtime.contract import AgentResponseDefect, AgentResponseInvalidError
-from app.agent.runtime.gemini import GeminiAgentRuntime
 from app.analysis.analyzed_article import InScopeAnalyzedArticle
 from app.analysis.assessment.domain.result import InScope, InScopeCategory
 from app.logfire.redaction import install_exception_redaction
@@ -62,8 +61,8 @@ from tests.agent.answering_runner._harness import (
     run_identity,
 )
 from tests.agent.evidence_collection._failures import article_search_failed
-from tests.agent.runtime._fakes import ScriptedAgentRuntime
-from tests.agent.runtime._helpers import FakeGeminiClient, FakeResponse
+from tests.agent.llm_call._fakes import ScriptedLlmCaller
+from tests.agent.llm_call._helpers import FakeGeminiClient, FakeResponse
 from tests.logfire._span_helpers import (
     domain_attr_keys,
     exception_event,
@@ -217,7 +216,7 @@ class _Factory:
         self._scopes = scopes
 
     def reviewer_scope(self) -> AbstractAsyncContextManager[object]:
-        return fixed_scope(self._scopes.reviewer_runtime)()
+        return fixed_scope(self._scopes.reviewer_caller)()
 
     def __call__(self) -> _Scope:
         return _Scope(self._scopes.external_search)
@@ -235,12 +234,12 @@ def _runner(
     factory = _Factory(
         ExternalScopes(
             external_search=ExternalSearchService(
-                query_runtime=GeminiAgentRuntime(
+                query_caller=GeminiLlmCaller(
                     client=cast(AsyncClient, query_client),
                 ),
                 search_gateway=tool,
             ),
-            reviewer_runtime=GeminiAgentRuntime(
+            reviewer_caller=GeminiLlmCaller(
                 client=cast(AsyncClient, reviewer_client),
             ),
         )
@@ -254,7 +253,8 @@ def _runner(
         direct_answerer=_UnreachableDirectAnswerer(),
         evidence_answerer=evidence_answerer or _EvidenceAnswerer(),
         reviewer=EvidenceReviewService(
-            agent=EVIDENCE_REVIEWER_AGENT, runtime_scope_factory=factory.reviewer_scope
+            agent=EVIDENCE_REVIEWER_AGENT,
+            llm_caller_scope_factory=factory.reviewer_scope,
         ),
         organizer=PassThroughOrganizer(),
     )
@@ -360,7 +360,7 @@ async def test_external_phase_spans_keep_attributes_parentage_and_no_sensitive_t
     ]
     assert [provider["attributes"].get("error.type") for provider in providers] == [
         None,
-        "response_not_json",
+        "ai_provider_result_error",
         None,
     ]
     assert (
@@ -609,20 +609,19 @@ def _review_draft_selecting_all_offered_options() -> Any:
     )
 
 
-def _two_task_query_failing_runtime() -> ExternalScopes:
+def _two_task_query_failing_caller() -> ExternalScopes:
     """外部query生成を2 task分とも失敗させ、外部ヒットを空に保つ(内部統計だけに絞る)。
 
     D4-S1: internalヒットが非空ならヒットゼロtaskではないためreviewerが起動する。
     S1: reviewerはRun単位1回のため script は1件だけ渡す (2回目の呼び出しは
     枯渇の AssertionError で即 red になる)。
     """
-    query_failure = AgentResponseInvalidError(AgentResponseDefect.RESPONSE_NOT_JSON)
     return ExternalScopes(
         external_search=ExternalSearchService(
-            query_runtime=ScriptedAgentRuntime([query_failure, query_failure]),
+            query_caller=ScriptedLlmCaller([{}, {}]),
             search_gateway=_FakeExternalSearchGateway(),
         ),
-        reviewer_runtime=ScriptedAgentRuntime(
+        reviewer_caller=ScriptedLlmCaller(
             [_review_draft_selecting_all_offered_options()]
         ),
     )
@@ -685,7 +684,7 @@ async def test_direct_path_run_span_has_no_evidence_count_attributes(
         evidence_answerer=_UnreachableEvidenceAnswerer(),
         reviewer=EvidenceReviewService(
             agent=EVIDENCE_REVIEWER_AGENT,
-            runtime_scope_factory=_UnreachableExternalScope(),
+            llm_caller_scope_factory=_UnreachableExternalScope(),
         ),
         organizer=PassThroughOrganizer(),
     )
@@ -755,7 +754,7 @@ async def test_evidence_run_span_reports_post_dedup_internal_total(
             _internal_hit(assessment_id=3004, title="task1-unique", curation_id=4202),
         ],
     }
-    factory = _Factory(_two_task_query_failing_runtime())
+    factory = _Factory(_two_task_query_failing_caller())
     phases = AnsweringPhases(
         planner=_TwoTaskPlanner(
             _two_task_plan(task_queries=(["task0 query"], ["task1 query"]))
@@ -767,7 +766,8 @@ async def test_evidence_run_span_reports_post_dedup_internal_total(
         direct_answerer=_UnreachableDirectAnswerer(),
         evidence_answerer=_EvidenceAnswerer(),
         reviewer=EvidenceReviewService(
-            agent=EVIDENCE_REVIEWER_AGENT, runtime_scope_factory=factory.reviewer_scope
+            agent=EVIDENCE_REVIEWER_AGENT,
+            llm_caller_scope_factory=factory.reviewer_scope,
         ),
         organizer=PassThroughOrganizer(),
     )
@@ -799,7 +799,7 @@ async def test_evidence_run_span_reports_internal_collection_failed_task_count(
     全task成功時は0になる。
     """
     task_queries = ("task0 query", "task1 query")
-    factory = _Factory(_two_task_query_failing_runtime())
+    factory = _Factory(_two_task_query_failing_caller())
     phases = AnsweringPhases(
         planner=_TwoTaskPlanner(
             _two_task_plan(
@@ -815,7 +815,8 @@ async def test_evidence_run_span_reports_internal_collection_failed_task_count(
         direct_answerer=_UnreachableDirectAnswerer(),
         evidence_answerer=_EvidenceAnswerer(),
         reviewer=EvidenceReviewService(
-            agent=EVIDENCE_REVIEWER_AGENT, runtime_scope_factory=factory.reviewer_scope
+            agent=EVIDENCE_REVIEWER_AGENT,
+            llm_caller_scope_factory=factory.reviewer_scope,
         ),
         organizer=PassThroughOrganizer(),
     )

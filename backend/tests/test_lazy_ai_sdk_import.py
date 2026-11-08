@@ -79,18 +79,18 @@ def test_non_ai_process_import_does_not_load_ai_sdk(surface: str) -> None:
     )
 
 
-def test_gemini_agent_runtime_scope_construction_keeps_provider_imports_lazy() -> None:
-    """共有Gemini scopeはenterされるまで具象RuntimeとSDKをloadしない。"""
+def test_gemini_llm_caller_scope_construction_keeps_provider_imports_lazy() -> None:
+    """共有Gemini scopeはenterされるまで具象のGeminiLlmCallerとSDKをloadしない。"""
     code = textwrap.dedent(
         """
         import sys
-        from app.agent.composition import activate_gemini_agent_runtime
+        from app.agent.composition import activate_gemini_llm_caller
 
-        activate_gemini_agent_runtime()
+        activate_gemini_llm_caller()
         forbidden = sorted(
             module
             for module in sys.modules
-            if module == "app.agent.runtime.gemini"
+            if module == "app.agent.llm_call.gemini"
             or module == "google.genai"
             or module.startswith("google.genai.")
         )
@@ -108,7 +108,7 @@ def test_gemini_agent_runtime_scope_construction_keeps_provider_imports_lazy() -
 
 
 def test_external_search_scope_construction_keeps_imports_lazy() -> None:
-    """External factoryはscopeへ入るまでGemini SDKと具象Runtimeをloadしない。"""
+    """External factoryはscopeへ入るまでSDKとGeminiLlmCallerをloadしない。"""
     code = textwrap.dedent(
         """
         import sys
@@ -118,7 +118,7 @@ def test_external_search_scope_construction_keeps_imports_lazy() -> None:
         forbidden = sorted(
             module
             for module in sys.modules
-            if module == "app.agent.runtime.gemini"
+            if module == "app.agent.llm_call.gemini"
             or module == "google.genai"
             or module.startswith("google.genai.")
         )

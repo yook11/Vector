@@ -23,12 +23,12 @@ from app.agent.research_handoff import (
 from app.agent.research_handoff.agent import RESEARCH_HANDOFF_AGENT
 from app.agent.research_handoff.handoff import ORGANIZED_TEXT_MAX_CHARS
 from app.agent.research_handoff.service import ResearchHandoffService
-from app.agent.runtime.contract import AgentResponseDefect, AgentResponseInvalidError
 from app.ai_providers.errors import (
     AIProviderResponseError,
     AIProviderResponseReason,
 )
 from app.http.errors import HttpResponseError
+from tests.agent.llm_call._fakes import caller_payload
 
 _RECEIVED_AT = datetime(2026, 1, 1, tzinfo=UTC)
 
@@ -68,8 +68,8 @@ def _input(handoff: ResearchHandoff) -> ResearchHandoffInput:
     )
 
 
-class _Runtime:
-    """返す値か送出する例外を1つだけ持つruntime。"""
+class _Caller:
+    """返す値か送出する例外を1つだけ持つcaller。"""
 
     def __init__(self, outcome: Any) -> None:
         self.outcome = outcome
@@ -80,22 +80,22 @@ class _Runtime:
         self.calls.append((input, attempt_number))
         if isinstance(self.outcome, Exception):
             raise self.outcome
-        return self.outcome
+        return caller_payload(self.outcome)
 
 
-def _service(outcome: Any) -> tuple[ResearchHandoffService, _Runtime]:
-    runtime = _Runtime(outcome)
+def _service(outcome: Any) -> tuple[ResearchHandoffService, _Caller]:
+    caller = _Caller(outcome)
 
     @asynccontextmanager
-    async def scope() -> AsyncIterator[_Runtime]:
-        yield runtime
+    async def scope() -> AsyncIterator[_Caller]:
+        yield caller
 
     return (
         ResearchHandoffService(
             agent=RESEARCH_HANDOFF_AGENT,
-            runtime_scope_factory=scope,  # type: ignore[arg-type]
+            llm_caller_scope_factory=scope,  # type: ignore[arg-type]
         ),
-        runtime,
+        caller,
     )
 
 
@@ -135,7 +135,7 @@ async def test_organize_clamps_a_draft_that_overshoots_the_limit() -> None:
 @pytest.mark.parametrize(
     "failure",
     [
-        AgentResponseInvalidError(AgentResponseDefect.OUTPUT_SCHEMA_MISMATCH),
+        {"collected_overview": ["not", "text"]},
         AIProviderResponseError(
             reason=AIProviderResponseReason.AUTH,
             http_error=HttpResponseError(status_code=401, received_at=_RECEIVED_AT),
@@ -143,7 +143,7 @@ async def test_organize_clamps_a_draft_that_overshoots_the_limit() -> None:
     ],
 )
 async def test_organize_keeps_the_previous_texts_when_generation_fails(
-    failure: Exception,
+    failure: object,
 ) -> None:
     """生成に失敗しても例外を投げず、前回の整理をそのまま残す。"""
     handoff = _handoff(
@@ -160,10 +160,8 @@ async def test_organize_keeps_the_previous_texts_when_generation_fails(
 
 async def test_organize_calls_the_provider_once_without_retrying() -> None:
     """失敗しても前回値が残るだけなので、リトライで回答完了を遅らせない。"""
-    service, runtime = _service(
-        AgentResponseInvalidError(AgentResponseDefect.OUTPUT_SCHEMA_MISMATCH)
-    )
+    service, caller = _service({"collected_overview": ["not", "text"]})
 
     await service.organize(_input(_handoff()))
 
-    assert len(runtime.calls) == 1
+    assert len(caller.calls) == 1

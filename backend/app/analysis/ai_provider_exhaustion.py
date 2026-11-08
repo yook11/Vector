@@ -37,7 +37,7 @@ def record_ai_provider_exhausted(exc: BaseException | None, *, provider: str) ->
     """枯渇系 provider error なら ``ai_provider_exhausted`` を 1 打点 emit する。
 
     枯渇以外 (None 含む) は no-op。エラー分類が確定する境界の所有者
-    (failure handler / agent runtime) が呼ぶ。
+    (failure handler / agent の LLM 呼び出し) が呼ぶ。
     """
     exhausted = exhausted_provider_error(exc)
     if exhausted is None:

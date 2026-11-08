@@ -5,6 +5,8 @@ from __future__ import annotations
 import asyncio
 
 from app.agent.agent import Agent
+from app.agent.llm_call.caller import LlmCallerScopeFactory, call_agent
+from app.agent.output import AgentOutputInvalidError
 from app.agent.planning.contract import (
     PlanningInput,
     QuestionPlan,
@@ -18,17 +20,14 @@ from app.agent.recording.planning import (
     PlanningSucceeded,
     logfire_planning_recorder,
 )
-from app.agent.runtime.contract import (
-    AgentResponseInvalidError,
-    AgentRuntimeScopeFactory,
-)
+from app.agent.retry_prospect import is_resolvable_by_retry
 from app.ai_providers.errors import (
     CLASSIFIED_AI_PROVIDER_ERRORS,
 )
 
 _PLANNING_SOURCE_ERRORS = (
     *CLASSIFIED_AI_PROVIDER_ERRORS,
-    AgentResponseInvalidError,
+    AgentOutputInvalidError,
 )
 _MAX_ATTEMPTS = 2
 _PLANNING_TIMEOUT_SECONDS = 15
@@ -41,25 +40,26 @@ class QuestionPlanningService:
         self,
         *,
         agent: Agent[PlanningInput, QuestionPlanDraft],
-        runtime_scope_factory: AgentRuntimeScopeFactory,
+        llm_caller_scope_factory: LlmCallerScopeFactory,
         recorder: PlanningRecorder = logfire_planning_recorder,
     ) -> None:
         self._agent = agent
-        self._runtime_scope_factory = runtime_scope_factory
+        self._llm_caller_scope_factory = llm_caller_scope_factory
         self._recorder = recorder
 
     async def plan(self, input: PlanningInput) -> QuestionPlan:
-        """完成した計画を返す。応答形状の失敗だけ再試行する。"""
+        """完成した計画を返す。呼び直せば解消しうる失敗だけ再試行する。"""
 
         async with self._recorder.record(agent_name=self._agent.name) as recording:
             attempt_number = 0
             timeout = asyncio.timeout(_PLANNING_TIMEOUT_SECONDS)
             try:
                 async with timeout:
-                    async with self._runtime_scope_factory() as runtime:
+                    async with self._llm_caller_scope_factory() as caller:
                         for attempt_number in range(1, _MAX_ATTEMPTS + 1):
                             try:
-                                draft = await runtime.call(
+                                draft = await call_agent(
+                                    caller,
                                     self._agent,
                                     input,
                                     attempt_number=attempt_number,
@@ -67,7 +67,7 @@ class QuestionPlanningService:
                                 plan = plan_from_draft(draft)
                             except _PLANNING_SOURCE_ERRORS as cause:
                                 if (
-                                    isinstance(cause, AgentResponseInvalidError)
+                                    is_resolvable_by_retry(cause)
                                     and attempt_number < _MAX_ATTEMPTS
                                 ):
                                     continue

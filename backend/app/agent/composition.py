@@ -41,7 +41,7 @@ from app.http.internal import make_internal_async_client
 if TYPE_CHECKING:
     from google.genai.client import AsyncClient
 
-    from app.agent.runtime.gemini import GeminiAgentRuntime
+    from app.agent.llm_call.gemini import GeminiLlmCaller
 
 # 工程ごとの打ち切りが先に効くよう、1回の試行の上限はそれより長くする。
 _GEMINI_CONNECTION = GeminiConnectionSettings(read_timeout=30.0)
@@ -75,11 +75,11 @@ async def activate_gemini_client() -> AsyncIterator[AsyncClient]:
 
 
 @asynccontextmanager
-async def activate_gemini_agent_runtime() -> AsyncIterator[GeminiAgentRuntime]:
-    from app.agent.runtime.gemini import GeminiAgentRuntime
+async def activate_gemini_llm_caller() -> AsyncIterator[GeminiLlmCaller]:
+    from app.agent.llm_call.gemini import GeminiLlmCaller
 
     async with activate_gemini_client() as client:
-        yield GeminiAgentRuntime(client=client)
+        yield GeminiLlmCaller(client=client)
 
 
 def _build_answering_phases(
@@ -124,7 +124,7 @@ def _build_answering_phases(
     return AnsweringPhases(
         planner=QuestionPlanningService(
             agent=QUESTION_PLANNER_AGENT,
-            runtime_scope_factory=activate_gemini_agent_runtime,
+            llm_caller_scope_factory=activate_gemini_llm_caller,
         ),
         collector=EvidenceCollectionService(
             internal_search=internal_search,
@@ -133,11 +133,11 @@ def _build_answering_phases(
         ),
         reviewer=EvidenceReviewService(
             agent=EVIDENCE_REVIEWER_AGENT,
-            runtime_scope_factory=activate_gemini_agent_runtime,
+            llm_caller_scope_factory=activate_gemini_llm_caller,
         ),
         direct_answerer=DirectAnswerService(
             agent=DIRECT_ANSWER_AGENT,
-            runtime_scope_factory=activate_gemini_agent_runtime,
+            llm_text_streamer_scope_factory=activate_gemini_llm_caller,
             repository=repository,
             schedule_deadline_check=schedule_deadline_check,
             delta_reporter=delta_reporter,
@@ -145,7 +145,7 @@ def _build_answering_phases(
         ),
         evidence_answerer=EvidenceAnswerService(
             agent=EVIDENCE_ANSWER_AGENT,
-            runtime_scope_factory=activate_gemini_agent_runtime,
+            llm_text_streamer_scope_factory=activate_gemini_llm_caller,
             repository=repository,
             schedule_deadline_check=schedule_deadline_check,
             delta_reporter=delta_reporter,
@@ -153,7 +153,7 @@ def _build_answering_phases(
         ),
         organizer=ResearchHandoffService(
             agent=RESEARCH_HANDOFF_AGENT,
-            runtime_scope_factory=activate_gemini_agent_runtime,
+            llm_caller_scope_factory=activate_gemini_llm_caller,
         ),
     )
 
@@ -193,7 +193,7 @@ async def activate_external_search() -> AsyncIterator[ExternalSearch]:
         ExternalSearchService,
     )
 
-    async with activate_gemini_agent_runtime() as query_runtime:
+    async with activate_gemini_llm_caller() as query_caller:
         # gateway は自 AWS アカウントの resource なので内部宛 client を使う。
         # 外部宛 factory は egress proxy を強制注入するため、署名済みリクエストが
         # proxy へ迂回して失敗する。
@@ -201,7 +201,7 @@ async def activate_external_search() -> AsyncIterator[ExternalSearch]:
             timeout=AGENTCORE_WEB_SEARCH_SPEC.request_timeout_seconds
         ) as search_client:
             yield ExternalSearchService(
-                query_runtime=query_runtime,
+                query_caller=query_caller,
                 search_gateway=AgentCoreWebSearchGateway(
                     gateway_url=settings.agentcore_gateway_url or "",
                     region=settings.aws_region or "",

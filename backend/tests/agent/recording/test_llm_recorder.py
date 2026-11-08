@@ -10,14 +10,13 @@ import pytest
 from logfire.testing import CaptureLogfire
 from opentelemetry.trace import StatusCode
 
-from app.agent.recording.llm import LogfireLlmCallRecorder
-from app.agent.recording.types import Usage
-from app.agent.runtime.contract import AgentResponseDefect, AgentResponseInvalidError
-from app.agent.runtime.llm_failure import (
+from app.agent.recording.llm import (
     UNCLASSIFIED_FAILURE_CODE,
     LlmAttemptFailed,
+    LogfireLlmCallRecorder,
     llm_attempt_failed_from,
 )
+from app.agent.recording.types import Usage
 from app.ai_providers.errors import (
     AIProviderTransportError,
 )
@@ -27,7 +26,7 @@ from app.http.failure import (
     HttpTransportFailureReason,
     HttpTransportStage,
 )
-from tests.agent.runtime._tracing_helpers import (
+from tests.agent.llm_call._tracing_helpers import (
     exception_events,
     one_provider_attempt_span,
 )
@@ -56,8 +55,8 @@ def test_failed_outcome_rejects_empty_failure_code() -> None:
         LlmAttemptFailed(failure_code="")
 
 
-def test_llm_attempt_failed_from_uses_code_or_defect() -> None:
-    """分類済み失敗は CODE / defect を failure_code にする。"""
+def test_llm_attempt_failed_from_uses_code() -> None:
+    """分類済み失敗は CODE を failure_code にする。"""
 
     assert llm_attempt_failed_from(
         AIProviderTransportError(
@@ -68,9 +67,6 @@ def test_llm_attempt_failed_from_uses_code_or_defect() -> None:
             )
         )
     ) == LlmAttemptFailed(failure_code=AIProviderTransportError.CODE)
-    assert llm_attempt_failed_from(
-        AgentResponseInvalidError(AgentResponseDefect.RESPONSE_NOT_JSON)
-    ) == LlmAttemptFailed(failure_code=AgentResponseDefect.RESPONSE_NOT_JSON)
 
 
 def test_llm_attempt_failed_from_rejects_class_name() -> None:
@@ -127,7 +123,7 @@ async def test_classified_failure_records_status_and_failure_code(
     """分類済み失敗の outcome だけに failure_code を付ける。"""
 
     recorder = LogfireLlmCallRecorder()
-    error = RuntimeError("classified by runtime")
+    error = RuntimeError("classified by caller")
     with pytest.raises(RuntimeError) as raised:
         async with recorder.record(**_RECORD_KWARGS) as recording:
             recording.report_outcome(
@@ -256,7 +252,7 @@ async def test_reported_unclassified_records_outcome_and_error_type(
     """報告済み unclassified は status と error.type を残し、result は付けない。"""
 
     recorder = LogfireLlmCallRecorder()
-    error = RuntimeError("unclassified by runtime")
+    error = RuntimeError("unclassified by caller")
     with pytest.raises(RuntimeError) as raised:
         async with recorder.record(**_RECORD_KWARGS) as recording:
             recording.report_outcome(

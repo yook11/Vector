@@ -1,5 +1,7 @@
 # Planner Agent と AgentRuntime slice 仕様
 
+> 2026-11-08追記: `app/agent/runtime/` の `AgentRuntime` / `StreamingAgentRuntime` / `GeminiAgentRuntime` と、それぞれの scope factory は改名前の名前である。現在は `app/agent/llm_call/` の `LlmCaller` / `LlmTextStreamer` / `GeminiLlmCaller` と `LlmCallerScopeFactory` / `LlmTextStreamerScopeFactory` で、工程は `call_agent` で呼び出しと出力の検証をまとめて行う。
+
 更新日: 2026-07-18
 
 実装状況: Implemented（PR1）
@@ -58,7 +60,8 @@ Planner内部の宣言と実行だけを整理する。
   model settings、実行時inputの変更ではversionを更新しない。
 - `Agent`はprovider client、user input、retry回数、audit recorder、生成途中の状態を保持しない。
 - `response_schema`はAgent宣言後に書き換えられないimmutable mappingとして保持する。
-- `AgentRuntime.call()`は型付きinputを受け、providerを1回だけ呼び、検証済み`OutputT`だけを返す。
+- `AgentRuntime.call()`は型付きinputを受け、providerを1回だけ呼び、返ったJSON objectだけを返す。
+  `output_type`への検証は呼び出し側が`validate_output`で行う。
   usage等を含むresult envelopeは導入しない。
 - `AgentRuntime.call()`の呼び出し側は、workflow policyが決めた正の`attempt_number`をkeywordで渡す。
   Runtimeはretry回数を保持・推測せず、その値をattempt spanの観測にだけ使う。
@@ -86,8 +89,8 @@ Planner内部の宣言と実行だけを整理する。
 - structured-output schemaを実行可能Toolとして扱わない。
 - provider error、blocked output、invalid JSON、invalid schemaのretry / fallback上の意味を維持する。
   旧例外名、旧audit code、旧prompt version値との連続性は要求せず、新しい共通契約へ置き換えてよい。
-- invalid JSON、JSON object以外、output type validation失敗は、provider名やPlanner名を含まない
-  `AgentResponseInvalidError`へ統一する。例外はlow-cardinalityな`AgentResponseDefect`と、安全に構成した
+- invalid JSON、JSON object以外は`AIProviderResultError(RESPONSE_UNPARSEABLE)`、output type validation失敗は
+  provider名やPlanner名を含まない`AgentOutputInvalidError`へ統一する。後者はlow-cardinalityな`AgentOutputDefect`と、安全に構成した
   `repair_hint`だけを保持し、生のprovider response、Pydantic input、自由文message、任意のvalidation
   contextを保持しない。変換元の`JSONDecodeError` / `ValidationError`も`__context__` / `__cause__`へ残さず、
   分類済み例外のexception graph全体を同じ安全な契約に含める。
@@ -238,9 +241,9 @@ Plannerを含む1つのLLM役割の宣言として、少なくとも次の概念
 - model向けwire契約であるresponse schema
 
 `InputT`は実行ごとに変わるtask inputを表すgeneric type parameterであり、`input_type`というinstance fieldは
-持たない。`OutputT`はruntimeが返す検証済みoutputを表すgeneric type parameterで、runtime parseに必要な
+持たない。`OutputT`は`validate_output`が返す検証済みoutputを表すgeneric type parameterで、検証に必要な
 具象型を`output_type` fieldへ保持する。`output_type`はPydantic `BaseModel` subclassだけに限定せず、
-`TypeAdapter`でvalidationできるdataclass等のPython型を許可し、Runtimeは特定型の`model_validate()`を
+`TypeAdapter`でvalidationできるdataclass等のPython型を許可し、`validate_output`は特定型の`model_validate()`を
 無条件に呼ばない。
 
 本slice（PR1）の`AgentPrompt.version`は固定Prompt宣言の手動revisionである。固定instructions、固定input
@@ -287,18 +290,18 @@ instructionsとrender済みinputは責任上だけでなくprovider request上�
 
 ### `AgentRuntime`
 
-`Agent`と型付きinputを、検証済み`OutputT`へ変換する1 attemptの実行境界。
+`Agent`と型付きinputでproviderを1回呼び、返ったJSON objectを返す1 attemptの実行境界。
 
 provider-neutralなProtocolは、概念上次の契約を持つ。
 
 ```python
 async def call(
     self,
-    agent: Agent[InputT, OutputT],
+    agent: Agent[InputT, Any],
     input: InputT,
     *,
     attempt_number: int,
-) -> OutputT: ...
+) -> dict[str, Any]: ...
 ```
 
 client lifecycleをRuntimeへ混ぜずにphase scopeを注入するため、同じmoduleに次のprovider-neutralな
@@ -339,20 +342,19 @@ sliceで集約表示やmetric consumerを追加する場合も、attempt記録�
 
 ### Invalid response contract
 
-provider responseを`OutputT`へ変換できない失敗は、`runtime/contract.py`に置くprovider-neutralな共通契約で
-表現する。
+Runtimeが返したJSON objectを`OutputT`へ変換できない失敗は、`app/agent/output.py`に置くprovider-neutralな
+共通契約で表現する。JSONとしてdecodeできない応答とrootがobjectでない応答は、Runtimeが
+`AIProviderResultError(RESPONSE_UNPARSEABLE)`にする。
 
 ```python
-class AgentResponseDefect(StrEnum):
-    RESPONSE_NOT_JSON = "response_not_json"
-    RESPONSE_NOT_OBJECT = "response_not_object"
+class AgentOutputDefect(StrEnum):
     OUTPUT_SCHEMA_MISMATCH = "output_schema_mismatch"
 
 
-class AgentResponseInvalidError(ValueError):
+class AgentOutputInvalidError(ApplicationError):
     def __init__(
         self,
-        defect: AgentResponseDefect,
+        defect: AgentOutputDefect,
         *,
         repair_hint: str | None = None,
     ) -> None: ...
@@ -360,8 +362,6 @@ class AgentResponseInvalidError(ValueError):
 
 各defectの境界は次のとおり。
 
-- JSONとしてdecodeできない: `RESPONSE_NOT_JSON`
-- JSONとしてdecodeできるがrootがobjectでない: `RESPONSE_NOT_OBJECT`
 - objectを`agent.output_type`でvalidateできない: `OUTPUT_SCHEMA_MISMATCH`
 
 `str(error)`はdefect値と`repair_hint`だけから決定的に構成し、次attemptの`previous_error`としてそのまま
@@ -370,15 +370,14 @@ sanitize境界へ渡せる安全な文字列にする。`repair_hint`は修正�
 文字列化しない。`loc`の文字列は`agent.output_type`が宣言したfield名 / validation aliasだけを許可し、
 数値indexは許可する。extra field、dict key等のmodel出力由来となり得る未知componentは固定placeholderへ
 畳む。`type`と安全と確認した`ctx` keyだけを明示的に選び、生の`input`、provider response、自由文`msg`、
-`url`、任意の`ctx`を含めない。invalid JSON / non-objectではraw responseをdetail化せず、固定の安全な
-repair hintだけを使う。
+`url`、任意の`ctx`を含めない。invalid JSON / non-objectではraw responseをdetail化しない。
 
 `JSONDecodeError` / `ValidationError`から安全な分類済み例外へ変換するときは、変換元例外を保持したまま
 `raise ... from None`するだけでは不十分である。安全なdefect / repair hintを`except`内で抽出し、
-`except` scopeを退出してから`AgentResponseInvalidError`をraiseすることで、raw response / inputを持つ例外を
+`except` scopeを退出してから`AIProviderResultError` / `AgentOutputInvalidError`をraiseすることで、raw response / inputを持つ例外を
 `__context__` / `__cause__`へ接続しない。
 
-`QuestionPlanningService`は`AgentResponseInvalidError`の3 defectだけをresponse-shape failureとして
+`QuestionPlanningService`は`AIProviderResultError(RESPONSE_UNPARSEABLE)`と`AgentOutputInvalidError`をresponse-shape failureとして
 request内で最大1回retryする。auditへの写像は次のとおり。
 
 - `code = error.defect.value`
@@ -387,7 +386,7 @@ request内で最大1回retryする。auditへの写像は次のとおり。
 - `request_retry_disposition = "retry_in_request"`
 
 blocked outputと分類済みprovider errorは既存どおりrequest内retryを行わず、未分類例外はfallbackへ変換せず
-伝播する。Runtime内部のPydantic `ValidationError`をService境界へ直接漏らさず、
+伝播する。`validate_output`はPydantic `ValidationError`をService境界へ直接漏らさず、
 `OUTPUT_SCHEMA_MISMATCH`へ変換する。旧`QuestionPlannerResponseInvalidError`、Planner / Gemini名を含む旧defect、
 Pydantic validation用の別audit codeは削除し、互換aliasを残さない。
 
@@ -649,8 +648,8 @@ AnsweringRunner
 - runtime 1 invocationにつきprovider callは1回である。
 - 呼び出し側が`attempt_number`を明示し、Runtimeがその番号からretry policyや状態を推測しない。
 - providerが`gemini`でないAgentはrenderer / config / span / provider callより前に拒否する。
-- runtimeは成功時に`QuestionPlanDraft`を直接返し、usage用result envelopeを返さない。
-- Runtimeは`output_type`をPydantic `TypeAdapter`で検証し、`BaseModel`だけでなく宣言されたdataclass等の
+- runtimeは成功時にJSON objectを直接返し、usage用result envelopeを返さない。
+- `validate_output`は`output_type`をPydantic `TypeAdapter`で検証し、`BaseModel`だけでなく宣言されたdataclass等の
   対応型を検証済み`OutputT`として返す。
 - runtimeがretry / fallback / 別Agent / Toolを起動しない。
 - first attempt成功時、runtime 1回で既存completed planと同値になる。
@@ -658,8 +657,8 @@ AnsweringRunner
 - retry不能failureまたは2回失敗時、既存safe fallbackとfailure auditの発火条件を維持する。
 - invalid JSON、non-object、blocked output、Pydantic validation、provider errorのretry / fallback上の意味を
   維持する。例外名とaudit code値の一致は要求しない。
-- invalid JSON / non-object / Pydantic validationを、それぞれ`RESPONSE_NOT_JSON` /
-  `RESPONSE_NOT_OBJECT` / `OUTPUT_SCHEMA_MISMATCH`として共通例外へ変換し、3分類だけが最大1回retryされる。
+- invalid JSON / non-objectを`AIProviderResultError(RESPONSE_UNPARSEABLE)`、Pydantic validationを
+  `AgentOutputInvalidError(OUTPUT_SCHEMA_MISMATCH)`へ変換し、どちらも最大1回retryされる。
 - invalid response auditの`code` / `failure_reason`がdefect値、`failure_kind`が`ai_response_invalid`、
   dispositionが`retry_in_request`であり、生のrepair hintやmodel outputをauditへ記録しない。
 - `OUTPUT_SCHEMA_MISMATCH`の`repair_hint`と`str(error)`にfield path、error type、allowlist済み制約値だけが
@@ -724,9 +723,10 @@ Agent / Prompt / Runtimeの主要責任は確定した。
 
 Runtimeのinvalid response契約も確定した。
 
-- provider-neutralな`AgentResponseInvalidError`と3つの`AgentResponseDefect`を使う。
+- provider-neutralな`AgentOutputInvalidError`と`AgentOutputDefect`(`output_schema_mismatch`だけ)を使い、
+  JSONとして読めない応答は`AIProviderResultError(RESPONSE_UNPARSEABLE)`にする。
 - repair情報はfield path、error type、allowlist済み制約値だけから構成する。
-- `QuestionPlanningService`は3 defectだけをrequest内でretryし、defect値をauditのcode / failure reasonへ使う。
+- `QuestionPlanningService`は読めない応答と出力の契約違反をrequest内でretryし、defect値をauditのcode / failure reasonへ使う。
 - blocked / provider errorはrequest内retryせず、未分類例外は伝播する。
 
 以上により、本sliceの実装開始を止める未決定事項はない。

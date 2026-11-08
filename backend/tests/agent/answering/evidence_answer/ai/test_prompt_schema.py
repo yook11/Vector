@@ -12,7 +12,6 @@ from app.agent.answering.evidence_answer.contract import EvidenceAnswerInput
 from app.agent.answering.evidence_answer.evidence import AnswerInputEvidence
 from app.agent.answering.evidence_answer.prompts import (
     _REVIEW_MISSING_TEMPLATE,
-    _TRUNCATION_REPAIR_BLOCK,
     EVIDENCE_ANSWER_INSTRUCTIONS,
     render_evidence_answer_input,
 )
@@ -189,45 +188,6 @@ def _review_missing_template_header() -> str:
         "before the missing items are interpolated"
     )
     return header
-
-
-def _input_with_truncation_notice(
-    *, previous_output_truncated: bool
-) -> EvidenceAnswerInput:
-    return EvidenceAnswerInput(
-        request=_request(),
-        evidence=(),
-        target_time_window=None,
-        review_missing=(),
-        previous_output_truncated=previous_output_truncated,
-    )
-
-
-def test_truncation_notice_is_trusted_and_outside_untrusted_blocks() -> None:
-    """条件19: S2で入れた打ち切りのtrusted通知はS4でも挙動が変わらない。
-
-    打ち切り通知はruntimeが観測した機械的事実であり、model出力由来の
-    <untrusted_input>境界の外側 (trusted側) に置かれる。
-    """
-    rendered = render_evidence_answer_input(
-        _input_with_truncation_notice(previous_output_truncated=True)
-    )
-
-    assert _TRUNCATION_REPAIR_BLOCK in rendered
-    block_start = rendered.index(_TRUNCATION_REPAIR_BLOCK)
-    block_end = block_start + len(_TRUNCATION_REPAIR_BLOCK)
-    assert all(
-        block_end <= span_start or span_end <= block_start
-        for span_start, span_end in _untrusted_spans(rendered)
-    )
-
-
-def test_no_truncation_notice_without_the_flag() -> None:
-    rendered = render_evidence_answer_input(
-        _input_with_truncation_notice(previous_output_truncated=False)
-    )
-
-    assert _TRUNCATION_REPAIR_BLOCK not in rendered
 
 
 def test_review_missing_is_included_in_the_rendered_input() -> None:
