@@ -8,9 +8,9 @@ from typing import cast
 import pytest
 from google.genai.client import AsyncClient
 
+from app.agent.recording.llm import UNCLASSIFIED_FAILURE_CODE, LlmAttemptFailed
 from app.agent.recording.types import Usage
 from app.agent.runtime.gemini import GeminiAgentRuntime
-from app.agent.runtime.llm_failure import UNCLASSIFIED_FAILURE_CODE, LlmAttemptFailed
 from app.ai_providers.errors import (
     AIProviderResultError,
 )

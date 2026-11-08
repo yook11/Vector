@@ -12,10 +12,9 @@ from app.agent.recording.evidence_collection import EvidenceCollectionRecording
 from app.agent.recording.evidence_review import EvidenceReviewOutcome
 from app.agent.recording.external_search import ExternalSearchOutcome
 from app.agent.recording.internal_search import InternalSearchRecordingOutcome
-from app.agent.recording.llm import LlmCallMode
+from app.agent.recording.llm import LlmAttemptFailed, LlmCallMode
 from app.agent.recording.planning import PlanningOutcome
 from app.agent.recording.types import Usage
-from app.agent.runtime.llm_failure import LlmAttemptFailed
 
 __all__ = [
     "RecordedDirectAnswer",

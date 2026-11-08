@@ -9,9 +9,9 @@ from types import SimpleNamespace
 import httpx2
 import pytest
 
+from app.agent.recording.llm import UNCLASSIFIED_FAILURE_CODE, LlmAttemptFailed
 from app.agent.recording.types import Usage
 from app.agent.runtime.gemini import GeminiAgentRuntime
-from app.agent.runtime.llm_failure import UNCLASSIFIED_FAILURE_CODE, LlmAttemptFailed
 from app.ai_providers.errors import (
     AIProviderResultError,
     AIProviderTransportError,

@@ -13,15 +13,11 @@ from google.genai import errors as genai_errors
 from app.agent.runtime.gemini import GeminiAgentRuntime
 from app.ai_providers.errors import (
     AIProviderResponseError,
-    AIProviderResultError,
-    AIProviderResultReason,
     AIProviderTransportError,
 )
 from tests.agent.runtime._helpers import (
     FakeGeminiClient,
     FakeResponse,
-    blocked_response,
-    finished_response,
     make_agent,
     success_response,
 )
@@ -128,113 +124,6 @@ async def test_same_runtime_does_not_carry_agent_or_input_state_between_calls() 
         "SECOND_INSTRUCTIONS_SENTINEL"
     )
     assert second_call.kwargs["config"].temperature == 0.9
-
-
-@pytest.mark.parametrize(
-    "response_text",
-    [
-        pytest.param("MODEL_OUTPUT_SENTINEL_NOT_JSON", id="not-json"),
-        pytest.param(json.dumps(["MODEL_OUTPUT_SENTINEL_NOT_OBJECT"]), id="not-object"),
-    ],
-)
-async def test_unreadable_response_becomes_unparseable_provider_result(
-    response_text: str,
-) -> None:
-    """JSON object として読めない応答は、中身を含まない provider の結果の失敗にする。"""
-    client = FakeGeminiClient([FakeResponse(text=response_text)])
-    runtime = GeminiAgentRuntime(client=client)
-
-    with pytest.raises(AIProviderResultError) as exc_info:
-        await runtime.call(make_agent(), "typed input", attempt_number=1)
-
-    assert exc_info.value.reason is AIProviderResultReason.RESPONSE_UNPARSEABLE
-    assert "MODEL_OUTPUT_SENTINEL" not in str(exc_info.value)
-    assert exc_info.value.__context__ is None
-    assert exc_info.value.__cause__ is None
-    assert client.models.generate_content.await_count == 1
-
-
-@pytest.mark.parametrize(
-    ("finish_reason", "expected_reason"),
-    [
-        ("SAFETY", AIProviderResultReason.OUTPUT_BLOCKED_SAFETY),
-        ("RECITATION", AIProviderResultReason.OUTPUT_BLOCKED_RECITATION),
-        ("BLOCKLIST", AIProviderResultReason.OUTPUT_BLOCKED_BLOCKLIST),
-        (
-            "PROHIBITED_CONTENT",
-            AIProviderResultReason.OUTPUT_BLOCKED_PROHIBITED_CONTENT,
-        ),
-        ("SPII", AIProviderResultReason.OUTPUT_BLOCKED_SPII),
-    ],
-)
-async def test_blocked_finish_reason_maps_to_existing_provider_error(
-    finish_reason: str,
-    expected_reason: AIProviderResultReason,
-) -> None:
-    """拒否理由を既存の provider エラー語彙へ対応付ける。"""
-    client = FakeGeminiClient([blocked_response(finish_reason)])
-    runtime = GeminiAgentRuntime(client=client)
-
-    with pytest.raises(AIProviderResultError) as exc_info:
-        await runtime.call(make_agent(), "typed input", attempt_number=1)
-
-    assert exc_info.value.reason is expected_reason
-    assert client.models.generate_content.await_count == 1
-    client.close.assert_not_awaited()
-    client.aclose.assert_not_awaited()
-
-
-async def test_call_max_tokens_finish_reason_is_truncated_even_with_valid_json() -> (
-    None
-):
-    """R1条件1・2: MAX_TOKENSはJSONがschemaに完全に妥当でも打ち切りとして分類される。
-
-    finish_reasonの分類をJSONの偶然の妥当性より優先させる(仕様が撤去した
-    「JSONが閉じないことによる偶然の検出への依存」をnon-stream経路でも解消する)。
-    """
-    client = FakeGeminiClient([finished_response("MAX_TOKENS")])
-    runtime = GeminiAgentRuntime(client=client)
-
-    with pytest.raises(AIProviderResultError) as exc_info:
-        await runtime.call(make_agent(), "typed input", attempt_number=1)
-
-    assert exc_info.value.CODE == "ai_provider_result_error"
-    assert exc_info.value.reason is not None
-    assert exc_info.value.reason is AIProviderResultReason.OUTPUT_TRUNCATED
-    assert client.models.generate_content.await_count == 1
-    client.close.assert_not_awaited()
-    client.aclose.assert_not_awaited()
-
-
-async def test_call_stop_finish_reason_still_succeeds() -> None:
-    """R1条件3(回帰ガード): finish_reason=STOPは現行どおり正常終了する。"""
-    client = FakeGeminiClient([finished_response("STOP", result="stopped")])
-    runtime = GeminiAgentRuntime(client=client)
-
-    output = await runtime.call(make_agent(), "typed input", attempt_number=1)
-
-    assert output == {"result": "stopped", "tags": ["runtime"]}
-
-
-async def test_non_stream_prompt_feedback_precedes_candidate_safety() -> None:
-    response = SimpleNamespace(
-        text='{"result":"must not parse","tags":[]}',
-        candidates=[
-            SimpleNamespace(
-                finish_reason=SimpleNamespace(name="SAFETY"),
-            )
-        ],
-        usage_metadata=None,
-        prompt_feedback=SimpleNamespace(block_reason="SAFETY"),
-    )
-    client = FakeGeminiClient([response])
-    runtime = GeminiAgentRuntime(client=client)
-
-    with pytest.raises(AIProviderResultError) as exc_info:
-        await runtime.call(make_agent(), "typed input", attempt_number=1)
-
-    assert exc_info.value.reason is AIProviderResultReason.INPUT_BLOCKED
-    assert client.models.generate_content.await_count == 1
 
 
 async def test_known_gemini_failure_uses_existing_error_translation() -> None:

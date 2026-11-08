@@ -10,13 +10,13 @@ import pytest
 from logfire.testing import CaptureLogfire
 from opentelemetry.trace import StatusCode
 
-from app.agent.recording.llm import LogfireLlmCallRecorder
-from app.agent.recording.types import Usage
-from app.agent.runtime.llm_failure import (
+from app.agent.recording.llm import (
     UNCLASSIFIED_FAILURE_CODE,
     LlmAttemptFailed,
+    LogfireLlmCallRecorder,
     llm_attempt_failed_from,
 )
+from app.agent.recording.types import Usage
 from app.ai_providers.errors import (
     AIProviderTransportError,
 )

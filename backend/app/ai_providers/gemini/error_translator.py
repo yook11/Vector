@@ -1,7 +1,7 @@
 """Gemini SDK の例外を AIProvider*Error に分類する。
 
 工程によらず同じ障害を同じ例外にするため、SDK の例外を見る分類はここに集める。
-finish_reason や応答の形の検証は、各工程の adapter が持つ。
+finish_reason や応答の形の判定はここに置かず、response.py と各工程の adapter が持つ。
 """
 
 from __future__ import annotations

@@ -1,7 +1,7 @@
 """``app.ai_providers.gemini.error_translator`` の golden table テスト。
 
 工程で共有される SDK 例外 → ``AIProvider*Error`` 分類を検証する。
-ValidationError / response shape / finish_reason など工程固有の判定は対象外。
+ValidationError / response shape / finish_reason の判定は対象外。
 """
 
 from __future__ import annotations
