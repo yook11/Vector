@@ -77,7 +77,7 @@ async def test_planning_failure_stops_downstream_processing(
     owner_session_factory,
     agent_provider_responses,
 ):
-    """プランナーが失敗したときは後続処理を行わず、回答を保存しない。"""
+    """プランナーが再試行しても失敗したときは後続処理を行わず、回答を保存しない。"""
     created = await create_user_run(
         owner_session_factory,
         user_id=agent_user_id,
@@ -105,7 +105,7 @@ async def test_planning_failure_stops_downstream_processing(
         system_database, run_id=created.run_id, thread_id=created.thread_id
     )
     collect_evidence.assert_not_called()
-    assert agent_provider_responses.calls == ["question_planner"]
+    assert agent_provider_responses.calls == ["question_planner", "question_planner"]
     assert saved_result.run["status"] == "failed"
     assert saved_result.run["error_code"] == "generation_unavailable"
     assert saved_result.run["assistant_message_id"] is None
