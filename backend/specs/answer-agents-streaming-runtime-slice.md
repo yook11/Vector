@@ -90,7 +90,7 @@ class StreamingAgentRuntimeScopeFactory(Protocol):
     def __call__(self) -> AbstractAsyncContextManager[StreamingAgentRuntime]: ...
 ```
 
-- 契約は意図的に非対称とする: `call`は検証済み`OutputT`を返し、`stream_text`は
+- 契約は意図的に非対称とする: `call`はJSON objectを返して工程が`validate_output`で検証し、`stream_text`は
   model text fragmentの列を返す。streamingの最終validation / finalizeはworkflowデータ
   (evidence、requirement_ids)を要するためruntimeへ置けない。`StreamingAgentRuntime`は`OutputT`を
   返す契約を持たず、Flowが`agent.output_type`を最終parse / draft構築の正本として使用する。

@@ -136,13 +136,13 @@ span 構成:
 |---|---|---|---|---|
 | 正常終了 | UNSET | なし | — | — |
 | 意図された停止 (`AnswerGenerationStopped`) | UNSET | なし | — | span終了後に同一インスタンス |
-| 分類済み失敗 (`AIProviderError` / `AgentResponseInvalidError` / `PlanningError`) | ERROR (description なし) | なし | `error.type` | span終了後に同一インスタンス |
+| 分類済み失敗 (`AIProviderError` / `AgentOutputInvalidError` / `PlanningError`) | ERROR (description なし) | なし | `error.type` | span終了後に同一インスタンス |
 | 未分類例外 | ERROR (logfire既定) | あり | — | spanを貫通 |
 
 - 停止の語彙は`app/agent/contract.py`の`AnswerGenerationStopped`、分類済み失敗の語彙は
-  `(AIProviderError, AgentResponseInvalidError, PlanningError)`とする。
+  `(AIProviderError, AgentOutputInvalidError, PlanningError)`とする。
 - 分類済み失敗の`error.type`は`agent_provider_call`と同じ値を使う
-  (`AgentResponseInvalidError`は`defect.value`、それ以外は`error.CODE`)。`PlanningError`は
+  (`AgentOutputInvalidError`は`defect.value`、それ以外は`error.CODE`)。`PlanningError`は
   工程spanが`code`を読む。runtime例外の写像は`span_error_type()`のまま。attempt spanを
   通らない分類済み失敗でも、種別がtraceに残ることを保証するために置く。
 - 未分類例外に対してヘルパーは何もしない。spanを貫通させ、logfireの自動例外記録に任せる。
@@ -166,7 +166,7 @@ span 構成:
 - 追加するのは工程の所属が読めるspanまでとする。工程の内訳(embedding生成とベクトル検索の
   切り分け)は足さない。
 - 内部検索の`InternalSearchError`はtoolの失敗であり、Agent runtimeの共有失敗契約
-  (`AIProviderError` / `AgentResponseInvalidError`)ではない。工程spanの終了分類では未分類
+  (`AIProviderError` / `AgentOutputInvalidError`)ではない。工程spanの終了分類では未分類
   として貫通させ、logfireの自動例外記録に任せる。researcherがspanの外で握って縮退へ変える
   ため、呼び出し側に例外は伝わらない。
 
@@ -286,8 +286,8 @@ span 構成:
 - 正常終了でspanがERRORにならず、`error.type`が付かない。
 - `AnswerGenerationStopped`でspanがERRORにならず、exception eventが付かず、同一インスタンス
   が呼び出し側へ届く。
-- `AIProviderError`と`AgentResponseInvalidError`と`PlanningError`でspanがERRORになり`error.type`が
-  付き、exception eventが付かず、同一インスタンスが呼び出し側へ届く。`AgentResponseInvalidError`
+- `AIProviderError`と`AgentOutputInvalidError`と`PlanningError`でspanがERRORになり`error.type`が
+  付き、exception eventが付かず、同一インスタンスが呼び出し側へ届く。`AgentOutputInvalidError`
   の`error.type`は`defect.value`、`PlanningError`は`code`である。
 - 未分類例外でspanがERRORになり、exception eventが付き、同一インスタンスが貫通する。
 - 停止と分類済み失敗を握るのはspan終了分類のためだけであり、呼び出し側の`except`が

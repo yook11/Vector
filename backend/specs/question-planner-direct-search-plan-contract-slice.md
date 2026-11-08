@@ -362,7 +362,7 @@ prompt revision対象であるため、`EXTERNAL_QUERY_PROMPT_VERSION`と
 
 semantic validation defectをrepairへ載せる実装方法は固定しないが、raw model output、Pydantic input、
 自由文validation messageを例外graph、prompt、metric、logへ漏らしてはならない。repair inputへ渡せるのは
-既存`AgentResponseInvalidError`と同等のlow-cardinalityなdefectと安全なrepair hintだけとする。
+既存`AgentOutputInvalidError`と同等のlow-cardinalityなdefectと安全なrepair hintだけとする。
 
 `safe_fallback_plan()`と`fallback_query`による補完は削除する。Planner失敗後にQuestion Contextを
 External Query Agentへ直接渡す、external-only検索を起動する、質問文からSearchPlanを組み立てる、といった

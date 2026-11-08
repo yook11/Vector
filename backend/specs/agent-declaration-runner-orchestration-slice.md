@@ -26,7 +26,8 @@ role固有`prompts.py`へ置き、Agent組み立て側は参照するだけと�
 固定instructions、固定input template、`response_schema`のmodel-visibleな内容を変えるときに更新する。
 model指定を`ModelTarget` /
 `ModelSettings`、出力境界を`output_type` / `response_schema`とする。固定instructionsと実行時task inputは
-provider request上でも分離する。non-streamingの`AgentRuntime.call()`は検証済み`OutputT`だけを返し、
+provider request上でも分離する。non-streamingの`AgentRuntime.call()`はJSON objectだけを返して工程が
+`validate_output`で検証し、
 PR7で別capabilityとして追加するstreaming runtimeはclose可能なtext fragment列を返す。streamingの最終parse /
 validation / finalizeはFlowが`agent.output_type`を正本として行う。usageはruntimeがattempt spanへ記録し、
 戻り値へ含めない。旧prompt call signature機構は持ち込まず、rate limit policyは
@@ -350,7 +351,7 @@ Gemini streamingの非構造化text roleだけで使用する。non-streamingの
 `Agent`宣言と型付きinputを1回のprovider callへ変換する共通実行境界。Runnerはrole phaseから
 `AgentRuntime.call(agent, input, attempt_number=n)`を必要回数だけ呼ぶ。`attempt_number`はphase policy
 ownerが正の整数として明示し、runtimeはretry stateを保持・推測しない。non-streaming runtimeはattempt単位の
-provider error translation、schema parse、attempt spanを所有し、成功時は検証済み`OutputT`だけを返す。
+provider error translation、JSON objectの読み取り、attempt spanを所有し、成功時はJSON objectだけを返す。
 PR7ではstreamingを別Protocolの`StreamingAgentRuntime.stream_text()`として追加し、DeepSeek Runtimeや
 non-streaming fakeへstreaming methodを要求しない。streaming runtimeはprovider streamの分類・cleanup・
 attempt spanを所有し、Flowがclose可能なtext fragment列を消費して`agent.output_type`で最終検証する。
@@ -926,9 +927,9 @@ Runnerはdomain contractへ依存できるが、Gemini、DeepSeek、Tavily、htt
   優先する。internalが成功しexternalだけが未分類例外ならexternal例外を伝播する。
 - 未分類例外をblank resultへ変換せず、既存worker境界まで伝播する。
 - answer Agentのtyped validation error、provider error、continuation停止を既存どおり扱う。
-- Agentの分類済みinvalid responseは、provider-neutralな`AgentResponseInvalidError`へ統一する。defectは
-  `response_not_json`、`response_not_object`、`output_schema_mismatch`の3値とし、provider名やrole名を
-  codeへ焼き込まない。repair hintはfield path、error type、安全と確認した制約値に限定し、生のPydantic
+- Agentの出力の型に合わない応答は、provider-neutralな`AgentOutputInvalidError`へ統一する。defectは
+  `output_schema_mismatch`の1値とし、JSONとして読めない応答は`AIProviderResultError(RESPONSE_UNPARSEABLE)`
+  にする。provider名やrole名をcodeへ焼き込まない。repair hintはfield path、error type、安全と確認した制約値に限定し、生のPydantic
   input、model output、自由文message、URL、任意のvalidation contextを含めない。field pathの文字列は
   output typeが宣言したfield / validation aliasだけを許可し、extra fieldやdict key等の未知componentは
   固定placeholderへ畳む。
