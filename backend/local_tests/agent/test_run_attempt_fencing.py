@@ -9,11 +9,13 @@ from app.agent.contract import (
 )
 from app.agent.running.answer_generation import AgentAnswerGenerationRepository
 from app.agent.running.creation import AgentRunCreationRepository
-from app.agent.running.daily_quota.release import DailyQuotaReleaseOutcome
-from app.agent.running.state import RunFinished, RunRejected, RunRejectionReason
+from app.agent.running.state import AttemptSuperseded, RunCompleted
 from app.agent.running.state_repository import AgentRunStateRepository
-from app.agent.running.types import AgentRunStatus
-from local_tests.agent.support import fetch_saved_run_result, start_run_attempt
+from local_tests.agent.support import (
+    fetch_saved_run_result,
+    start_run_attempt,
+    state_service_for,
+)
 
 
 @pytest.mark.asyncio
@@ -38,7 +40,7 @@ async def test_only_latest_attempt_can_complete_run(
     latest_attempt_epoch = await start_run_attempt(session_factory, run_id)
 
     await AgentAnswerGenerationRepository(
-        session_factory, run_id, latest_attempt_epoch
+        state_service_for(session_factory), run_id, latest_attempt_epoch
     ).start_answer_generation()
 
     older_attempt_result = AnswerQuestionResult(
@@ -93,16 +95,8 @@ async def test_only_latest_attempt_can_complete_run(
         system_database, run_id=run_id, thread_id=created.thread_id
     )
     assert latest_attempt_epoch > older_attempt_epoch
-    assert older_attempt_completion == RunRejected(
-        reason=RunRejectionReason.ATTEMPT_SUPERSEDED,
-        observed_status=AgentRunStatus.RUNNING,
-    )
-    assert latest_attempt_completion == RunFinished(
-        status=AgentRunStatus.COMPLETED,
-        error_code=None,
-        quota_release_outcome=DailyQuotaReleaseOutcome.NOT_ELIGIBLE,
-        running_attempt_epoch=latest_attempt_epoch,
-    )
+    assert older_attempt_completion == AttemptSuperseded()
+    assert latest_attempt_completion == RunCompleted()
     assert saved_result.run["status"] == "completed"
     assert saved_result.run["attempt_epoch"] == latest_attempt_epoch
     assert len(saved_result.assistant_messages) == 1

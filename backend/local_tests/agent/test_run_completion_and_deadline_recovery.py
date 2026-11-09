@@ -10,9 +10,7 @@ from app.agent.contract import (
     AnswerQuestionResult,
     ExternalUrlSource,
 )
-from app.agent.running.daily_quota.release import DailyQuotaReleaseOutcome
-from app.agent.running.state import RunFinished, RunRejected, RunRejectionReason
-from app.agent.running.types import AgentRunStatus
+from app.agent.running.state import DeadlineExceeded, RunCompleted
 from local_tests.agent.deadline_race_support import (
     pending_answer_completion,
     pending_deadline_recovery,
@@ -81,12 +79,7 @@ async def test_answer_completion_wins_race_and_preserves_saved_result(
         system_database, run_id=run.run_id, thread_id=run.thread_id
     )
 
-    assert completion == RunFinished(
-        status=AgentRunStatus.COMPLETED,
-        error_code=None,
-        quota_release_outcome=DailyQuotaReleaseOutcome.NOT_ELIGIBLE,
-        running_attempt_epoch=run.attempt_epoch,
-    )
+    assert completion == RunCompleted()
     assert recovery.total_count == 0
     assert result_after_recovery.run["status"] == "completed"
     assert result_after_recovery.run["answer_started_at"] == run.answer_started_at
@@ -146,10 +139,7 @@ async def test_deadline_recovery_wins_race_and_rejects_answer(
     )
 
     assert recovery.total_count == 1
-    assert completion == RunRejected(
-        reason=RunRejectionReason.ALREADY_FINISHED,
-        observed_status=AgentRunStatus.DEADLINE_EXCEEDED,
-    )
+    assert completion == DeadlineExceeded()
     assert {
         "status": result_after_save_attempt.run["status"],
         "assistant_message_id": result_after_save_attempt.run["assistant_message_id"],

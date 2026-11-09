@@ -19,6 +19,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from sqlalchemy.orm import Session
 
 import app.agent.run_execution as run_execution
+import app.agent.running.state_service as state_service_module
 import app.queue.tasks.agent_run as agent_run_tasks
 from app.agent.answering import timing as answer_timing
 from app.agent.answering.direct_answer.contract import DirectAnswerInvalidError
@@ -53,16 +54,20 @@ from app.agent.research_handoff import (
     ResearchTaskRecord,
 )
 from app.agent.run_enqueuer import AgentRunTrigger
-from app.agent.running.daily_quota.release import DailyQuotaReleaseOutcome
 from app.agent.running.state import (
     AnswerGenerationStarted,
-    RunFinished,
-    RunRejected,
-    RunRejectionReason,
+    AttemptSuperseded,
+    CancelledByUser,
+    CannotContinue,
+    DeadlineExceeded,
+    FailureRecorded,
+    RunCompleted,
+    RunNotFound,
 )
 from app.agent.running.state_repository import AgentRunStateRepository
+from app.agent.running.state_service import AgentRunStateService
 from app.agent.running.stop import AnswerGenerationStopped
-from app.agent.running.types import AgentRunErrorCode, AgentRunStatus
+from app.agent.running.types import AgentRunErrorCode
 from app.agent.threads.contracts import ThreadMessageSnapshot
 from app.agent.threads.repository import AgentThreadRepository
 from app.ai_providers.errors import (
@@ -264,11 +269,11 @@ class CapturingExecutionProbe:
 
     def __init__(
         self,
-        session_factory: object,
+        state_service: object,
         run_id: UUID,
         attempt_epoch: int,
     ) -> None:
-        self.session_factory = session_factory
+        self.state_service = state_service
         self.run_id = run_id
         self.attempt_epoch = attempt_epoch
         CapturingExecutionProbe.instances.append(self)
@@ -282,11 +287,11 @@ class CapturingAnswerStart:
 
     def __init__(
         self,
-        session_factory: object,
+        state_service: object,
         run_id: UUID,
         attempt_epoch: int,
     ) -> None:
-        self.session_factory = session_factory
+        self.state_service = state_service
         self.run_id = run_id
         self.attempt_epoch = attempt_epoch
         CapturingAnswerStart.instances.append(self)
@@ -407,7 +412,7 @@ async def test_run_agent_answer_completes_run_and_persists_assistant_message(
             result: AnswerQuestionResult,
             research_handoff: dict[str, Any] | None = None,
             now: datetime | None = None,
-        ) -> RunFinished | RunRejected:
+        ) -> RunCompleted | CannotContinue:
             persisted_results.append(result)
             completed_epochs.append(attempt_epoch)
             return await super().complete(
@@ -423,7 +428,7 @@ async def test_run_agent_answer_completes_run_and_persists_assistant_message(
         lambda **_kwargs: fake_agent,
     )
     monkeypatch.setattr(
-        run_execution,
+        state_service_module,
         "AgentRunStateRepository",
         CapturingStateRepository,
     )
@@ -502,7 +507,7 @@ def _capture_completion_handoffs(
             result: AnswerQuestionResult,
             research_handoff: dict[str, Any] | None = None,
             now: datetime | None = None,
-        ) -> RunFinished | RunRejected:
+        ) -> RunCompleted | CannotContinue:
             captured.append(research_handoff)
             return await super().complete(
                 run_id,
@@ -513,7 +518,7 @@ def _capture_completion_handoffs(
             )
 
     monkeypatch.setattr(
-        run_execution,
+        state_service_module,
         "AgentRunStateRepository",
         CapturingStateRepository,
     )
@@ -969,10 +974,10 @@ async def test_run_agent_answer_binds_attempt_epoch_to_live_and_db_controls(
     assert delta_reporter.publisher is stream
     assert delta_reporter.run_id == run.id
     assert delta_reporter.attempt_epoch == 1
-    assert probe.session_factory is session_factory
+    assert isinstance(probe.state_service, state_service_module.AgentRunStateService)
     assert probe.run_id == run.id
     assert probe.attempt_epoch == 1
-    assert answer_start.session_factory is session_factory
+    assert answer_start.state_service is probe.state_service
     assert answer_start.run_id == run.id
     assert answer_start.attempt_epoch == 1
     assert isinstance(captured_kwargs["progress"], AgentRunLiveStageReporter)
@@ -1004,12 +1009,7 @@ async def test_answer_start_deadline_publishes_existing_terminal_event(
                     persisted.deadline_at = datetime.now(UTC) - timedelta(seconds=1)
             with pytest.raises(AnswerGenerationStopped) as stopped:
                 await cast(Any, self._answer_start).start_answer_generation()
-            assert stopped.value.outcome == RunFinished(
-                status=AgentRunStatus.DEADLINE_EXCEEDED,
-                error_code=None,
-                quota_release_outcome=DailyQuotaReleaseOutcome.NOT_ELIGIBLE,
-                running_attempt_epoch=1,
-            )
+            assert stopped.value.stopped == DeadlineExceeded()
             raise stopped.value
 
     def build_runner(**kwargs: object) -> DeadlineAtAnswerStartRunner:
@@ -1404,14 +1404,7 @@ async def test_generation_stopped_is_routine_return_without_run_transition(
     """古い世代として止められた回答工程は、Runを変えず終了も通知せずに戻る。"""
     async with session_factory() as session:
         _thread, _message, run = await _create_thread_message_run(session)
-    fake_agent = FakeAgent(
-        exc=AnswerGenerationStopped(
-            RunRejected(
-                reason=RunRejectionReason.ATTEMPT_SUPERSEDED,
-                observed_status=AgentRunStatus.RUNNING,
-            )
-        )
-    )
+    fake_agent = FakeAgent(exc=AnswerGenerationStopped(AttemptSuperseded()))
     complete_calls: list[tuple[UUID, int]] = []
     mark_failed_calls: list[tuple[UUID, int]] = []
 
@@ -1424,13 +1417,10 @@ async def test_generation_stopped_is_routine_return_without_run_transition(
             result: AnswerQuestionResult,
             research_handoff: dict[str, Any] | None = None,
             now: datetime | None = None,
-        ) -> RunFinished | RunRejected:
+        ) -> RunCompleted | CannotContinue:
             assert result == fake_agent.result
             complete_calls.append((run_id, attempt_epoch))
-            return RunRejected(
-                reason=RunRejectionReason.ATTEMPT_SUPERSEDED,
-                observed_status=AgentRunStatus.RUNNING,
-            )
+            return AttemptSuperseded()
 
         async def record_failure(
             self,
@@ -1439,20 +1429,17 @@ async def test_generation_stopped_is_routine_return_without_run_transition(
             attempt_epoch: int,
             error_code: AgentRunErrorCode,
             now: datetime | None = None,
-        ) -> RunFinished | RunRejected:
+        ) -> FailureRecorded | CannotContinue:
             assert error_code == AgentRunErrorCode.INTERNAL_ERROR
             mark_failed_calls.append((run_id, attempt_epoch))
-            return RunRejected(
-                reason=RunRejectionReason.ATTEMPT_SUPERSEDED,
-                observed_status=AgentRunStatus.RUNNING,
-            )
+            return AttemptSuperseded()
 
     _patch_delta_worker(
         monkeypatch,
         lambda **_kwargs: fake_agent,
     )
     monkeypatch.setattr(
-        run_execution,
+        state_service_module,
         "AgentRunStateRepository",
         ObservingStateRepository,
     )
@@ -1524,13 +1511,13 @@ async def test_epoch_advance_before_answer_start_stops_old_worker_through_actual
     probes: list[object] = []
 
     def build_probe(
-        bound_session_factory: object,
+        bound_state_service: AgentRunStateService,
         run_id: UUID,
         attempt_epoch: int,
     ) -> object:
-        probe_bindings.append((bound_session_factory, run_id, attempt_epoch))
+        probe_bindings.append((bound_state_service, run_id, attempt_epoch))
         probe = production_probe_type(
-            bound_session_factory,
+            bound_state_service,
             run_id,
             attempt_epoch,
             clock=clock,
@@ -1556,10 +1543,7 @@ async def test_epoch_advance_before_answer_start_stops_old_worker_through_actual
             clock.now = 2.0
             with pytest.raises(AnswerGenerationStopped) as stopped:
                 await self.continuation.ensure_can_continue()  # type: ignore[attr-defined]
-            assert stopped.value.outcome == RunRejected(
-                reason=RunRejectionReason.ATTEMPT_SUPERSEDED,
-                observed_status=AgentRunStatus.RUNNING,
-            )
+            assert stopped.value.stopped == AttemptSuperseded()
             raise stopped.value
 
     fake_runner = EpochAdvancingRunner()
@@ -1578,12 +1562,9 @@ async def test_epoch_advance_before_answer_start_stops_old_worker_through_actual
             result: AnswerQuestionResult,
             research_handoff: dict[str, Any] | None = None,
             now: datetime | None = None,
-        ) -> RunFinished | RunRejected:
+        ) -> RunCompleted | CannotContinue:
             complete_calls.append((run_id, attempt_epoch))
-            return RunRejected(
-                reason=RunRejectionReason.ATTEMPT_SUPERSEDED,
-                observed_status=AgentRunStatus.RUNNING,
-            )
+            return AttemptSuperseded()
 
         async def record_failure(
             self,
@@ -1592,13 +1573,10 @@ async def test_epoch_advance_before_answer_start_stops_old_worker_through_actual
             attempt_epoch: int,
             error_code: AgentRunErrorCode,
             now: datetime | None = None,
-        ) -> RunFinished | RunRejected:
+        ) -> FailureRecorded | CannotContinue:
             assert error_code == AgentRunErrorCode.INTERNAL_ERROR
             mark_failed_calls.append((run_id, attempt_epoch))
-            return RunRejected(
-                reason=RunRejectionReason.ATTEMPT_SUPERSEDED,
-                observed_status=AgentRunStatus.RUNNING,
-            )
+            return AttemptSuperseded()
 
     FakeLiveStreamPublisher.instances = []
     monkeypatch.setattr(FakeLiveStreamPublisher, "publish_outcomes", [])
@@ -1608,7 +1586,7 @@ async def test_epoch_advance_before_answer_start_stops_old_worker_through_actual
     monkeypatch.setattr(run_execution, "build_answering_runner", build_runner)
     monkeypatch.setattr(run_execution, "AgentRunExecutionProbe", build_probe)
     monkeypatch.setattr(
-        run_execution,
+        state_service_module,
         "AgentRunStateRepository",
         ObservingStateRepository,
     )
@@ -1619,7 +1597,7 @@ async def test_epoch_advance_before_answer_start_stops_old_worker_through_actual
     )
     logs = read_logs()
 
-    assert probe_bindings == [(session_factory, run.id, 1)]
+    assert [binding[1:] for binding in probe_bindings] == [(run.id, 1)]
     assert complete_calls == []
     assert mark_failed_calls == []
     stop_logs = [
@@ -1691,12 +1669,12 @@ async def test_deadline_stop_publishes_terminal_without_mark_failed(
     probes: list[object] = []
 
     def build_probe(
-        bound_session_factory: object,
+        bound_state_service: AgentRunStateService,
         run_id: UUID,
         attempt_epoch: int,
     ) -> object:
         probe = production_probe_type(
-            bound_session_factory,
+            bound_state_service,
             run_id,
             attempt_epoch,
             clock=clock,
@@ -1718,12 +1696,7 @@ async def test_deadline_stop_publishes_terminal_without_mark_failed(
             clock.now = 2.0
             with pytest.raises(AnswerGenerationStopped) as stopped:
                 await self.continuation.ensure_can_continue()  # type: ignore[attr-defined]
-            assert stopped.value.outcome == RunFinished(
-                status=AgentRunStatus.DEADLINE_EXCEEDED,
-                error_code=None,
-                quota_release_outcome=DailyQuotaReleaseOutcome.NOT_ELIGIBLE,
-                running_attempt_epoch=1,
-            )
+            assert stopped.value.stopped == DeadlineExceeded()
             raise stopped.value
 
     fake_agent = DeadlineExpiringAgent()
@@ -1741,17 +1714,14 @@ async def test_deadline_stop_publishes_terminal_without_mark_failed(
             attempt_epoch: int,
             error_code: AgentRunErrorCode,
             now: datetime | None = None,
-        ) -> RunFinished | RunRejected:
+        ) -> FailureRecorded | CannotContinue:
             mark_failed_calls.append((run_id, attempt_epoch))
-            return RunRejected(
-                reason=RunRejectionReason.ALREADY_FINISHED,
-                observed_status=AgentRunStatus.DEADLINE_EXCEEDED,
-            )
+            return DeadlineExceeded()
 
     _patch_delta_worker(monkeypatch, build_agent)
     monkeypatch.setattr(run_execution, "AgentRunExecutionProbe", build_probe)
     monkeypatch.setattr(
-        run_execution,
+        state_service_module,
         "AgentRunStateRepository",
         ObservingStateRepository,
     )
@@ -1814,7 +1784,7 @@ async def test_delta_finish_precedes_completed_commit_and_terminal(
             result: AnswerQuestionResult,
             research_handoff: dict[str, Any] | None = None,
             now: datetime | None = None,
-        ) -> RunFinished | RunRejected:
+        ) -> RunCompleted | CannotContinue:
             order.append("complete_start")
             assert attempt_epoch == 1
             return await super().complete(
@@ -1827,7 +1797,7 @@ async def test_delta_finish_precedes_completed_commit_and_terminal(
 
     _patch_delta_worker(monkeypatch, build_agent)
     monkeypatch.setattr(
-        run_execution,
+        state_service_module,
         "AgentRunStateRepository",
         ObservingStateRepository,
     )
@@ -2039,20 +2009,17 @@ async def test_completion_loser_with_existing_delta_has_no_terminal_or_assistant
             result: AnswerQuestionResult,
             research_handoff: dict[str, Any] | None = None,
             now: datetime | None = None,
-        ) -> RunFinished | RunRejected:
+        ) -> RunCompleted | CannotContinue:
             assert (run_id, result, attempt_epoch) == (
                 run.id,
                 fake_agent.result,
                 1,
             )
-            return RunRejected(
-                reason=RunRejectionReason.ALREADY_FINISHED,
-                observed_status=AgentRunStatus.FAILED,
-            )
+            return CancelledByUser()
 
     _patch_delta_worker(monkeypatch, build_agent)
     monkeypatch.setattr(
-        run_execution,
+        state_service_module,
         "AgentRunStateRepository",
         RejectingStateRepository,
     )
@@ -2115,7 +2082,7 @@ async def test_completion_failure_publishes_failed_terminal(
             result: AnswerQuestionResult,
             research_handoff: dict[str, Any] | None = None,
             now: datetime | None = None,
-        ) -> RunFinished | RunRejected:
+        ) -> RunCompleted | CannotContinue:
             raise RuntimeError("completion failed")
 
     _patch_worker_execution(monkeypatch, lambda **_kwargs: fake_agent)
@@ -2125,7 +2092,7 @@ async def test_completion_failure_publishes_failed_terminal(
         FakeLiveStreamPublisher,
     )
     monkeypatch.setattr(
-        run_execution,
+        state_service_module,
         "AgentRunStateRepository",
         FailingStateRepository,
     )
@@ -2150,39 +2117,12 @@ async def test_completion_failure_publishes_failed_terminal(
 
 @pytest.mark.parametrize(
     "rejection",
-    [
-        RunRejected(
-            reason=RunRejectionReason.RUN_NOT_FOUND,
-            observed_status=None,
-        ),
-        RunRejected(
-            reason=RunRejectionReason.ALREADY_FINISHED,
-            observed_status=AgentRunStatus.FAILED,
-        ),
-        RunRejected(
-            reason=RunRejectionReason.ATTEMPT_SUPERSEDED,
-            observed_status=AgentRunStatus.QUEUED,
-        ),
-        RunRejected(
-            reason=RunRejectionReason.ATTEMPT_SUPERSEDED,
-            observed_status=AgentRunStatus.RUNNING,
-        ),
-        RunRejected(
-            reason=RunRejectionReason.ANSWER_NOT_STARTED,
-            observed_status=AgentRunStatus.RUNNING,
-        ),
-    ],
-    ids=(
-        "run-not-found",
-        "already-finished",
-        "superseded-from-queued",
-        "superseded-from-running",
-        "answer-not-started",
-    ),
+    [RunNotFound(), CancelledByUser(), AttemptSuperseded()],
+    ids=("run-not-found", "cancelled-by-user", "attempt-superseded"),
 )
 @pytest.mark.asyncio
 async def test_completion_skip_does_not_publish_terminal(
-    rejection: RunRejected,
+    rejection: CannotContinue,
     session_factory: async_sessionmaker[AsyncSession],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -2201,7 +2141,7 @@ async def test_completion_skip_does_not_publish_terminal(
             result: AnswerQuestionResult,
             research_handoff: dict[str, Any] | None = None,
             now: datetime | None = None,
-        ) -> RunFinished | RunRejected:
+        ) -> RunCompleted | CannotContinue:
             assert (run_id, result, attempt_epoch) == (
                 run.id,
                 fake_agent.result,
@@ -2216,7 +2156,7 @@ async def test_completion_skip_does_not_publish_terminal(
         FakeLiveStreamPublisher,
     )
     monkeypatch.setattr(
-        run_execution,
+        state_service_module,
         "AgentRunStateRepository",
         RejectingStateRepository,
     )
@@ -2260,16 +2200,13 @@ async def test_failed_transition_loser_does_not_publish_terminal(
             attempt_epoch: int,
             error_code: AgentRunErrorCode,
             now: datetime | None = None,
-        ) -> RunFinished | RunRejected:
+        ) -> FailureRecorded | CannotContinue:
             assert (run_id, error_code, attempt_epoch) == (
                 run.id,
                 AgentRunErrorCode.GENERATION_UNAVAILABLE,
                 1,
             )
-            return RunRejected(
-                reason=RunRejectionReason.ATTEMPT_SUPERSEDED,
-                observed_status=AgentRunStatus.RUNNING,
-            )
+            return AttemptSuperseded()
 
     _patch_worker_execution(monkeypatch, lambda **_kwargs: fake_agent)
     monkeypatch.setattr(
@@ -2278,7 +2215,7 @@ async def test_failed_transition_loser_does_not_publish_terminal(
         FakeLiveStreamPublisher,
     )
     monkeypatch.setattr(
-        run_execution,
+        state_service_module,
         "AgentRunStateRepository",
         RejectingStateRepository,
     )

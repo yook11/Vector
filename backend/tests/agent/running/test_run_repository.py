@@ -20,14 +20,18 @@ from app.agent.research_handoff import (
     ResearchRunRecord,
     ResearchTaskRecord,
 )
-from app.agent.running.answer_generation import AgentAnswerGenerationRepository
 from app.agent.running.daily_quota.release import DailyQuotaReleaseOutcome
+from app.agent.running.finish_notice import ClosedQueuedRun, ClosedRunningRun
 from app.agent.running.question_reading import AgentRunQuestionRepository
 from app.agent.running.state import (
     AttemptStarted,
-    RunFinished,
-    RunRejected,
-    RunRejectionReason,
+    AttemptSuperseded,
+    CancelledByUser,
+    CannotContinue,
+    FailureRecorded,
+    RunCompleted,
+    RunNotFound,
+    RunPhaseMismatchError,
 )
 from app.agent.running.state_repository import AgentRunStateRepository
 from app.agent.running.types import AgentRunErrorCode, AgentRunStatus
@@ -147,18 +151,24 @@ async def test_complete_run_warns_on_citation_source_mismatch_without_failing_ru
 
     async with session_factory() as session:
         async with session.begin():
-            completed = await AgentRunStateRepository(session).complete(
+            repository = AgentRunStateRepository(session)
+            completed = await repository.complete(
                 run.id,
                 attempt_epoch=run.attempt_epoch,
                 result=result,
             )
     logs = read_logs()
 
-    assert completed == RunFinished(
-        status=AgentRunStatus.COMPLETED,
-        error_code=None,
-        quota_release_outcome=DailyQuotaReleaseOutcome.NOT_ELIGIBLE,
-        running_attempt_epoch=1,
+    assert (completed, repository.closed_runs) == (
+        RunCompleted(),
+        [
+            ClosedRunningRun(
+                run_id=run.id,
+                attempt_epoch=1,
+                status=AgentRunStatus.COMPLETED,
+                error_code=None,
+            )
+        ],
     )
     mismatch_logs = [
         entry
@@ -202,18 +212,24 @@ async def test_complete_run_persists_the_handoff_on_the_thread_and_round_trips(
 
     async with session_factory() as session:
         async with session.begin():
-            completed = await AgentRunStateRepository(session).complete(
+            repository = AgentRunStateRepository(session)
+            completed = await repository.complete(
                 run.id,
                 attempt_epoch=run.attempt_epoch,
                 result=_direct_result(),
                 research_handoff=handoff_json,
             )
 
-    assert completed == RunFinished(
-        status=AgentRunStatus.COMPLETED,
-        error_code=None,
-        quota_release_outcome=DailyQuotaReleaseOutcome.NOT_ELIGIBLE,
-        running_attempt_epoch=1,
+    assert (completed, repository.closed_runs) == (
+        RunCompleted(),
+        [
+            ClosedRunningRun(
+                run_id=run.id,
+                attempt_epoch=1,
+                status=AgentRunStatus.COMPLETED,
+                error_code=None,
+            )
+        ],
     )
     async with session_factory() as session:
         persisted_run = await session.get(AgentRun, run.id)
@@ -246,17 +262,23 @@ async def test_complete_run_keeps_the_existing_handoff_when_none_is_passed(
 
     async with session_factory() as session:
         async with session.begin():
-            completed = await AgentRunStateRepository(session).complete(
+            repository = AgentRunStateRepository(session)
+            completed = await repository.complete(
                 run.id,
                 attempt_epoch=run.attempt_epoch,
                 result=_direct_result(),
             )
 
-    assert completed == RunFinished(
-        status=AgentRunStatus.COMPLETED,
-        error_code=None,
-        quota_release_outcome=DailyQuotaReleaseOutcome.NOT_ELIGIBLE,
-        running_attempt_epoch=1,
+    assert (completed, repository.closed_runs) == (
+        RunCompleted(),
+        [
+            ClosedRunningRun(
+                run_id=run.id,
+                attempt_epoch=1,
+                status=AgentRunStatus.COMPLETED,
+                error_code=None,
+            )
+        ],
     )
     async with session_factory() as session:
         persisted_thread = await session.get(AgentThread, thread_id)
@@ -291,9 +313,11 @@ async def test_stale_complete_run_with_a_handoff_does_not_persist_it(
                 )
                 assert attempt_epoch == 2
 
-        await AgentAnswerGenerationRepository(
-            session_factory, run.id, attempt_epoch
-        ).start_answer_generation()
+        async with session_factory() as answer_session:
+            async with answer_session.begin():
+                await AgentRunStateRepository(answer_session).start_answer_generation(
+                    run.id, attempt_epoch=attempt_epoch
+                )
 
         async with stale_session.begin():
             outcome = await AgentRunStateRepository(stale_session).complete(
@@ -302,10 +326,7 @@ async def test_stale_complete_run_with_a_handoff_does_not_persist_it(
                 result=_direct_result(),
                 research_handoff=handoff_json,
             )
-        assert outcome == RunRejected(
-            reason=RunRejectionReason.ATTEMPT_SUPERSEDED,
-            observed_status=AgentRunStatus.RUNNING,
-        )
+        assert outcome == AttemptSuperseded()
     finally:
         await stale_session.close()
 
@@ -318,12 +339,19 @@ async def test_stale_complete_run_with_a_handoff_does_not_persist_it(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("cancelled", [False, True])
+@pytest.mark.parametrize(
+    ("cancelled", "expected"),
+    [
+        pytest.param(False, AttemptSuperseded(), id="failure-recorded"),
+        pytest.param(True, CancelledByUser(), id="cancelled"),
+    ],
+)
 async def test_complete_run_lost_race_leaves_no_assistant_message(
     session_factory: async_sessionmaker[AsyncSession],
     cancelled: bool,
+    expected: CannotContinue,
 ) -> None:
-    """失敗記録かキャンセルに先を越された完了は終了済みとして拒否され、回答を残さない。"""
+    """失敗記録かキャンセルに先を越された完了は、先に確定した終わり方を返して回答を残さない。"""
     async with session_factory() as setup_session:
         _thread, _message, run = await _create_thread_message_run(
             setup_session,
@@ -356,10 +384,7 @@ async def test_complete_run_lost_race_leaves_no_assistant_message(
                 attempt_epoch=stale_run.attempt_epoch,
                 result=_direct_result(),
             )
-        assert outcome == RunRejected(
-            reason=RunRejectionReason.ALREADY_FINISHED,
-            observed_status=AgentRunStatus.FAILED,
-        )
+        assert outcome == expected
     finally:
         await stale_session.close()
 
@@ -409,9 +434,11 @@ async def test_stale_complete_run_loses_epoch_fence_and_leaves_no_artifacts(
                 )
                 assert attempt_epoch == 2
 
-        await AgentAnswerGenerationRepository(
-            session_factory, run.id, attempt_epoch
-        ).start_answer_generation()
+        async with session_factory() as answer_session:
+            async with answer_session.begin():
+                await AgentRunStateRepository(answer_session).start_answer_generation(
+                    run.id, attempt_epoch=attempt_epoch
+                )
 
         async with stale_session.begin():
             outcome = await AgentRunStateRepository(stale_session).complete(
@@ -419,10 +446,7 @@ async def test_stale_complete_run_loses_epoch_fence_and_leaves_no_artifacts(
                 attempt_epoch=stale_run.attempt_epoch,
                 result=_external_result(),
             )
-        assert outcome == RunRejected(
-            reason=RunRejectionReason.ATTEMPT_SUPERSEDED,
-            observed_status=AgentRunStatus.RUNNING,
-        )
+        assert outcome == AttemptSuperseded()
     finally:
         await stale_session.close()
 
@@ -492,10 +516,7 @@ async def test_stale_record_failure_does_not_alter_newer_attempt(
                 error_code=AgentRunErrorCode.STALE,
             )
 
-    assert recorded == RunRejected(
-        reason=RunRejectionReason.ATTEMPT_SUPERSEDED,
-        observed_status=AgentRunStatus.RUNNING,
-    )
+    assert recorded == AttemptSuperseded()
     async with session_factory() as session:
         current = await session.get(AgentRun, run.id)
         assert current is not None
@@ -542,10 +563,7 @@ async def test_start_run_reexecutes_running_and_skips_terminal_runs(
     assert thread_id == running.thread_id
     assert question.content == "worker question"
     assert question.seq == 1
-    assert skipped == RunRejected(
-        reason=RunRejectionReason.ALREADY_FINISHED,
-        observed_status=AgentRunStatus.FAILED,
-    )
+    assert skipped == AttemptSuperseded()
     async with session_factory() as session:
         restarted = await session.get(AgentRun, running.id)
         terminal = await session.get(AgentRun, failed.id)
@@ -571,7 +589,7 @@ async def test_start_run_rejects_answering_run_without_changing_attempt(
     session_factory: async_sessionmaker[AsyncSession],
     redelivery_delay: timedelta,
 ) -> None:
-    """回答生成開始済みなら実行権の取得を拒否し、世代と状態を変えない。"""
+    """回答生成開始済みなら別の試行が担当しているとして開始せず、世代と状態を変えない。"""
     created_at = datetime(2026, 9, 27, 12, 0, tzinfo=UTC)
     answer_started_at = created_at + timedelta(seconds=55)
     redelivered_at = answer_started_at + redelivery_delay
@@ -591,10 +609,7 @@ async def test_start_run_rejects_answering_run_without_changing_attempt(
                 run.id, now=redelivered_at
             )
 
-    assert redelivery == RunRejected(
-        reason=RunRejectionReason.ANSWER_STARTED,
-        observed_status=AgentRunStatus.RUNNING,
-    )
+    assert redelivery == AttemptSuperseded()
     async with session_factory() as session:
         current = await session.get(AgentRun, run.id)
         assert current is not None
@@ -681,10 +696,7 @@ async def test_start_run_reports_idempotent_skip_for_missing_run(
                 missing_run_id
             )
 
-    assert skip_result == RunRejected(
-        reason=RunRejectionReason.RUN_NOT_FOUND,
-        observed_status=None,
-    )
+    assert skip_result == RunNotFound()
 
 
 @pytest.mark.asyncio
@@ -700,12 +712,11 @@ async def test_start_run_reports_idempotent_skip_when_transition_loses_race(
         session_factory() as contender,
         session_factory() as observer,
     ):
-        start_task: asyncio.Task[AttemptStarted | RunFinished | RunRejected] | None = (
-            None
-        )
+        start_task: asyncio.Task[AttemptStarted | CannotContinue] | None = None
         try:
             await winner.begin()
-            cancelled = await AgentRunStateRepository(winner).cancel_for_user(
+            winner_repository = AgentRunStateRepository(winner)
+            cancelled = await winner_repository.cancel_for_user(
                 run.id, user_id=UUID(TEST_USER_ID)
             )
 
@@ -729,16 +740,16 @@ async def test_start_run_reports_idempotent_skip_when_transition_loses_race(
                 if session.in_transaction():
                     await session.rollback()
 
-    assert cancelled == RunFinished(
-        status=AgentRunStatus.FAILED,
-        error_code=AgentRunErrorCode.CANCELLED,
-        quota_release_outcome=DailyQuotaReleaseOutcome.NOT_ELIGIBLE,
-        running_attempt_epoch=None,
+    assert (cancelled, winner_repository.closed_runs) == (
+        CancelledByUser(),
+        [
+            ClosedQueuedRun(
+                run_id=run.id,
+                quota_release_outcome=DailyQuotaReleaseOutcome.NOT_ELIGIBLE,
+            )
+        ],
     )
-    assert skip_result == RunRejected(
-        reason=RunRejectionReason.ALREADY_FINISHED,
-        observed_status=AgentRunStatus.FAILED,
-    )
+    assert skip_result == CancelledByUser()
     async with session_factory() as session:
         failed = await session.get(AgentRun, run.id)
         assert failed is not None
@@ -759,15 +770,17 @@ async def test_record_enqueue_failure_remains_epoch_independent(
 
     async with session_factory() as session:
         async with session.begin():
-            recorded = await AgentRunStateRepository(session).record_enqueue_failure(
-                run.id,
-            )
+            repository = AgentRunStateRepository(session)
+            recorded = await repository.record_enqueue_failure(run.id)
 
-    assert recorded == RunFinished(
-        status=AgentRunStatus.FAILED,
-        error_code=AgentRunErrorCode.ENQUEUE_FAILED,
-        quota_release_outcome=DailyQuotaReleaseOutcome.NOT_ELIGIBLE,
-        running_attempt_epoch=None,
+    assert (recorded, repository.closed_runs) == (
+        FailureRecorded(),
+        [
+            ClosedQueuedRun(
+                run_id=run.id,
+                quota_release_outcome=DailyQuotaReleaseOutcome.NOT_ELIGIBLE,
+            )
+        ],
     )
     async with session_factory() as session:
         failed = await session.get(AgentRun, run.id)
@@ -861,7 +874,8 @@ async def test_answer_save_lock_timeout_is_transaction_local_after_commit(
         before = await session.scalar(select(func.current_setting("lock_timeout")))
         await session.rollback()
         async with session.begin():
-            outcome = await AgentRunStateRepository(session).complete(
+            repository = AgentRunStateRepository(session)
+            outcome = await repository.complete(
                 run_id,
                 attempt_epoch=epoch,
                 result=_direct_result(),
@@ -870,11 +884,16 @@ async def test_answer_save_lock_timeout_is_transaction_local_after_commit(
                 await session.scalar(select(func.current_setting("lock_timeout")))
                 == "3s"
             )
-        assert outcome == RunFinished(
-            status=AgentRunStatus.COMPLETED,
-            error_code=None,
-            quota_release_outcome=DailyQuotaReleaseOutcome.NOT_ELIGIBLE,
-            running_attempt_epoch=1,
+        assert (outcome, repository.closed_runs) == (
+            RunCompleted(),
+            [
+                ClosedRunningRun(
+                    run_id=run_id,
+                    attempt_epoch=1,
+                    status=AgentRunStatus.COMPLETED,
+                    error_code=None,
+                )
+            ],
         )
         assert (
             await session.scalar(select(func.current_setting("lock_timeout"))) == before
@@ -882,44 +901,11 @@ async def test_answer_save_lock_timeout_is_transaction_local_after_commit(
 
 
 @pytest.mark.parametrize(
-    ("status", "attempt_epoch", "answer_started_at", "expected"),
+    ("status", "attempt_epoch", "answer_started_at"),
     [
-        (
-            "queued",
-            2,
-            None,
-            RunRejected(
-                reason=RunRejectionReason.ATTEMPT_SUPERSEDED,
-                observed_status=AgentRunStatus.QUEUED,
-            ),
-        ),
-        (
-            "running",
-            2,
-            None,
-            RunRejected(
-                reason=RunRejectionReason.ATTEMPT_SUPERSEDED,
-                observed_status=AgentRunStatus.RUNNING,
-            ),
-        ),
-        (
-            "running",
-            2,
-            datetime(2026, 1, 1, tzinfo=UTC),
-            RunRejected(
-                reason=RunRejectionReason.ATTEMPT_SUPERSEDED,
-                observed_status=AgentRunStatus.RUNNING,
-            ),
-        ),
-        (
-            "running",
-            1,
-            None,
-            RunRejected(
-                reason=RunRejectionReason.ANSWER_NOT_STARTED,
-                observed_status=AgentRunStatus.RUNNING,
-            ),
-        ),
+        ("queued", 2, None),
+        ("running", 2, None),
+        ("running", 2, datetime(2026, 1, 1, tzinfo=UTC)),
     ],
 )
 @pytest.mark.asyncio
@@ -927,10 +913,9 @@ async def test_completion_failure_reason_precedence_preserves_existing_data(
     status: str,
     attempt_epoch: int,
     answer_started_at: datetime | None,
-    expected: RunRejected,
     session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
-    """完了の拒否は期限より先に世代と回答開始で判定し、Run・thread・既存の回答を変えない。"""
+    """世代の違う完了は期限より先に別の試行の担当と判定され、Run・thread・既存の回答を変えない。"""
     async with session_factory() as session:
         thread, _, run = await _create_thread_message_run(
             session,
@@ -949,7 +934,7 @@ async def test_completion_failure_reason_precedence_preserves_existing_data(
                 result=_external_result(),
                 research_handoff=_handoff().model_dump(mode="json"),
             )
-            assert completion == expected
+            assert completion == AttemptSuperseded()
             # 事前拒否が書き込まないことも確認するため、このテストではcommitする。
     async with session_factory() as session:
         persisted = await session.get(AgentRun, run_id)
@@ -971,3 +956,42 @@ async def test_completion_failure_reason_precedence_preserves_existing_data(
             )
         ) == [("assistant", "既存の回答"), ("user", "worker question")]
         assert list(await session.scalars(select(AgentMessageSource))) == []
+
+
+@pytest.mark.asyncio
+async def test_completion_before_answer_start_is_a_phase_mismatch_without_writes(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    """回答を始めていない現在の試行の完了は呼び出し順の誤りとして例外になり、Run・threadを変えない。"""
+    async with session_factory() as session:
+        thread, _, run = await _create_thread_message_run(
+            session,
+            status="running",
+            attempt_epoch=1,
+            history=[("assistant", "既存の回答")],
+        )
+        run_id, thread_id = run.id, thread.id
+        original_updated_at = thread.updated_at
+
+    async with session_factory() as session:
+        with pytest.raises(RunPhaseMismatchError):
+            async with session.begin():
+                await AgentRunStateRepository(session).complete(
+                    run_id,
+                    attempt_epoch=1,
+                    result=_external_result(),
+                    research_handoff=_handoff().model_dump(mode="json"),
+                )
+
+    async with session_factory() as session:
+        persisted = await session.get(AgentRun, run_id)
+        saved_thread = await session.get(AgentThread, thread_id)
+        assert persisted is not None and saved_thread is not None
+        assert (
+            persisted.status,
+            persisted.attempt_epoch,
+            persisted.answer_started_at,
+            persisted.assistant_message_id,
+            saved_thread.research_handoff,
+            saved_thread.updated_at,
+        ) == ("running", 1, None, None, None, original_updated_at)

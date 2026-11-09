@@ -20,9 +20,8 @@ from app.agent.answering.direct_answer.failure import DirectAnswerError
 from app.agent.answering.direct_answer.service import DirectAnswerService
 from app.agent.llm_call.caller import LlmTextStreamer
 from app.agent.llm_call.gemini import GeminiLlmCaller
-from app.agent.running.state import RunRejected, RunRejectionReason
+from app.agent.running.state import AttemptSuperseded
 from app.agent.running.stop import AnswerGenerationStopped
-from app.agent.running.types import AgentRunStatus
 from app.logfire.redaction import install_exception_redaction
 from tests.agent.answering_runner._harness import (
     AllowAnswerGenerationStart,
@@ -305,12 +304,7 @@ async def test_start_rejection_does_not_open_phase_or_attempt(
         agent=DIRECT_ANSWER_AGENT,
         llm_text_streamer_scope_factory=streamer_scope,
         repository=ScriptedAnswerGenerationRepository(
-            start=AnswerGenerationStopped(
-                RunRejected(
-                    reason=RunRejectionReason.ATTEMPT_SUPERSEDED,
-                    observed_status=AgentRunStatus.RUNNING,
-                )
-            )
+            start=AnswerGenerationStopped(AttemptSuperseded())
         ),
     )
     try:

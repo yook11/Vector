@@ -1,4 +1,4 @@
-"""Run の状態から各操作を許すかを判定し、操作の結果を表す。"""
+"""Run の状態から各操作を許すかを判定し、何が起きたかを型で返す。"""
 
 from __future__ import annotations
 
@@ -6,20 +6,29 @@ from collections.abc import Collection
 from dataclasses import dataclass
 from datetime import datetime
 from enum import StrEnum
+from typing import assert_never
 from uuid import UUID
 
 from app.agent.answering import timing as answer_timing
-from app.agent.running.daily_quota.release import DailyQuotaReleaseOutcome
 from app.agent.running.types import AgentRunErrorCode, AgentRunStatus
 
 __all__ = [
     "ACTIVE_STATUSES",
     "AnswerGenerationStarted",
+    "AttemptAlreadyStarted",
     "AttemptStarted",
-    "RunFinished",
-    "RunRejected",
+    "AttemptSuperseded",
+    "CanContinue",
+    "CancelledByUser",
+    "CannotContinue",
+    "DeadlineExceeded",
+    "FailureRecorded",
+    "RunAlreadyCompleted",
+    "RunAlreadyFailed",
+    "RunCompleted",
+    "RunNotFound",
     "RunPhase",
-    "RunRejectionReason",
+    "RunPhaseMismatchError",
     "RunState",
     "has_attempt_started",
     "is_finished",
@@ -37,16 +46,6 @@ def has_attempt_started(attempt_epoch: int) -> bool:
     return attempt_epoch >= 1
 
 
-class RunRejectionReason(StrEnum):
-    RUN_NOT_FOUND = "run_not_found"
-    ALREADY_FINISHED = "already_finished"
-    ATTEMPT_SUPERSEDED = "attempt_superseded"
-    RUN_STARTED = "run_started"
-    ANSWER_STARTED = "answer_started"
-    ANSWER_NOT_STARTED = "answer_not_started"
-    DEADLINE_EXCEEDED = "deadline_exceeded"
-
-
 class RunPhase(StrEnum):
     QUEUED = "queued"
     PREPARING = "preparing"
@@ -54,129 +53,52 @@ class RunPhase(StrEnum):
     FINISHED = "finished"
 
 
-_PHASE_RANK = {
-    RunPhase.QUEUED: 0,
-    RunPhase.PREPARING: 1,
-    RunPhase.ANSWERING: 2,
-}
 _STARTABLE_PHASES = (RunPhase.QUEUED, RunPhase.PREPARING)
 
 
 @dataclass(frozen=True, slots=True)
-class RunState:
-    status: AgentRunStatus
-    attempt_epoch: int
-    deadline_at: datetime
-    answer_started_at: datetime | None
-
-    @property
-    def phase(self) -> RunPhase:
-        if is_finished(self.status):
-            return RunPhase.FINISHED
-        if self.status is AgentRunStatus.QUEUED:
-            return RunPhase.QUEUED
-        if self.answer_started_at is None:
-            return RunPhase.PREPARING
-        return RunPhase.ANSWERING
-
-    def check_start(self, *, now: datetime) -> RunRejectionReason | None:
-        """新しい実行を始められるのは、待機中か回答前のRunを受理期限までに限る。"""
-        return self._check(
-            phases=_STARTABLE_PHASES,
-            deadline=self.deadline_at,
-            attempt_epoch=None,
-            now=now,
-        )
-
-    def check_progress(
-        self,
-        *,
-        attempt_epoch: int,
-        phases: Collection[RunPhase],
-        now: datetime,
-    ) -> RunRejectionReason | None:
-        """現在の実行が作業を始める・続けるのは、受理期限までに限る。"""
-        return self._check(
-            phases=phases,
-            deadline=self.deadline_at,
-            attempt_epoch=attempt_epoch,
-            now=now,
-        )
-
-    def check_attempt_finish(
-        self,
-        *,
-        attempt_epoch: int,
-        phases: Collection[RunPhase],
-        now: datetime,
-    ) -> RunRejectionReason | None:
-        """現在の実行がRunを終えるのは、段階で決まる回収期限までに限る。"""
-        return self._check(
-            phases=phases,
-            deadline=self._recovery_deadline(),
-            attempt_epoch=attempt_epoch,
-            now=now,
-        )
-
-    def check_finish(
-        self,
-        *,
-        phases: Collection[RunPhase],
-        now: datetime,
-    ) -> RunRejectionReason | None:
-        """世代を持たない利用者やrouterがRunを終えるのも、回収期限までに限る。"""
-        return self._check(
-            phases=phases,
-            deadline=self._recovery_deadline(),
-            attempt_epoch=None,
-            now=now,
-        )
-
-    def is_due_for_deadline_recovery(self, *, now: datetime) -> bool:
-        return self.phase is not RunPhase.FINISHED and now >= self._recovery_deadline()
-
-    def _check(
-        self,
-        *,
-        phases: Collection[RunPhase],
-        deadline: datetime,
-        attempt_epoch: int | None,
-        now: datetime,
-    ) -> RunRejectionReason | None:
-        phase = self.phase
-        if phase is RunPhase.FINISHED:
-            return RunRejectionReason.ALREADY_FINISHED
-        if attempt_epoch is not None and not (
-            self.status is AgentRunStatus.RUNNING
-            and self.attempt_epoch == attempt_epoch
-        ):
-            return RunRejectionReason.ATTEMPT_SUPERSEDED
-        # 回答中のRunを受理期限で期限切れにしないよう、段階を期限より先に見る。
-        if phase not in phases:
-            return _phase_rejection(phase, phases)
-        if now >= deadline:
-            return RunRejectionReason.DEADLINE_EXCEEDED
-        return None
-
-    def _recovery_deadline(self) -> datetime:
-        if self.answer_started_at is None:
-            return self.deadline_at
-        return (
-            self.answer_started_at + answer_timing.answer_generation_recovery_window()
-        )
+class CanContinue:
+    """判定が操作を許した。"""
 
 
-def _phase_rejection(
-    phase: RunPhase, phases: Collection[RunPhase]
-) -> RunRejectionReason:
-    if all(_PHASE_RANK[phase] > _PHASE_RANK[allowed] for allowed in phases):
-        if phase is RunPhase.PREPARING:
-            return RunRejectionReason.RUN_STARTED
-        return RunRejectionReason.ANSWER_STARTED
-    if phase is RunPhase.PREPARING:
-        return RunRejectionReason.ANSWER_NOT_STARTED
-    # 待機中を許さない判定は実行世代を見るので、世代の確認で先に拒否される。
-    raise ValueError(f"no rejection reason for {phase} outside {sorted(phases)}")
+@dataclass(frozen=True, slots=True)
+class CancelledByUser:
+    """利用者がRunを止めた。"""
+
+
+@dataclass(frozen=True, slots=True)
+class DeadlineExceeded:
+    """Runが期限を過ぎた。"""
+
+
+@dataclass(frozen=True, slots=True)
+class AttemptSuperseded:
+    """別の試行がRunを担当している、または既に終えている。"""
+
+
+@dataclass(frozen=True, slots=True)
+class RunNotFound:
+    """Runの行が無い。"""
+
+
+type CannotContinue = (
+    CancelledByUser | DeadlineExceeded | AttemptSuperseded | RunNotFound
+)
+
+
+@dataclass(frozen=True, slots=True)
+class RunAlreadyCompleted:
+    """Runは既に完了している。"""
+
+
+@dataclass(frozen=True, slots=True)
+class RunAlreadyFailed:
+    """Runは既に失敗で終わっている。"""
+
+
+@dataclass(frozen=True, slots=True)
+class AttemptAlreadyStarted:
+    """workerが既に試行を始めている。"""
 
 
 @dataclass(frozen=True, slots=True)
@@ -195,44 +117,188 @@ class AnswerGenerationStarted:
 
 
 @dataclass(frozen=True, slots=True)
-class RunFinished:
-    """この操作でRunを終わらせた。"""
-
-    status: AgentRunStatus
-    error_code: AgentRunErrorCode | None
-    quota_release_outcome: DailyQuotaReleaseOutcome
-    # runningから終えたときの実行世代。終了通知の送り先になる。
-    running_attempt_epoch: int | None
-
-    def __post_init__(self) -> None:
-        if not is_finished(self.status):
-            raise ValueError("finished run requires a terminal status")
-        if (self.status is AgentRunStatus.FAILED) != (self.error_code is not None):
-            raise ValueError("only a failed run carries an error code")
-        if not isinstance(self.quota_release_outcome, DailyQuotaReleaseOutcome):
-            raise ValueError("finished run requires a quota release outcome")
-        if self.running_attempt_epoch is None:
-            return
-        if not _is_positive_epoch(self.running_attempt_epoch):
-            raise ValueError("running run requires a positive attempt epoch")
-        if self.quota_release_outcome is not DailyQuotaReleaseOutcome.NOT_ELIGIBLE:
-            raise ValueError("a run finished from running does not release quota")
+class RunCompleted:
+    """この試行の回答を保存し、Runを完了した。"""
 
 
 @dataclass(frozen=True, slots=True)
-class RunRejected:
-    """判定で拒否し、Runを変更しなかった。"""
+class FailureRecorded:
+    """Runを失敗として記録した。"""
 
-    reason: RunRejectionReason
-    observed_status: AgentRunStatus | None
 
-    def __post_init__(self) -> None:
-        if self.reason is RunRejectionReason.DEADLINE_EXCEEDED:
-            raise ValueError("deadline exceeded is reported as a finished run")
-        if (self.reason is RunRejectionReason.RUN_NOT_FOUND) != (
-            self.observed_status is None
+class RunPhaseMismatchError(Exception):
+    """現在の試行が許されない段階で操作した。呼び出し順の誤りを表す。"""
+
+    def __init__(self, *, phase: RunPhase, allowed: Collection[RunPhase]) -> None:
+        super().__init__(f"{phase} is outside {sorted(allowed)}")
+        self.phase = phase
+        self.allowed = frozenset(allowed)
+
+
+type _AttemptCheck = (
+    CanContinue | CancelledByUser | DeadlineExceeded | AttemptSuperseded
+)
+type _FinishCheck = (
+    CanContinue
+    | CancelledByUser
+    | DeadlineExceeded
+    | RunAlreadyCompleted
+    | RunAlreadyFailed
+    | AttemptAlreadyStarted
+)
+
+
+@dataclass(frozen=True, slots=True)
+class RunState:
+    status: AgentRunStatus
+    error_code: AgentRunErrorCode | None
+    attempt_epoch: int
+    deadline_at: datetime
+    answer_started_at: datetime | None
+
+    @property
+    def phase(self) -> RunPhase:
+        if is_finished(self.status):
+            return RunPhase.FINISHED
+        if self.status is AgentRunStatus.QUEUED:
+            return RunPhase.QUEUED
+        if self.answer_started_at is None:
+            return RunPhase.PREPARING
+        return RunPhase.ANSWERING
+
+    def check_start(self, *, now: datetime) -> _AttemptCheck:
+        """新しい試行を始められるのは、待機中か回答前のRunを受理期限までに限る。"""
+        phase = self.phase
+        if phase is RunPhase.FINISHED:
+            return self._ended_for_attempt()
+        # 回答中なら前の試行が続けるので、二重に届いた依頼は期限を見ずに引き下がる。
+        if phase not in _STARTABLE_PHASES:
+            return AttemptSuperseded()
+        return _within(self.deadline_at, now=now)
+
+    def check_progress(
+        self,
+        *,
+        attempt_epoch: int,
+        phases: Collection[RunPhase],
+        now: datetime,
+    ) -> _AttemptCheck:
+        """現在の試行が作業を始める・続けるのは、受理期限までに限る。"""
+        return self._check_attempt(
+            attempt_epoch=attempt_epoch,
+            phases=phases,
+            deadline=self.deadline_at,
+            now=now,
+        )
+
+    def check_attempt_finish(
+        self,
+        *,
+        attempt_epoch: int,
+        phases: Collection[RunPhase],
+        now: datetime,
+    ) -> _AttemptCheck:
+        """現在の試行がRunを終えるのは、段階で決まる回収期限までに限る。"""
+        return self._check_attempt(
+            attempt_epoch=attempt_epoch,
+            phases=phases,
+            deadline=self._recovery_deadline(),
+            now=now,
+        )
+
+    def check_finish(
+        self,
+        *,
+        phases: Collection[RunPhase],
+        now: datetime,
+    ) -> _FinishCheck:
+        """世代を持たない利用者やrouterがRunを終えるのも、回収期限までに限る。"""
+        phase = self.phase
+        if phase is RunPhase.FINISHED:
+            return self._ended_for_caller_without_attempt()
+        if phase not in phases:
+            if phase is RunPhase.QUEUED:
+                raise RunPhaseMismatchError(phase=phase, allowed=phases)
+            return AttemptAlreadyStarted()
+        return _within(self._recovery_deadline(), now=now)
+
+    def is_due_for_deadline_recovery(self, *, now: datetime) -> bool:
+        return self.phase is not RunPhase.FINISHED and now >= self._recovery_deadline()
+
+    def _check_attempt(
+        self,
+        *,
+        attempt_epoch: int,
+        phases: Collection[RunPhase],
+        deadline: datetime,
+        now: datetime,
+    ) -> _AttemptCheck:
+        phase = self.phase
+        if phase is RunPhase.FINISHED:
+            return self._ended_for_attempt()
+        if not (
+            self.status is AgentRunStatus.RUNNING
+            and self.attempt_epoch == attempt_epoch
         ):
-            raise ValueError("only a missing run has no observed status")
+            return AttemptSuperseded()
+        # 回答中のRunを受理期限で期限切れにしないよう、段階を期限より先に見る。
+        if phase not in phases:
+            raise RunPhaseMismatchError(phase=phase, allowed=phases)
+        return _within(deadline, now=now)
+
+    def _ended_for_attempt(
+        self,
+    ) -> CancelledByUser | DeadlineExceeded | AttemptSuperseded:
+        match self.status:
+            case AgentRunStatus.FAILED if (
+                self.error_code is AgentRunErrorCode.CANCELLED
+            ):
+                return CancelledByUser()
+            case AgentRunStatus.DEADLINE_EXCEEDED:
+                return DeadlineExceeded()
+            # 完了・失敗で終わったRunは、この試行ではなく別の試行の担当だった。
+            case (
+                AgentRunStatus.COMPLETED
+                | AgentRunStatus.FAILED
+                | AgentRunStatus.POLICY_BLOCKED
+            ):
+                return AttemptSuperseded()
+            case AgentRunStatus.QUEUED | AgentRunStatus.RUNNING:
+                raise ValueError("an active run has not ended")
+            case _:
+                assert_never(self.status)
+
+    def _ended_for_caller_without_attempt(
+        self,
+    ) -> CancelledByUser | DeadlineExceeded | RunAlreadyCompleted | RunAlreadyFailed:
+        match self.status:
+            case AgentRunStatus.FAILED if (
+                self.error_code is AgentRunErrorCode.CANCELLED
+            ):
+                return CancelledByUser()
+            case AgentRunStatus.DEADLINE_EXCEEDED:
+                return DeadlineExceeded()
+            case AgentRunStatus.COMPLETED:
+                return RunAlreadyCompleted()
+            case AgentRunStatus.FAILED | AgentRunStatus.POLICY_BLOCKED:
+                return RunAlreadyFailed()
+            case AgentRunStatus.QUEUED | AgentRunStatus.RUNNING:
+                raise ValueError("an active run has not ended")
+            case _:
+                assert_never(self.status)
+
+    def _recovery_deadline(self) -> datetime:
+        if self.answer_started_at is None:
+            return self.deadline_at
+        return (
+            self.answer_started_at + answer_timing.answer_generation_recovery_window()
+        )
+
+
+def _within(deadline: datetime, *, now: datetime) -> CanContinue | DeadlineExceeded:
+    if now >= deadline:
+        return DeadlineExceeded()
+    return CanContinue()
 
 
 def _is_positive_epoch(value: object) -> bool:

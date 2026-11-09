@@ -150,10 +150,12 @@ async def sweep_deadline_exceeded_runs_for_thread(
     session: AsyncSession,
     *,
     thread_id: uuid_mod.UUID,
+    user_id: uuid_mod.UUID,
 ) -> DeadlineRunSweepResult:
     return await _recover_deadline_exceeded_runs(
         session,
         thread_id=thread_id,
+        user_id=user_id,
         clock=func.clock_timestamp(),
     )
 
@@ -171,10 +173,11 @@ async def _recover_deadline_exceeded_runs(
     *,
     thread_id: uuid_mod.UUID | None,
     clock: ColumnElement[datetime],
+    user_id: uuid_mod.UUID | None = None,
     run_id: UUID | None = None,
 ) -> DeadlineRunSweepResult:
     candidates = await _lock_runs_for_deadline_recovery(
-        session, thread_id=thread_id, run_id=run_id, clock=clock
+        session, thread_id=thread_id, user_id=user_id, run_id=run_id, clock=clock
     )
     if not candidates:
         return DeadlineRunSweepResult.empty()
@@ -200,6 +203,7 @@ async def _lock_runs_for_deadline_recovery(
     session: AsyncSession,
     *,
     thread_id: UUID | None,
+    user_id: UUID | None,
     run_id: UUID | None,
     clock: ColumnElement[datetime],
 ) -> tuple[_DeadlineRecoveryCandidate, ...]:
@@ -220,6 +224,8 @@ async def _lock_runs_for_deadline_recovery(
     )
     if thread_id is not None:
         query = query.where(AgentRun.thread_id == thread_id)
+    if user_id is not None:
+        query = query.where(AgentThread.user_id == user_id)
     if run_id is not None:
         query = query.where(AgentRun.id == run_id)
     rows = (await session.execute(query)).tuples().all()
@@ -230,6 +236,8 @@ async def _lock_runs_for_deadline_recovery(
             quota_usage_date=quota_usage_date,
             state=RunState(
                 status=AgentRunStatus(status),
+                # 候補は待機中・実行中のRunだけで、制約によりerror_codeを持たない。
+                error_code=None,
                 attempt_epoch=attempt_epoch,
                 deadline_at=deadline_at,
                 answer_started_at=answer_started_at,

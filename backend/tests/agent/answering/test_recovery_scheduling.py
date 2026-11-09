@@ -7,9 +7,8 @@ import pytest
 
 from app.agent.answering import timing
 from app.agent.running.deadline.scheduling import AgentDeadlineScheduler
-from app.agent.running.state import RunRejected, RunRejectionReason
+from app.agent.running.state import AttemptSuperseded
 from app.agent.running.stop import AnswerGenerationStopped
-from app.agent.running.types import AgentRunStatus
 from tests.agent.answering.direct_answer import test_service as direct
 from tests.agent.answering.evidence_answer import test_service as evidence
 from tests.agent.answering_runner._harness import (
@@ -96,12 +95,7 @@ async def test_generation_finishes_while_single_recovery_reservation_is_blocked(
 @pytest.mark.parametrize(
     "failure",
     [
-        AnswerGenerationStopped(
-            RunRejected(
-                reason=RunRejectionReason.ATTEMPT_SUPERSEDED,
-                observed_status=AgentRunStatus.RUNNING,
-            )
-        ),
+        AnswerGenerationStopped(AttemptSuperseded()),
         RuntimeError("commit failed"),
     ],
 )

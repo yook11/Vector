@@ -15,9 +15,8 @@ from app.agent.recording.evidence_answer import (
     EvidenceAnswerSucceeded,
     LogfireEvidenceAnswerRecorder,
 )
-from app.agent.running.state import RunRejected, RunRejectionReason
+from app.agent.running.state import AttemptSuperseded
 from app.agent.running.stop import AnswerGenerationStopped
-from app.agent.running.types import AgentRunStatus
 from tests.logfire._metric_helpers import attributes_of, collected_metrics
 
 _OUTCOME_METRIC = "vector.agent.evidence_answer.outcome"
@@ -75,12 +74,7 @@ async def test_classified_failure_emits_failed_duration_and_failed_outcome(
         pytest.param(asyncio.CancelledError(), id="cancellation"),
         pytest.param(GeneratorExit(), id="generator-exit"),
         pytest.param(
-            AnswerGenerationStopped(
-                RunRejected(
-                    reason=RunRejectionReason.ATTEMPT_SUPERSEDED,
-                    observed_status=AgentRunStatus.RUNNING,
-                )
-            ),
+            AnswerGenerationStopped(AttemptSuperseded()),
             id="generation-stopped",
         ),
     ],
@@ -105,12 +99,7 @@ async def test_stop_emits_stopped_duration_without_outcome(
 async def test_stop_after_outcome_discards_outcome(
     capfire: CaptureLogfire,
 ) -> None:
-    error = AnswerGenerationStopped(
-        RunRejected(
-            reason=RunRejectionReason.ATTEMPT_SUPERSEDED,
-            observed_status=AgentRunStatus.RUNNING,
-        )
-    )
+    error = AnswerGenerationStopped(AttemptSuperseded())
 
     with pytest.raises(AnswerGenerationStopped) as raised:
         async with LogfireEvidenceAnswerRecorder().record(

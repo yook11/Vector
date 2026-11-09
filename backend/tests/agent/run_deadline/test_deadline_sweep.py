@@ -13,9 +13,9 @@ import pytest
 from sqlalchemy import literal, select, text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from app.agent.running.daily_quota.release import DailyQuotaReleaseOutcome
 from app.agent.running.deadline.deadline_exceeded import _recover_deadline_exceeded_runs
-from app.agent.running.state import RunFinished
+from app.agent.running.finish_notice import ClosedRunningRun
+from app.agent.running.state import CancelledByUser, FailureRecorded
 from app.agent.running.state_repository import AgentRunStateRepository
 from app.agent.running.types import AgentRunErrorCode, AgentRunStatus
 from app.models.agent_message import AgentMessage
@@ -398,11 +398,16 @@ async def test_sweep_preserves_failure_or_cancellation_that_wins_run_lock(
                     error_code=AgentRunErrorCode.INTERNAL_ERROR,
                     now=terminal_time,
                 )
-                assert failure == RunFinished(
-                    status=AgentRunStatus.FAILED,
-                    error_code=AgentRunErrorCode.INTERNAL_ERROR,
-                    quota_release_outcome=DailyQuotaReleaseOutcome.NOT_ELIGIBLE,
-                    running_attempt_epoch=2,
+                assert (failure, repository.closed_runs) == (
+                    FailureRecorded(),
+                    [
+                        ClosedRunningRun(
+                            run_id=run.id,
+                            attempt_epoch=2,
+                            status=AgentRunStatus.FAILED,
+                            error_code=AgentRunErrorCode.INTERNAL_ERROR,
+                        )
+                    ],
                 )
             else:
                 cancellation = await repository.cancel_for_user(
@@ -410,11 +415,16 @@ async def test_sweep_preserves_failure_or_cancellation_that_wins_run_lock(
                     user_id=_USER_ID,
                     now=terminal_time,
                 )
-                assert cancellation == RunFinished(
-                    status=AgentRunStatus.FAILED,
-                    error_code=AgentRunErrorCode.CANCELLED,
-                    quota_release_outcome=DailyQuotaReleaseOutcome.NOT_ELIGIBLE,
-                    running_attempt_epoch=2,
+                assert (cancellation, repository.closed_runs) == (
+                    CancelledByUser(),
+                    [
+                        ClosedRunningRun(
+                            run_id=run.id,
+                            attempt_epoch=2,
+                            status=AgentRunStatus.FAILED,
+                            error_code=AgentRunErrorCode.CANCELLED,
+                        )
+                    ],
                 )
 
             await sweep_session.begin()

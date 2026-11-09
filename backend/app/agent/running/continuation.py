@@ -1,4 +1,4 @@
-"""Agent run executionの継続権を短命DB sessionで確認する。"""
+"""Agent run executionの継続権を、Runの状態を変える操作で確認する。"""
 
 from __future__ import annotations
 
@@ -7,13 +7,18 @@ import time
 from collections.abc import Callable
 from uuid import UUID
 
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
-
 from app.agent.live_updates.metrics import (
     record_agent_run_execution_probe_unavailable,
 )
-from app.agent.running.state import RunFinished, RunRejected
-from app.agent.running.state_repository import AgentRunStateRepository
+from app.agent.running.state import (
+    AttemptSuperseded,
+    CancelledByUser,
+    CanContinue,
+    CannotContinue,
+    DeadlineExceeded,
+    RunNotFound,
+)
+from app.agent.running.state_service import AgentRunStateService
 from app.agent.running.stop import AnswerGenerationStopped
 from app.log_policy.policies.research import RESEARCH_LOG_RULES
 from app.log_policy.runtime import create_policy_json_logger
@@ -28,19 +33,19 @@ class AgentRunExecutionProbe:
 
     def __init__(
         self,
-        session_factory: async_sessionmaker[AsyncSession],
+        state_service: AgentRunStateService,
         run_id: UUID,
         attempt_epoch: int,
         *,
         clock: Callable[[], float] = time.monotonic,
     ) -> None:
-        self._session_factory = session_factory
+        self._state_service = state_service
         self._run_id = run_id
         self._attempt_epoch = attempt_epoch
         self._clock = clock
         self._lock = asyncio.Lock()
         self._last_check_at: float | None = None
-        self._stopped: RunFinished | RunRejected | None = None
+        self._stopped: CannotContinue | None = None
 
     async def ensure_can_continue(self) -> None:
         async with self._lock:
@@ -55,14 +60,9 @@ class AgentRunExecutionProbe:
 
             checked_at = self._clock()
             try:
-                async with self._session_factory() as session:
-                    async with session.begin():
-                        stopped = await AgentRunStateRepository(
-                            session
-                        ).check_continuation(
-                            self._run_id,
-                            attempt_epoch=self._attempt_epoch,
-                        )
+                checked = await self._state_service.check_continuation(
+                    self._run_id, attempt_epoch=self._attempt_epoch
+                )
             except Exception:
                 logger.warning(
                     "agent_run_execution_probe_unavailable",
@@ -70,9 +70,17 @@ class AgentRunExecutionProbe:
                     attempt_epoch=self._attempt_epoch,
                 )
                 record_agent_run_execution_probe_unavailable()
-                stopped = None
+                checked = CanContinue()
 
-            self._stopped = stopped
             self._last_check_at = checked_at
-            if stopped is not None:
-                raise AnswerGenerationStopped(stopped)
+            match checked:
+                case CanContinue():
+                    return
+                case (
+                    CancelledByUser()
+                    | DeadlineExceeded()
+                    | AttemptSuperseded()
+                    | RunNotFound()
+                ) as stopped:
+                    self._stopped = stopped
+                    raise AnswerGenerationStopped(stopped)

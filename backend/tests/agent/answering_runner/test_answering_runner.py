@@ -38,9 +38,8 @@ from app.agent.planning.contract import (
     QuestionPlan,
 )
 from app.agent.planning.failure import PlanningError
-from app.agent.running.state import RunRejected, RunRejectionReason
+from app.agent.running.state import AttemptSuperseded
 from app.agent.running.stop import AnswerGenerationStopped
-from app.agent.running.types import AgentRunStatus
 from app.agent.threads.contracts import ThreadMessageSnapshot
 from app.ai_providers.errors import AIProviderNotSentError, AIProviderNotSentReason
 from tests.agent.answering_runner._harness import (
@@ -322,12 +321,7 @@ async def test_failure_before_planning_prevents_later_work(
     [
         pytest.param(RuntimeError("answer failed"), id="unexpected-answer-error"),
         pytest.param(
-            AnswerGenerationStopped(
-                RunRejected(
-                    reason=RunRejectionReason.ATTEMPT_SUPERSEDED,
-                    observed_status=AgentRunStatus.RUNNING,
-                )
-            ),
+            AnswerGenerationStopped(AttemptSuperseded()),
             id="generation-stopped",
         ),
     ],
@@ -401,12 +395,7 @@ async def test_stopping_failure_is_wrapped_as_run_error_with_the_same_cause(
 async def test_generation_stopped_closes_run_span_without_error(
     capfire: CaptureLogfire,
 ) -> None:
-    error = AnswerGenerationStopped(
-        RunRejected(
-            reason=RunRejectionReason.ATTEMPT_SUPERSEDED,
-            observed_status=AgentRunStatus.RUNNING,
-        )
-    )
+    error = AnswerGenerationStopped(AttemptSuperseded())
     factory, _, _ = _direct_factory(answers=[error])
 
     with pytest.raises(AnswerGenerationStopped) as raised:

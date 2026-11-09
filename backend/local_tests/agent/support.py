@@ -20,6 +20,7 @@ from app.agent.running.answer_generation import AgentAnswerGenerationRepository
 from app.agent.running.creation import AgentRunCreationRepository
 from app.agent.running.state import AnswerGenerationStarted, AttemptStarted
 from app.agent.running.state_repository import AgentRunStateRepository
+from app.agent.running.state_service import AgentRunStateService
 from app.ai_providers.errors import AIProviderError
 from app.analysis.embedding.domain.value_objects import EMBEDDING_DIMENSION
 from app.models.agent_message import AgentMessage, AgentMessageSource
@@ -102,6 +103,25 @@ class AgentProviderResponses:
         ]
 
 
+class _DiscardingLivePublisher:
+    """準備の操作がRunを閉じたときの終了通知を、画面へ送らずに捨てる。"""
+
+    def __init__(self, run_id, attempt_epoch):
+        self.run_id = run_id
+        self.attempt_epoch = attempt_epoch
+
+    async def publish(self, event):
+        return None
+
+
+def state_service_for(session_factory):
+    """テストの準備でRunの状態を変える操作を、渡したsession factoryで組み立てる。"""
+    return AgentRunStateService(
+        session_factory=session_factory,
+        publisher_for=_DiscardingLivePublisher,  # type: ignore[arg-type]
+    )
+
+
 @dataclass(frozen=True)
 class PreparedAnsweringRun:
     run_id: UUID
@@ -139,7 +159,7 @@ async def create_answering_run(
     attempt_epoch = await start_run_attempt(session_factory, created.run_id)
 
     answer_generation = await AgentAnswerGenerationRepository(
-        session_factory, created.run_id, attempt_epoch
+        state_service_for(session_factory), created.run_id, attempt_epoch
     ).start_answer_generation()
     if not isinstance(answer_generation, AnswerGenerationStarted):
         raise RuntimeError("テスト用ランの回答生成を開始できませんでした")

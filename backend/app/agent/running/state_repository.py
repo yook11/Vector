@@ -11,18 +11,29 @@ from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.agent.contract import AnswerQuestionResult
-from app.agent.running.daily_quota.release import (
-    DailyQuotaReleaseOutcome,
-    release_daily_quota,
-)
+from app.agent.running.daily_quota.release import release_daily_quota
 from app.agent.running.deadline.deadline_exceeded import database_now
+from app.agent.running.finish_notice import (
+    ClosedQueuedRun,
+    ClosedRun,
+    ClosedRunningRun,
+)
 from app.agent.running.state import (
     AnswerGenerationStarted,
+    AttemptAlreadyStarted,
     AttemptStarted,
-    RunFinished,
+    AttemptSuperseded,
+    CancelledByUser,
+    CanContinue,
+    CannotContinue,
+    DeadlineExceeded,
+    FailureRecorded,
+    RunAlreadyCompleted,
+    RunAlreadyFailed,
+    RunCompleted,
+    RunNotFound,
     RunPhase,
-    RunRejected,
-    RunRejectionReason,
+    RunPhaseMismatchError,
     RunState,
 )
 from app.agent.running.types import AgentRunErrorCode, AgentRunStatus
@@ -38,10 +49,7 @@ from app.models.agent_thread import AgentThread
 __all__ = ["AgentRunStateRepository"]
 
 _LOCK_TIMEOUT = "3s"
-_NOT_FOUND = RunRejected(
-    reason=RunRejectionReason.RUN_NOT_FOUND,
-    observed_status=None,
-)
+_ACTIVE_PHASES = frozenset({RunPhase.QUEUED, RunPhase.PREPARING, RunPhase.ANSWERING})
 
 
 @dataclass(frozen=True, slots=True)
@@ -53,32 +61,36 @@ class _LockedRun:
 
 
 class AgentRunStateRepository:
-    """トランザクションは呼び出し元が所有し、終了通知はcommit後に呼び出し元が送る。"""
+    """トランザクションは呼び出し元が所有し、閉じたRunはcommit後の通知用に積む。"""
 
     def __init__(self, session: AsyncSession) -> None:
         self._session = session
+        self.closed_runs: list[ClosedRun] = []
 
     async def start_attempt(
         self,
         run_id: uuid_mod.UUID,
         *,
         now: datetime | None = None,
-    ) -> AttemptStarted | RunFinished | RunRejected:
-        locked = await self._lock(run_id, now=now)
-        if locked is None:
-            return _NOT_FOUND
-        stopped = await self._stop_if_rejected(
-            locked, locked.state.check_start(now=locked.now)
-        )
-        if stopped is not None:
-            return stopped
-        attempt_epoch = locked.run.attempt_epoch + 1
-        await self._update_run(
-            run_id,
-            status=AgentRunStatus.RUNNING.value,
-            attempt_epoch=attempt_epoch,
-        )
-        return AttemptStarted(attempt_epoch=attempt_epoch)
+    ) -> AttemptStarted | CannotContinue:
+        match await self._lock(run_id, now=now):
+            case RunNotFound() as missing:
+                return missing
+            case _LockedRun() as locked:
+                pass
+        match await self._settle(locked, locked.state.check_start(now=locked.now)):
+            case CanContinue():
+                attempt_epoch = locked.run.attempt_epoch + 1
+                await self._update_run(
+                    run_id,
+                    status=AgentRunStatus.RUNNING.value,
+                    attempt_epoch=attempt_epoch,
+                )
+                return AttemptStarted(attempt_epoch=attempt_epoch)
+            case (
+                CancelledByUser() | DeadlineExceeded() | AttemptSuperseded() as stopped
+            ):
+                return stopped
 
     async def check_continuation(
         self,
@@ -86,11 +98,13 @@ class AgentRunStateRepository:
         *,
         attempt_epoch: int,
         now: datetime | None = None,
-    ) -> RunFinished | RunRejected | None:
-        locked = await self._lock(run_id, now=now)
-        if locked is None:
-            return _NOT_FOUND
-        return await self._stop_if_rejected(
+    ) -> CanContinue | CannotContinue:
+        match await self._lock(run_id, now=now):
+            case RunNotFound() as missing:
+                return missing
+            case _LockedRun() as locked:
+                pass
+        return await self._settle(
             locked,
             locked.state.check_progress(
                 attempt_epoch=attempt_epoch,
@@ -105,22 +119,29 @@ class AgentRunStateRepository:
         *,
         attempt_epoch: int,
         now: datetime | None = None,
-    ) -> AnswerGenerationStarted | RunFinished | RunRejected:
-        locked = await self._lock(run_id, now=now)
-        if locked is None:
-            return _NOT_FOUND
-        stopped = await self._stop_if_rejected(
+    ) -> AnswerGenerationStarted | CannotContinue:
+        match await self._lock(run_id, now=now):
+            case RunNotFound() as missing:
+                return missing
+            case _LockedRun() as locked:
+                pass
+        match await self._settle(
             locked,
             locked.state.check_progress(
                 attempt_epoch=attempt_epoch,
                 phases={RunPhase.PREPARING},
                 now=locked.now,
             ),
-        )
-        if stopped is not None:
-            return stopped
-        await self._update_run(run_id, answer_started_at=locked.now)
-        return AnswerGenerationStarted(run_id=run_id, answer_started_at=locked.now)
+        ):
+            case CanContinue():
+                await self._update_run(run_id, answer_started_at=locked.now)
+                return AnswerGenerationStarted(
+                    run_id=run_id, answer_started_at=locked.now
+                )
+            case (
+                CancelledByUser() | DeadlineExceeded() | AttemptSuperseded() as stopped
+            ):
+                return stopped
 
     async def authorize_answer_regeneration(
         self,
@@ -128,11 +149,13 @@ class AgentRunStateRepository:
         *,
         attempt_epoch: int,
         now: datetime | None = None,
-    ) -> RunFinished | RunRejected | None:
-        locked = await self._lock(run_id, now=now)
-        if locked is None:
-            return _NOT_FOUND
-        return await self._stop_if_rejected(
+    ) -> CanContinue | CannotContinue:
+        match await self._lock(run_id, now=now):
+            case RunNotFound() as missing:
+                return missing
+            case _LockedRun() as locked:
+                pass
+        return await self._settle(
             locked,
             locked.state.check_progress(
                 attempt_epoch=attempt_epoch,
@@ -149,20 +172,26 @@ class AgentRunStateRepository:
         result: AnswerQuestionResult,
         research_handoff: dict[str, Any] | None = None,
         now: datetime | None = None,
-    ) -> RunFinished | RunRejected:
-        locked = await self._lock(run_id, lock_thread=True, now=now)
-        if locked is None:
-            return _NOT_FOUND
-        stopped = await self._stop_if_rejected(
+    ) -> RunCompleted | CannotContinue:
+        match await self._lock(run_id, lock_thread=True, now=now):
+            case RunNotFound() as missing:
+                return missing
+            case _LockedRun() as locked:
+                pass
+        match await self._settle(
             locked,
             locked.state.check_attempt_finish(
                 attempt_epoch=attempt_epoch,
                 phases={RunPhase.ANSWERING},
                 now=locked.now,
             ),
-        )
-        if stopped is not None:
-            return stopped
+        ):
+            case CanContinue():
+                pass
+            case (
+                CancelledByUser() | DeadlineExceeded() | AttemptSuperseded() as stopped
+            ):
+                return stopped
 
         thread = locked.thread
         assistant_message = build_assistant_message_for_result(
@@ -181,7 +210,7 @@ class AgentRunStateRepository:
         self._session.add_all(source_rows)
         await self._session.flush()
 
-        finished = await self._finish(
+        await self._finish(
             locked,
             status=AgentRunStatus.COMPLETED,
             assistant_message_id=assistant_message.id,
@@ -190,7 +219,7 @@ class AgentRunStateRepository:
         # Noneは「記録を追加しなかったRun」であり、既存handoffを消さない。
         if research_handoff is not None:
             thread.research_handoff = research_handoff
-        return finished
+        return RunCompleted()
 
     async def record_failure(
         self,
@@ -199,45 +228,29 @@ class AgentRunStateRepository:
         attempt_epoch: int,
         error_code: AgentRunErrorCode,
         now: datetime | None = None,
-    ) -> RunFinished | RunRejected:
-        locked = await self._lock(run_id, now=now)
-        if locked is None:
-            return _NOT_FOUND
-        stopped = await self._stop_if_rejected(
+    ) -> FailureRecorded | CannotContinue:
+        match await self._lock(run_id, now=now):
+            case RunNotFound() as missing:
+                return missing
+            case _LockedRun() as locked:
+                pass
+        match await self._settle(
             locked,
             locked.state.check_attempt_finish(
                 attempt_epoch=attempt_epoch,
                 phases={RunPhase.PREPARING, RunPhase.ANSWERING},
                 now=locked.now,
             ),
-        )
-        if stopped is not None:
-            return stopped
-        return await self._finish(
-            locked, status=AgentRunStatus.FAILED, error_code=error_code
-        )
-
-    async def record_policy_block(
-        self,
-        run_id: uuid_mod.UUID,
-        *,
-        attempt_epoch: int,
-        now: datetime | None = None,
-    ) -> RunFinished | RunRejected:
-        locked = await self._lock(run_id, now=now)
-        if locked is None:
-            return _NOT_FOUND
-        stopped = await self._stop_if_rejected(
-            locked,
-            locked.state.check_attempt_finish(
-                attempt_epoch=attempt_epoch,
-                phases={RunPhase.PREPARING, RunPhase.ANSWERING},
-                now=locked.now,
-            ),
-        )
-        if stopped is not None:
-            return stopped
-        return await self._finish(locked, status=AgentRunStatus.POLICY_BLOCKED)
+        ):
+            case CanContinue():
+                await self._finish(
+                    locked, status=AgentRunStatus.FAILED, error_code=error_code
+                )
+                return FailureRecorded()
+            case (
+                CancelledByUser() | DeadlineExceeded() | AttemptSuperseded() as stopped
+            ):
+                return stopped
 
     async def cancel_for_user(
         self,
@@ -245,45 +258,79 @@ class AgentRunStateRepository:
         *,
         user_id: uuid_mod.UUID,
         now: datetime | None = None,
-    ) -> RunFinished | RunRejected:
-        locked = await self._lock(run_id, owner_id=user_id, now=now)
-        if locked is None:
-            return _NOT_FOUND
-        stopped = await self._stop_if_rejected(
-            locked,
-            locked.state.check_finish(
-                phases={RunPhase.QUEUED, RunPhase.PREPARING, RunPhase.ANSWERING},
-                now=locked.now,
-            ),
-        )
-        if stopped is not None:
-            return stopped
-        return await self._finish(
-            locked,
-            status=AgentRunStatus.FAILED,
-            error_code=AgentRunErrorCode.CANCELLED,
-        )
+    ) -> (
+        CancelledByUser
+        | DeadlineExceeded
+        | RunAlreadyCompleted
+        | RunAlreadyFailed
+        | RunNotFound
+    ):
+        match await self._lock(run_id, owner_id=user_id, now=now):
+            case RunNotFound() as missing:
+                return missing
+            case _LockedRun() as locked:
+                pass
+        match await self._settle(
+            locked, locked.state.check_finish(phases=_ACTIVE_PHASES, now=locked.now)
+        ):
+            case CanContinue():
+                await self._finish(
+                    locked,
+                    status=AgentRunStatus.FAILED,
+                    error_code=AgentRunErrorCode.CANCELLED,
+                )
+                return CancelledByUser()
+            case (
+                CancelledByUser()
+                | DeadlineExceeded()
+                | RunAlreadyCompleted()
+                | RunAlreadyFailed()
+            ) as ended:
+                return ended
+            # 停止はすべての段階を許すので、試行開始済みで断ることはない。
+            case AttemptAlreadyStarted():
+                raise RunPhaseMismatchError(
+                    phase=locked.state.phase, allowed=_ACTIVE_PHASES
+                )
 
     async def record_enqueue_failure(
         self,
         run_id: uuid_mod.UUID,
         *,
         now: datetime | None = None,
-    ) -> RunFinished | RunRejected:
-        locked = await self._lock(run_id, now=now)
-        if locked is None:
-            return _NOT_FOUND
-        stopped = await self._stop_if_rejected(
+    ) -> (
+        FailureRecorded
+        | AttemptAlreadyStarted
+        | CancelledByUser
+        | DeadlineExceeded
+        | RunAlreadyCompleted
+        | RunAlreadyFailed
+        | RunNotFound
+    ):
+        match await self._lock(run_id, now=now):
+            case RunNotFound() as missing:
+                return missing
+            case _LockedRun() as locked:
+                pass
+        match await self._settle(
             locked,
             locked.state.check_finish(phases={RunPhase.QUEUED}, now=locked.now),
-        )
-        if stopped is not None:
-            return stopped
-        return await self._finish(
-            locked,
-            status=AgentRunStatus.FAILED,
-            error_code=AgentRunErrorCode.ENQUEUE_FAILED,
-        )
+        ):
+            case CanContinue():
+                await self._finish(
+                    locked,
+                    status=AgentRunStatus.FAILED,
+                    error_code=AgentRunErrorCode.ENQUEUE_FAILED,
+                )
+                return FailureRecorded()
+            case (
+                AttemptAlreadyStarted()
+                | CancelledByUser()
+                | DeadlineExceeded()
+                | RunAlreadyCompleted()
+                | RunAlreadyFailed()
+            ) as skipped:
+                return skipped
 
     async def _lock(
         self,
@@ -292,7 +339,7 @@ class AgentRunStateRepository:
         owner_id: uuid_mod.UUID | None = None,
         lock_thread: bool = False,
         now: datetime | None,
-    ) -> _LockedRun | None:
+    ) -> _LockedRun | RunNotFound:
         await self._session.execute(
             select(func.set_config("lock_timeout", _LOCK_TIMEOUT, True))
         )
@@ -307,7 +354,7 @@ class AgentRunStateRepository:
             query = query.where(AgentThread.user_id == owner_id)
         row = (await self._session.execute(query)).one_or_none()
         if row is None:
-            return None
+            return RunNotFound()
         run, thread = row
         # ロック待ちの間に期限を越えうるため、時刻はロックを取った後に読む。
         locked_now = await database_now(self._session, now)
@@ -316,6 +363,11 @@ class AgentRunStateRepository:
             thread=thread,
             state=RunState(
                 status=AgentRunStatus(run.status),
+                error_code=(
+                    None
+                    if run.error_code is None
+                    else AgentRunErrorCode(run.error_code)
+                ),
                 attempt_epoch=run.attempt_epoch,
                 deadline_at=run.deadline_at,
                 answer_started_at=run.answer_started_at,
@@ -323,16 +375,14 @@ class AgentRunStateRepository:
             now=locked_now,
         )
 
-    async def _stop_if_rejected(
-        self,
-        locked: _LockedRun,
-        reason: RunRejectionReason | None,
-    ) -> RunFinished | RunRejected | None:
-        if reason is None:
-            return None
-        if reason is RunRejectionReason.DEADLINE_EXCEEDED:
-            return await self._finish(locked, status=AgentRunStatus.DEADLINE_EXCEEDED)
-        return RunRejected(reason=reason, observed_status=locked.state.status)
+    async def _settle[Decision](
+        self, locked: _LockedRun, decision: Decision
+    ) -> Decision:
+        """期限を過ぎたまだ終わっていないRunは、判定を返す前にこの操作で閉じる。"""
+        match decision:
+            case DeadlineExceeded() if locked.state.phase is not RunPhase.FINISHED:
+                await self._finish(locked, status=AgentRunStatus.DEADLINE_EXCEEDED)
+        return decision
 
     async def _finish(
         self,
@@ -341,7 +391,7 @@ class AgentRunStateRepository:
         status: AgentRunStatus,
         error_code: AgentRunErrorCode | None = None,
         assistant_message_id: uuid_mod.UUID | None = None,
-    ) -> RunFinished:
+    ) -> None:
         # APIロールが更新できる列はstatusとerror_codeだけなので、変わる列だけを書く。
         values: dict[str, object] = {"status": status.value}
         if error_code is not None:
@@ -351,21 +401,24 @@ class AgentRunStateRepository:
         await self._update_run(locked.run.id, **values)
 
         if locked.state.phase is RunPhase.QUEUED:
-            return RunFinished(
+            self.closed_runs.append(
+                ClosedQueuedRun(
+                    run_id=locked.run.id,
+                    quota_release_outcome=await release_daily_quota(
+                        self._session,
+                        user_id=locked.thread.user_id,
+                        usage_date=locked.run.quota_usage_date,
+                    ),
+                )
+            )
+            return
+        self.closed_runs.append(
+            ClosedRunningRun(
+                run_id=locked.run.id,
+                attempt_epoch=locked.state.attempt_epoch,
                 status=status,
                 error_code=error_code,
-                quota_release_outcome=await release_daily_quota(
-                    self._session,
-                    user_id=locked.thread.user_id,
-                    usage_date=locked.run.quota_usage_date,
-                ),
-                running_attempt_epoch=None,
             )
-        return RunFinished(
-            status=status,
-            error_code=error_code,
-            quota_release_outcome=DailyQuotaReleaseOutcome.NOT_ELIGIBLE,
-            running_attempt_epoch=locked.state.attempt_epoch,
         )
 
     async def _update_run(self, run_id: uuid_mod.UUID, **values: object) -> None:
