@@ -7,15 +7,17 @@ from __future__ import annotations
 
 from collections.abc import AsyncGenerator
 from datetime import UTC, date, datetime, timedelta, timezone
-from typing import Any
+from typing import Annotated, Any
 from uuid import UUID
 
 import pytest
+from fastapi import Depends
 from httpx2 import ASGITransport, AsyncClient
 from pydantic import SecretStr
 from sqlalchemy import event as sa_event
 from sqlalchemy import func, select, update
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+from sqlalchemy.orm import Session
 
 import app.agent.live_updates.transport as live_transport_module
 from app.agent.contract import AnswerPlanSummary, AnswerQuestionResult
@@ -24,6 +26,7 @@ from app.agent.live_updates.transport import (
     AgentLiveTransport,
     get_agent_live_transport,
 )
+from app.agent.router import get_agent_run_state_service
 from app.agent.run_enqueuer import get_agent_run_enqueuer
 from app.agent.running.creation import AgentRunCreationRepository
 from app.agent.running.daily_quota import observability as daily_quota_observability
@@ -32,9 +35,17 @@ from app.agent.running.daily_quota.release import (
 )
 from app.agent.running.daily_quota.reservation import DailyRequestLimitExceededError
 from app.agent.running.deadline.scheduling import get_agent_deadline_scheduler
-from app.agent.running.state import RunFinished, RunRejected, RunRejectionReason
+from app.agent.running.finish_notice import ClosedQueuedRun
+from app.agent.running.state import (
+    CancelledByUser,
+    DeadlineExceeded,
+    FailureRecorded,
+    RunAlreadyCompleted,
+    RunAlreadyFailed,
+    RunNotFound,
+)
 from app.agent.running.state_repository import AgentRunStateRepository
-from app.agent.running.types import AgentRunErrorCode, AgentRunStatus
+from app.agent.running.state_service import AgentRunStateService
 from app.config import settings
 from app.db.fastapi import get_caller_managed_session
 from app.main import app
@@ -116,6 +127,22 @@ class FakeCancelStreamPublisher:
             raise RuntimeError("Redis unavailable")
 
 
+def _override_state_service(db_session: AsyncSession) -> None:
+    """Runの状態を変える操作を、テストDBと差し替えた live transport で組み立てる。"""
+    session_factory = async_sessionmaker(
+        db_session.bind, class_=AsyncSession, expire_on_commit=False
+    )
+
+    def build_state_service(
+        live: Annotated[AgentLiveTransport, Depends(get_agent_live_transport)],
+    ) -> AgentRunStateService:
+        return AgentRunStateService(
+            session_factory=session_factory, publisher_for=live.publisher
+        )
+
+    app.dependency_overrides[get_agent_run_state_service] = build_state_service
+
+
 @pytest.fixture
 async def research_client(
     auth_headers: dict[str, str],
@@ -131,6 +158,7 @@ async def research_client(
     app.dependency_overrides[get_agent_live_transport] = lambda: AgentLiveTransport(
         FakeRunEventsRedis()
     )
+    _override_state_service(db_session)
     app.dependency_overrides[get_agent_run_enqueuer] = lambda: fake_enqueue
     async with AsyncClient(
         transport=ASGITransport(app=app),
@@ -156,6 +184,7 @@ async def quota_research_client(
     app.dependency_overrides[get_agent_live_transport] = lambda: AgentLiveTransport(
         FakeRunEventsRedis()
     )
+    _override_state_service(db_session)
     app.dependency_overrides[get_agent_run_enqueuer] = lambda: fake_enqueue
     async with AsyncClient(
         transport=ASGITransport(app=app, raise_app_exceptions=False),
@@ -515,6 +544,7 @@ class TestCreateResearchResponse:
         app.dependency_overrides[get_agent_live_transport] = lambda: AgentLiveTransport(
             FakeRunEventsRedis()
         )
+        _override_state_service(db_session)
         app.dependency_overrides[get_agent_run_enqueuer] = lambda: fake_enqueue
         async with AsyncClient(
             transport=ASGITransport(app=app),
@@ -528,6 +558,7 @@ class TestCreateResearchResponse:
 
         assert response.status_code == 202
         run_id = UUID(response.json()["runId"])
+        db_session.expire_all()
         run = await _fetch_run(db_session, run_id)
         assert run.status == "failed"
         assert run.error_code == "enqueue_failed"
@@ -543,13 +574,14 @@ class TestCreateResearchResponse:
         client, fake_enqueue = quota_research_client
         fake_enqueue.exc = RuntimeError("queue unavailable")
         original_record_enqueue_failure = AgentRunStateRepository.record_enqueue_failure
-        recorded: list[RunFinished | RunRejected] = []
+        recorded: list[tuple[object, tuple[object, ...]]] = []
 
         async def update_then_fail(
             repository: AgentRunStateRepository,
             run_id: UUID,
-        ) -> RunFinished | RunRejected:
-            recorded.append(await original_record_enqueue_failure(repository, run_id))
+        ) -> object:
+            result = await original_record_enqueue_failure(repository, run_id)
+            recorded.append((result, tuple(repository.closed_runs)))
             raise RuntimeError("mark failed transaction aborted")
 
         monkeypatch.setattr(
@@ -563,14 +595,6 @@ class TestCreateResearchResponse:
             json={"question": "第2トランザクションが失敗する質問"},
         )
 
-        assert recorded == [
-            RunFinished(
-                status=AgentRunStatus.FAILED,
-                error_code=AgentRunErrorCode.ENQUEUE_FAILED,
-                quota_release_outcome=DailyQuotaReleaseOutcome.RELEASED,
-                running_attempt_epoch=None,
-            )
-        ]
         assert response.status_code == 503
         assert response.json() == {"detail": "Failed to enqueue research run"}
         assert len(fake_enqueue.calls) == 1
@@ -580,6 +604,17 @@ class TestCreateResearchResponse:
         threads = (await db_session.execute(select(AgentThread))).scalars().all()
         quotas = (await db_session.execute(select(AgentUserDailyQuota))).scalars().all()
         assert len(runs) == 1
+        assert recorded == [
+            (
+                FailureRecorded(),
+                (
+                    ClosedQueuedRun(
+                        run_id=runs[0].id,
+                        quota_release_outcome=DailyQuotaReleaseOutcome.RELEASED,
+                    ),
+                ),
+            )
+        ]
         assert (runs[0].status, runs[0].error_code) == ("queued", None)
         assert len(messages) == 1
         assert messages[0].id == runs[0].user_message_id
@@ -617,6 +652,7 @@ class TestCreateResearchResponse:
         app.dependency_overrides[get_agent_live_transport] = lambda: AgentLiveTransport(
             FakeRunEventsRedis()
         )
+        _override_state_service(db_session)
         app.dependency_overrides[get_agent_run_enqueuer] = lambda: (
             _EnqueueThenStartAndFail()
         )
@@ -1015,6 +1051,7 @@ class TestQuotaRouterTelemetry:
         app.dependency_overrides[get_agent_live_transport] = lambda: AgentLiveTransport(
             FakeRunEventsRedis()
         )
+        _override_state_service(db_session)
 
         response = await client.post(f"/api/v1/research/runs/{run_id}/cancel")
 
@@ -1262,19 +1299,16 @@ class TestQuotaRouterTelemetry:
         client, _fake_enqueue = research_client
         run_id = UUID("00000000-0000-4000-a000-000000000071")
         calls: list[dict[str, object]] = []
-        outcome = RunFinished(
-            status=AgentRunStatus.FAILED,
-            error_code=AgentRunErrorCode.CANCELLED,
-            quota_release_outcome=release_outcome,
-            running_attempt_epoch=None,
-        )
 
         async def cancel_with_fixed_result(
-            _repository: AgentRunStateRepository,
+            repository: AgentRunStateRepository,
             _run_id: UUID,
             **_kwargs: object,
-        ) -> RunFinished | RunRejected:
-            return outcome
+        ) -> CancelledByUser:
+            repository.closed_runs.append(
+                ClosedQueuedRun(run_id=run_id, quota_release_outcome=release_outcome)
+            )
+            return CancelledByUser()
 
         original_observer = daily_quota_observability.observe_release
 
@@ -1380,11 +1414,13 @@ class TestQuotaRouterTelemetry:
             "observe_release",
             observe_release,
         )
-        sa_event.listen(
-            db_session.sync_session, "before_commit", fail_commit, once=True
-        )
-
-        response = await client.post(f"/api/v1/research/runs/{run_id}/cancel")
+        # キャンセルは操作が自分のセッションでcommitするので、Session全体で待ち受ける。
+        sa_event.listen(Session, "before_commit", fail_commit, once=True)
+        try:
+            response = await client.post(f"/api/v1/research/runs/{run_id}/cancel")
+        finally:
+            if not commit_attempted:
+                sa_event.remove(Session, "before_commit", fail_commit)
         logs = read_logs()
 
         assert response.status_code == 500
@@ -1419,34 +1455,11 @@ class TestQuotaRouterTelemetry:
     @pytest.mark.parametrize(
         ("outcome", "expected_status"),
         [
-            (
-                RunRejected(
-                    reason=RunRejectionReason.ALREADY_FINISHED,
-                    observed_status=AgentRunStatus.FAILED,
-                ),
-                204,
-            ),
-            (
-                RunRejected(
-                    reason=RunRejectionReason.ALREADY_FINISHED,
-                    observed_status=AgentRunStatus.DEADLINE_EXCEEDED,
-                ),
-                204,
-            ),
-            (
-                RunRejected(
-                    reason=RunRejectionReason.RUN_NOT_FOUND,
-                    observed_status=None,
-                ),
-                404,
-            ),
-            (
-                RunRejected(
-                    reason=RunRejectionReason.ALREADY_FINISHED,
-                    observed_status=AgentRunStatus.COMPLETED,
-                ),
-                409,
-            ),
+            (CancelledByUser(), 204),
+            (DeadlineExceeded(), 204),
+            (RunAlreadyFailed(), 204),
+            (RunNotFound(), 404),
+            (RunAlreadyCompleted(), 409),
         ],
     )
     async def test_cancel_terminal_result_does_not_record_quota_release(
@@ -1454,10 +1467,10 @@ class TestQuotaRouterTelemetry:
         read_logs,
         research_client: tuple[AsyncClient, FakeEnqueue],
         monkeypatch: pytest.MonkeyPatch,
-        outcome: RunRejected,
+        outcome: object,
         expected_status: int,
     ) -> None:
-        """拒否されたキャンセルは状態に応じた status を返し、利用枠を観測しない。"""
+        """Runを閉じなかったキャンセルは終わり方に応じたstatusを返し、利用枠を観測しない。"""
         client, _fake_enqueue = research_client
         calls: list[dict[str, object]] = []
 
@@ -1465,7 +1478,7 @@ class TestQuotaRouterTelemetry:
             _repository: AgentRunStateRepository,
             _run_id: UUID,
             **_kwargs: object,
-        ) -> RunFinished | RunRejected:
+        ) -> object:
             return outcome
 
         def observe_release(**kwargs: object) -> None:
@@ -1498,42 +1511,41 @@ class TestQuotaRouterTelemetry:
     async def test_cancel_policy_blocked_is_204_without_quota_release(
         self,
         research_client: tuple[AsyncClient, FakeEnqueue],
+        db_session: AsyncSession,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        """policy_blocked の Run のキャンセルは 204 で、利用枠を観測しない。"""
+        """policy_blockedのRunのキャンセルは204で、Runを変えず利用枠を観測しない。"""
         client, _fake_enqueue = research_client
+        thread = await _create_thread(db_session)
+        message = await _create_message(
+            db_session, thread_id=thread.id, seq=1, role="user", content="blocked"
+        )
+        run = await _create_run(
+            db_session,
+            thread_id=thread.id,
+            user_message_id=message.id,
+            status="policy_blocked",
+            attempt_epoch=1,
+        )
+        run_id = run.id
         calls: list[dict[str, object]] = []
-
-        async def cancel_as_policy_blocked(
-            _repository: AgentRunStateRepository,
-            _run_id: UUID,
-            **_kwargs: object,
-        ) -> RunFinished | RunRejected:
-            return RunRejected(
-                reason=RunRejectionReason.ALREADY_FINISHED,
-                observed_status=AgentRunStatus.POLICY_BLOCKED,
-            )
 
         def observe_release(**kwargs: object) -> None:
             calls.append(kwargs)
 
-        monkeypatch.setattr(
-            AgentRunStateRepository,
-            "cancel_for_user",
-            cancel_as_policy_blocked,
-        )
         monkeypatch.setattr(
             daily_quota_observability,
             "observe_release",
             observe_release,
         )
 
-        response = await client.post(
-            "/api/v1/research/runs/00000000-0000-4000-a000-000000000073/cancel"
-        )
+        response = await client.post(f"/api/v1/research/runs/{run_id}/cancel")
 
         assert response.status_code == 204
         assert calls == []
+        db_session.expire_all()
+        persisted = await _fetch_run(db_session, run_id)
+        assert (persisted.status, persisted.error_code) == ("policy_blocked", None)
 
 
 @pytest.mark.asyncio
@@ -1805,9 +1817,12 @@ class TestGetResearchThread:
             deadline_at=_past_deadline(),
         )
         run_id = run.id
+        thread_id = thread.id
         updated_at = thread.updated_at
+        # 本番はリクエストごとに新しいセッションで読むので、準備で読んだ行を手放す。
+        db_session.expunge_all()
 
-        response = await client.get(f"{_THREADS_URL}/{thread.id}")
+        response = await client.get(f"{_THREADS_URL}/{thread_id}")
 
         assert response.status_code == 200
         data = response.json()
@@ -1820,8 +1835,9 @@ class TestGetResearchThread:
         persisted = await _fetch_run(db_session, run_id)
         assert persisted.status == "deadline_exceeded"
         assert persisted.error_code is None
-        await db_session.refresh(thread)
-        assert thread.updated_at == updated_at
+        persisted_thread = await db_session.get(AgentThread, thread_id)
+        assert persisted_thread is not None
+        assert persisted_thread.updated_at == updated_at
 
     async def test_does_not_recover_other_owned_thread(
         self,
@@ -1853,8 +1869,11 @@ class TestGetResearchThread:
         )
         opened_run_id = opened_run.id
         other_run_id = other_run.id
+        opened_id = opened.id
+        # 本番はリクエストごとに新しいセッションで読むので、準備で読んだ行を手放す。
+        db_session.expunge_all()
 
-        response = await client.get(f"{_THREADS_URL}/{opened.id}")
+        response = await client.get(f"{_THREADS_URL}/{opened_id}")
 
         assert response.status_code == 200
         assert response.json()["messages"][0]["run"]["status"] == "deadline_exceeded"
@@ -1972,7 +1991,11 @@ class TestGetResearchThread:
 
         class CommitCheckingPublisher(FakeCancelStreamPublisher):
             async def publish(self, event: object) -> None:
-                assert not db_session.in_transaction()
+                async with AsyncSession(db_session.bind) as observer:
+                    committed_status = await observer.scalar(
+                        select(AgentRun.status).where(AgentRun.id == run_id)
+                    )
+                assert committed_status == "deadline_exceeded"
                 await super().publish(event)
 
         monkeypatch.setattr(
@@ -1981,8 +2004,11 @@ class TestGetResearchThread:
             CommitCheckingPublisher,
             raising=False,
         )
+        thread_id = thread.id
+        # 本番はリクエストごとに新しいセッションで読むので、準備で読んだ行を手放す。
+        db_session.expunge_all()
 
-        response = await client.get(f"{_THREADS_URL}/{thread.id}")
+        response = await client.get(f"{_THREADS_URL}/{thread_id}")
 
         assert response.status_code == 200
         assert response.json()["messages"][0]["run"]["status"] == "deadline_exceeded"
@@ -2022,8 +2048,11 @@ class TestGetResearchThread:
             FakeCancelStreamPublisher,
             raising=False,
         )
+        thread_id = thread.id
+        # 本番はリクエストごとに新しいセッションで読むので、準備で読んだ行を手放す。
+        db_session.expunge_all()
 
-        response = await client.get(f"{_THREADS_URL}/{thread.id}")
+        response = await client.get(f"{_THREADS_URL}/{thread_id}")
 
         assert response.status_code == 200
         assert response.json()["messages"][0]["run"]["status"] == "deadline_exceeded"
@@ -2152,10 +2181,7 @@ class TestDeleteResearchThread:
                 attempt_epoch=expected_attempt_epoch,
                 result=_direct_result(),
             )
-        assert completed == RunRejected(
-            reason=RunRejectionReason.RUN_NOT_FOUND,
-            observed_status=None,
-        )
+        assert completed == RunNotFound()
         assert await db_session.scalar(select(func.count()).select_from(AgentRun)) == 0
         assert (
             await db_session.scalar(select(func.count()).select_from(AgentMessage)) == 0
@@ -2228,10 +2254,15 @@ class TestCancelResearchRun:
             attempt_epoch=3,
         )
         FakeCancelStreamPublisher.instances = []
+        run_id = run.id
 
         class CommitCheckingPublisher(FakeCancelStreamPublisher):
             async def publish(self, event: object) -> None:
-                assert not db_session.in_transaction()
+                async with AsyncSession(db_session.bind) as observer:
+                    committed_status = await observer.scalar(
+                        select(AgentRun.status).where(AgentRun.id == run_id)
+                    )
+                assert committed_status == "failed"
                 await super().publish(event)
 
         monkeypatch.setattr(
@@ -2484,10 +2515,7 @@ class TestCancelResearchRun:
             )
         refreshed_run = await db_session.get(AgentRun, run_id)
         assert refreshed_run is not None
-        assert completed == RunRejected(
-            reason=RunRejectionReason.ALREADY_FINISHED,
-            observed_status=AgentRunStatus.FAILED,
-        )
+        assert completed == CancelledByUser()
         assert refreshed_run.status == "failed"
         assert refreshed_run.error_code == "cancelled"
         messages = (

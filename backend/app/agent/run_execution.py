@@ -26,17 +26,20 @@ from app.agent.running.answer_generation import (
     AgentAnswerGenerationRepository,
 )
 from app.agent.running.continuation import AgentRunExecutionProbe
-from app.agent.running.finish_notice import notify_run_finished
 from app.agent.running.question_reading import (
     AgentRunQuestionRepository,
     UserQuestionMessage,
 )
 from app.agent.running.state import (
     AttemptStarted,
-    RunFinished,
-    RunRejected,
+    AttemptSuperseded,
+    CancelledByUser,
+    CannotContinue,
+    DeadlineExceeded,
+    RunCompleted,
+    RunNotFound,
 )
-from app.agent.running.state_repository import AgentRunStateRepository
+from app.agent.running.state_service import AgentRunStateService
 from app.agent.running.stop import AnswerGenerationStopped
 from app.agent.running.types import AgentRunErrorCode
 from app.agent.threads.contracts import ThreadMessageSnapshot
@@ -57,30 +60,32 @@ async def execute_run_attempt(
 ) -> None:
     result: AnswerQuestionResult | None = None
     research_handoff: ResearchHandoff | None = None
-    started = await _start_run(session_factory, run_id)
-    if isinstance(started, RunFinished):
-        logger.info("agent_run_start_deadline_exceeded")
-        await notify_run_finished(
-            started,
-            run_id=run_id,
-            publisher_for=lambda epoch: AgentRunLiveStreamPublisher(
-                live_redis, run_id, epoch
-            ),
-        )
-        return
-    if isinstance(started, RunRejected):
-        logger.info("agent_run_not_started", reason=started.reason.value)
-        return
-    attempt_epoch = started.attempt_epoch
-    stream_events = AgentRunLiveStreamPublisher(
-        live_redis,
-        run_id,
-        attempt_epoch,
-    )
+    publishers: dict[tuple[UUID, int], AgentRunLiveStreamPublisher] = {}
 
-    # workerが終えるのは現在の世代のRunだけなので、通知はこの世代のpublisherで送る。
-    def own_publisher(_attempt_epoch: int) -> AgentRunLiveStreamPublisher:
-        return stream_events
+    # 自分の世代の終了は、開始の印を送り済みの同じpublisherで通知する。
+    def publisher_for(
+        target_run_id: UUID, attempt_epoch: int
+    ) -> AgentRunLiveStreamPublisher:
+        key = (target_run_id, attempt_epoch)
+        if key not in publishers:
+            publishers[key] = AgentRunLiveStreamPublisher(
+                live_redis, target_run_id, attempt_epoch
+            )
+        return publishers[key]
+
+    state_service = AgentRunStateService(
+        session_factory=session_factory, publisher_for=publisher_for
+    )
+    match await state_service.start_attempt(run_id):
+        case AttemptStarted(attempt_epoch=attempt_epoch):
+            pass
+        case DeadlineExceeded():
+            logger.info("agent_run_start_deadline_exceeded")
+            return
+        case CancelledByUser() | AttemptSuperseded() | RunNotFound() as stopped:
+            logger.info("agent_run_not_started", reason=_stop_reason(stopped))
+            return
+    stream_events = publisher_for(run_id, attempt_epoch)
 
     question_row = None
     try:
@@ -93,11 +98,10 @@ async def execute_run_attempt(
         )
     if question_row is None:
         await _mark_failed(
-            session_factory,
+            state_service,
             run_id,
             attempt_epoch,
             AgentRunErrorCode.INTERNAL_ERROR,
-            own_publisher,
         )
         return
     user_id, thread_id, question = question_row
@@ -108,7 +112,7 @@ async def execute_run_attempt(
         attempt_epoch=attempt_epoch,
     )
     continuation = AgentRunExecutionProbe(
-        session_factory,
+        state_service,
         run_id,
         attempt_epoch,
     )
@@ -139,7 +143,7 @@ async def execute_run_attempt(
             schedule_deadline_check=schedule_deadline_check,
             session_factory=session_factory,
             repository=AgentAnswerGenerationRepository(
-                session_factory,
+                state_service,
                 run_id,
                 attempt_epoch,
             ),
@@ -164,22 +168,10 @@ async def execute_run_attempt(
         result = run_result.final_output
         research_handoff = run_result.research_handoff
     except AnswerGenerationStopped as stopped:
-        if isinstance(stopped.outcome, RunRejected):
-            logger.info(
-                "agent_run_generation_stopped",
-                run_id=str(run_id),
-                reason=stopped.outcome.reason.value,
-            )
-            return
         logger.info(
             "agent_run_generation_stopped",
             run_id=str(run_id),
-            terminal_status=stopped.outcome.status.value,
-        )
-        await notify_run_finished(
-            stopped.outcome,
-            run_id=run_id,
-            publisher_for=own_publisher,
+            reason=_stop_reason(stopped.stopped),
         )
         return
     except AnsweringRunError as exc:
@@ -189,11 +181,10 @@ async def execute_run_attempt(
             exc_info=exc,
         )
         await _mark_failed(
-            session_factory,
+            state_service,
             run_id,
             attempt_epoch,
             AgentRunErrorCode.GENERATION_UNAVAILABLE,
-            own_publisher,
         )
         return
     except Exception as exc:
@@ -203,11 +194,10 @@ async def execute_run_attempt(
             exc_info=exc,
         )
         await _mark_failed(
-            session_factory,
+            state_service,
             run_id,
             attempt_epoch,
             AgentRunErrorCode.INTERNAL_ERROR,
-            own_publisher,
         )
         return
 
@@ -219,47 +209,47 @@ async def execute_run_attempt(
         run_id=run_id,
     )
     try:
-        async with session_factory() as session:
-            async with session.begin():
-                completion = await AgentRunStateRepository(session).complete(
-                    run_id,
-                    attempt_epoch=attempt_epoch,
-                    result=result,
-                    research_handoff=serialized_research_handoff,
-                )
-        if isinstance(completion, RunRejected):
-            logger.info(
-                "agent_run_completion_rejected",
-                run_id=str(run_id),
-                reason=completion.reason.value,
-            )
-        else:
-            await notify_run_finished(
-                completion,
-                run_id=run_id,
-                publisher_for=own_publisher,
-            )
+        completion = await state_service.complete(
+            run_id,
+            attempt_epoch=attempt_epoch,
+            result=result,
+            research_handoff=serialized_research_handoff,
+        )
     except Exception:
         logger.exception(
             "agent_run_completion_failed",
             run_id=str(run_id),
         )
         await _mark_failed(
-            session_factory,
+            state_service,
             run_id,
             attempt_epoch,
             AgentRunErrorCode.INTERNAL_ERROR,
-            own_publisher,
         )
+        return
+    match completion:
+        case RunCompleted():
+            return
+        case (
+            CancelledByUser() | DeadlineExceeded() | AttemptSuperseded() | RunNotFound()
+        ) as stopped:
+            logger.info(
+                "agent_run_completion_rejected",
+                run_id=str(run_id),
+                reason=_stop_reason(stopped),
+            )
 
 
-async def _start_run(
-    session_factory: async_sessionmaker[AsyncSession],
-    run_id: UUID,
-) -> AttemptStarted | RunFinished | RunRejected:
-    async with session_factory() as session:
-        async with session.begin():
-            return await AgentRunStateRepository(session).start_attempt(run_id)
+def _stop_reason(stopped: CannotContinue) -> str:
+    match stopped:
+        case CancelledByUser():
+            return "cancelled_by_user"
+        case DeadlineExceeded():
+            return "deadline_exceeded"
+        case AttemptSuperseded():
+            return "attempt_superseded"
+        case RunNotFound():
+            return "run_not_found"
 
 
 def _serialize_research_handoff(
@@ -334,22 +324,14 @@ async def _read_research_handoff(
 
 
 async def _mark_failed(
-    session_factory: async_sessionmaker[AsyncSession],
+    state_service: AgentRunStateService,
     run_id: UUID,
     attempt_epoch: int,
     error_code: AgentRunErrorCode,
-    publisher_for: Callable[[int], AgentRunLiveStreamPublisher],
 ) -> None:
-    async with session_factory() as session:
-        async with session.begin():
-            recorded = await AgentRunStateRepository(session).record_failure(
-                run_id,
-                attempt_epoch=attempt_epoch,
-                error_code=error_code,
-            )
-    if isinstance(recorded, RunFinished):
-        await notify_run_finished(
-            recorded,
-            run_id=run_id,
-            publisher_for=publisher_for,
-        )
+    # 既に止まっていたRunには書かず、閉じたときの通知は操作が送る。
+    await state_service.record_failure(
+        run_id,
+        attempt_epoch=attempt_epoch,
+        error_code=error_code,
+    )

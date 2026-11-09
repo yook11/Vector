@@ -26,9 +26,8 @@ from app.agent.answering.evidence_answer.failure import EvidenceAnswerError
 from app.agent.output import AgentOutputDefect, AgentOutputInvalidError
 from app.agent.phase_span import agent_phase
 from app.agent.planning.failure import PlanningError
-from app.agent.running.state import RunRejected, RunRejectionReason
+from app.agent.running.state import AttemptSuperseded
 from app.agent.running.stop import AnswerGenerationStopped
-from app.agent.running.types import AgentRunStatus
 from app.ai_providers.errors import (
     AIProviderTransportError,
 )
@@ -146,12 +145,7 @@ def test_normal_exit_keeps_span_status_unset_without_error_type(
 def test_stopped_exception_keeps_span_unset_and_reraises_same_instance(
     capfire: CaptureLogfire,
 ) -> None:
-    stopped = AnswerGenerationStopped(
-        RunRejected(
-            reason=RunRejectionReason.ATTEMPT_SUPERSEDED,
-            observed_status=AgentRunStatus.RUNNING,
-        )
-    )
+    stopped = AnswerGenerationStopped(AttemptSuperseded())
 
     with pytest.raises(AnswerGenerationStopped) as raised:
         with agent_phase(phase="answering", agent_name="evidence_answer"):

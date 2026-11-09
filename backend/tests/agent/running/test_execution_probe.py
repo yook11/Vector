@@ -1,6 +1,7 @@
 """Agent run execution continuation probe の契約。
 
-継続確認を差し替えた unit と、実DBの Run に対する integration を含む。
+AgentRunStateService の継続確認を差し替えた unit と、
+実DBの Run に対する integration を含む。
 """
 
 from __future__ import annotations
@@ -16,12 +17,18 @@ import pytest
 from logfire.testing import CaptureLogfire
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from app.agent.live_updates.stream import AgentRunLiveStreamEvent
 from app.agent.running.continuation import AgentRunExecutionProbe
-from app.agent.running.daily_quota.release import DailyQuotaReleaseOutcome
-from app.agent.running.state import RunFinished, RunRejected, RunRejectionReason
+from app.agent.running.state import (
+    AttemptSuperseded,
+    CancelledByUser,
+    CanContinue,
+    CannotContinue,
+    DeadlineExceeded,
+)
 from app.agent.running.state_repository import AgentRunStateRepository
+from app.agent.running.state_service import AgentRunStateService
 from app.agent.running.stop import AnswerGenerationStopped
-from app.agent.running.types import AgentRunErrorCode, AgentRunStatus
 from app.models.agent_message import AgentMessage
 from app.models.agent_run import AgentRun
 from app.models.agent_thread import AgentThread
@@ -45,57 +52,46 @@ class ManualClock:
         self.now += seconds
 
 
-class _NullTransaction:
-    async def __aenter__(self) -> _NullTransaction:
-        return self
-
-    async def __aexit__(self, *args: object) -> None:
-        return None
-
-
-class FakeSession:
-    def __init__(self) -> None:
-        self.entered = 0
-        self.exited = 0
-
-    async def __aenter__(self) -> FakeSession:
-        self.entered += 1
-        return self
-
-    async def __aexit__(self, *args: object) -> None:
-        self.exited += 1
-
-    def begin(self) -> _NullTransaction:
-        return _NullTransaction()
-
-
 class RaisingSessionContext:
     def __init__(self, exception: BaseException) -> None:
         self._exception = exception
-        self.entered = 0
 
     async def __aenter__(self) -> None:
-        self.entered += 1
         raise self._exception
 
     async def __aexit__(self, *args: object) -> None:
         return None
 
 
-class FakeSessionFactory:
-    def __init__(self, *, fail_on_enter: BaseException | None = None) -> None:
-        self._fail_on_enter = fail_on_enter
-        self.sessions: list[FakeSession | RaisingSessionContext] = []
+class RaisingSessionFactory:
+    def __init__(self, exception: BaseException) -> None:
+        self._exception = exception
+        self.opened = 0
 
-    def __call__(self) -> FakeSession | RaisingSessionContext:
-        if self._fail_on_enter is not None and not self.sessions:
-            session: FakeSession | RaisingSessionContext = RaisingSessionContext(
-                self._fail_on_enter
-            )
-        else:
-            session = FakeSession()
-        self.sessions.append(session)
-        return session
+    def __call__(self) -> RaisingSessionContext:
+        self.opened += 1
+        return RaisingSessionContext(self._exception)
+
+
+class RecordingPublisher:
+    def __init__(self) -> None:
+        self.events: list[tuple[UUID, int, AgentRunLiveStreamEvent]] = []
+
+    def publisher_for(self, run_id: UUID, attempt_epoch: int) -> _EpochPublisher:
+        return _EpochPublisher(self, run_id, attempt_epoch)
+
+
+class _EpochPublisher:
+    def __init__(
+        self, recorder: RecordingPublisher, run_id: UUID, attempt_epoch: int
+    ) -> None:
+        self._recorder = recorder
+        self._run_id = run_id
+        self._attempt_epoch = attempt_epoch
+
+    async def publish(self, event: AgentRunLiveStreamEvent) -> str | None:
+        self._recorder.events.append((self._run_id, self._attempt_epoch, event))
+        return None
 
 
 def _new_probe(
@@ -104,40 +100,57 @@ def _new_probe(
     *,
     run_id: UUID = RUN_ID,
     attempt_epoch: int = ATTEMPT_EPOCH,
+    publisher: RecordingPublisher | None = None,
 ) -> AgentRunExecutionProbe:
+    recorder = publisher or RecordingPublisher()
     return AgentRunExecutionProbe(
-        cast("async_sessionmaker[AsyncSession]", session_factory),
+        AgentRunStateService(
+            session_factory=cast("async_sessionmaker[AsyncSession]", session_factory),
+            publisher_for=recorder.publisher_for,  # type: ignore[arg-type]
+        ),
         run_id,
         attempt_epoch,
         clock=clock,
     )
 
 
-def _patch_decisions(
-    monkeypatch: pytest.MonkeyPatch,
-    outcomes: Sequence[RunFinished | RunRejected | BaseException | None],
-) -> None:
-    pending = deque(outcomes)
+def _unused_session_factory() -> object:
+    raise AssertionError("the continuation check is replaced in this test")
 
-    async def decide(
-        self: AgentRunStateRepository,
+
+@dataclass
+class ScriptedChecks:
+    """継続確認の差し替え。呼ばれた回数を数える。"""
+
+    outcomes: deque[CanContinue | CannotContinue | BaseException]
+    calls: int = 0
+
+
+def _patch_checks(
+    monkeypatch: pytest.MonkeyPatch,
+    outcomes: Sequence[CanContinue | CannotContinue | BaseException],
+) -> ScriptedChecks:
+    checks = ScriptedChecks(outcomes=deque(outcomes))
+
+    async def check(
+        self: AgentRunStateService,
         *_args: object,
         **_kwargs: object,
-    ) -> RunFinished | RunRejected | None:
-        item = pending.popleft()
+    ) -> CanContinue | CannotContinue:
+        checks.calls += 1
+        item = checks.outcomes.popleft()
         if isinstance(item, BaseException):
             raise item
         return item
 
-    monkeypatch.setattr(AgentRunStateRepository, "check_continuation", decide)
+    monkeypatch.setattr(AgentRunStateService, "check_continuation", check)
+    return checks
 
 
-async def _stopped_outcome(
-    probe: AgentRunExecutionProbe,
-) -> RunFinished | RunRejected:
+async def _stopped(probe: AgentRunExecutionProbe) -> CannotContinue:
     with pytest.raises(AnswerGenerationStopped) as stopped:
         await probe.ensure_can_continue()
-    return stopped.value.outcome
+    return stopped.value.stopped
 
 
 def _metric_points(capfire: CaptureLogfire) -> list[dict[str, Any]]:
@@ -159,36 +172,18 @@ async def test_probe_cache_rechecks_at_exactly_two_seconds(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """前回の確認から2秒未満は確認を省き、2秒ちょうどで再確認して止める。"""
-    _patch_decisions(
-        monkeypatch,
-        [
-            None,
-            RunRejected(
-                reason=RunRejectionReason.ATTEMPT_SUPERSEDED,
-                observed_status=AgentRunStatus.RUNNING,
-            ),
-        ],
-    )
-    factory = FakeSessionFactory()
+    checks = _patch_checks(monkeypatch, [CanContinue(), AttemptSuperseded()])
     clock = ManualClock()
-    probe = _new_probe(factory, clock)
+    probe = _new_probe(_unused_session_factory, clock)
 
     await probe.ensure_can_continue()
     clock.advance(1.999)
     await probe.ensure_can_continue()
-    assert len(factory.sessions) == 1
+    assert checks.calls == 1
 
     clock.now = 2.0
-    assert await _stopped_outcome(probe) == RunRejected(
-        reason=RunRejectionReason.ATTEMPT_SUPERSEDED,
-        observed_status=AgentRunStatus.RUNNING,
-    )
-    assert len(factory.sessions) == 2
-    assert all(session.entered == 1 for session in factory.sessions)
-    assert all(
-        isinstance(session, FakeSession) and session.exited == 1
-        for session in factory.sessions
-    )
+    assert await _stopped(probe) == AttemptSuperseded()
+    assert checks.calls == 2
 
 
 @pytest.mark.asyncio
@@ -196,30 +191,14 @@ async def test_stop_result_is_terminal_cache_without_later_database_check(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """一度止める結果を得たら、時間が経っても確認し直さず同じ結果で止め続ける。"""
-    _patch_decisions(
-        monkeypatch,
-        [
-            RunRejected(
-                reason=RunRejectionReason.ATTEMPT_SUPERSEDED,
-                observed_status=AgentRunStatus.RUNNING,
-            ),
-            None,
-        ],
-    )
-    factory = FakeSessionFactory()
+    checks = _patch_checks(monkeypatch, [AttemptSuperseded(), CanContinue()])
     clock = ManualClock()
-    probe = _new_probe(factory, clock)
+    probe = _new_probe(_unused_session_factory, clock)
 
-    assert await _stopped_outcome(probe) == RunRejected(
-        reason=RunRejectionReason.ATTEMPT_SUPERSEDED,
-        observed_status=AgentRunStatus.RUNNING,
-    )
+    assert await _stopped(probe) == AttemptSuperseded()
     clock.advance(200.0)
-    assert await _stopped_outcome(probe) == RunRejected(
-        reason=RunRejectionReason.ATTEMPT_SUPERSEDED,
-        observed_status=AgentRunStatus.RUNNING,
-    )
-    assert len(factory.sessions) == 1
+    assert await _stopped(probe) == AttemptSuperseded()
+    assert checks.calls == 1
 
 
 @pytest.mark.asyncio
@@ -227,43 +206,33 @@ async def test_database_check_failure_fails_open_and_recovers_after_cache_window
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """継続確認が失敗したら続行させ、2秒後の再確認で止める結果を得れば止める。"""
-    _patch_decisions(
-        monkeypatch,
-        [
-            RuntimeError("DB_SECRET"),
-            RunRejected(
-                reason=RunRejectionReason.ATTEMPT_SUPERSEDED,
-                observed_status=AgentRunStatus.RUNNING,
-            ),
-        ],
+    checks = _patch_checks(
+        monkeypatch, [RuntimeError("DB_SECRET"), AttemptSuperseded()]
     )
-    factory = FakeSessionFactory()
     clock = ManualClock()
-    probe = _new_probe(factory, clock)
+    probe = _new_probe(_unused_session_factory, clock)
 
     await probe.ensure_can_continue()
     clock.advance(1.999)
     await probe.ensure_can_continue()
-    assert len(factory.sessions) == 1
+    assert checks.calls == 1
 
     clock.now = 2.0
-    assert await _stopped_outcome(probe) == RunRejected(
-        reason=RunRejectionReason.ATTEMPT_SUPERSEDED,
-        observed_status=AgentRunStatus.RUNNING,
-    )
-    assert len(factory.sessions) == 2
+    assert await _stopped(probe) == AttemptSuperseded()
+    assert checks.calls == 2
 
 
 @pytest.mark.asyncio
 async def test_session_open_failure_also_fails_open_and_is_cached() -> None:
-    factory = FakeSessionFactory(fail_on_enter=RuntimeError("SESSION_SECRET"))
+    """セッションを開けない継続確認も続行させ、2秒以内は開き直さない。"""
+    factory = RaisingSessionFactory(RuntimeError("SESSION_SECRET"))
     clock = ManualClock()
     probe = _new_probe(factory, clock)
 
     await probe.ensure_can_continue()
     clock.advance(1.0)
     await probe.ensure_can_continue()
-    assert len(factory.sessions) == 1
+    assert factory.opened == 1
 
 
 @pytest.mark.asyncio
@@ -272,13 +241,12 @@ async def test_unavailable_observation_is_once_per_real_failure_and_pii_free(
     capfire: CaptureLogfire,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    _patch_decisions(
+    _patch_checks(
         monkeypatch,
         [RuntimeError("DB_EXCEPTION_SECRET"), RuntimeError("DB_EXCEPTION_SECRET")],
     )
-    factory = FakeSessionFactory()
     clock = ManualClock()
-    probe = _new_probe(factory, clock)
+    probe = _new_probe(_unused_session_factory, clock)
     answer = "ANSWER_SECRET"
     question = "QUESTION_SECRET"
     user_id = "USER_ID_SECRET"
@@ -369,7 +337,7 @@ async def _create_run(
 async def test_actual_cancel_commit_makes_cached_probe_stop_after_two_seconds(
     session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
-    """キャンセルがcommitされると、2秒後の再確認でRunが終了済みとして止まる。"""
+    """キャンセルがcommitされると、2秒後の再確認で利用者が止めたとして止まる。"""
     async with session_factory() as setup_session:
         run = await _create_run(
             setup_session,
@@ -391,18 +359,10 @@ async def test_actual_cancel_commit_makes_cached_probe_stop_after_two_seconds(
                 run.id,
                 user_id=UUID(TEST_USER_ID),
             )
-    assert result == RunFinished(
-        status=AgentRunStatus.FAILED,
-        error_code=AgentRunErrorCode.CANCELLED,
-        quota_release_outcome=DailyQuotaReleaseOutcome.NOT_ELIGIBLE,
-        running_attempt_epoch=1,
-    )
+    assert result == CancelledByUser()
     clock.advance(2.0)
 
-    assert await _stopped_outcome(probe) == RunRejected(
-        reason=RunRejectionReason.ALREADY_FINISHED,
-        observed_status=AgentRunStatus.FAILED,
-    )
+    assert await _stopped(probe) == CancelledByUser()
 
 
 @pytest.mark.integration
@@ -410,7 +370,7 @@ async def test_actual_cancel_commit_makes_cached_probe_stop_after_two_seconds(
 async def test_actual_restart_makes_old_epoch_probe_stop_after_two_seconds(
     session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
-    """再配信で次の世代が始まると、古い世代のprobeは2秒後の再確認で世代違いとして止まる。"""
+    """再配信で次の世代が始まると、古い世代のprobeは2秒後の再確認で別の試行が担当しているとして止まる。"""
     async with session_factory() as setup_session:
         run = await _create_run(
             setup_session,
@@ -434,10 +394,7 @@ async def test_actual_restart_makes_old_epoch_probe_stop_after_two_seconds(
     assert attempt_epoch == 2
     clock.advance(2.0)
 
-    assert await _stopped_outcome(probe) == RunRejected(
-        reason=RunRejectionReason.ATTEMPT_SUPERSEDED,
-        observed_status=AgentRunStatus.RUNNING,
-    )
+    assert await _stopped(probe) == AttemptSuperseded()
 
 
 @pytest.mark.integration
@@ -445,7 +402,7 @@ async def test_actual_restart_makes_old_epoch_probe_stop_after_two_seconds(
 async def test_expired_deadline_stops_through_choke_and_writes_once(
     session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
-    """受理期限を過ぎたRunはprobeの確認で一度だけ期限切れに書き換わり、以後も同じ結果で止まる。"""
+    """受理期限を過ぎたRunはprobeの確認で一度だけ期限切れに書き換わって終了が通知され、以後も同じ結果で止まる。"""
     async with session_factory() as setup_session:
         run = await _create_run(
             setup_session,
@@ -454,25 +411,27 @@ async def test_expired_deadline_stops_through_choke_and_writes_once(
             deadline_at=datetime.now(UTC) - timedelta(seconds=1),
         )
     clock = ManualClock()
+    publisher = RecordingPublisher()
     probe = _new_probe(
         session_factory,
         clock,
         run_id=run.id,
         attempt_epoch=1,
+        publisher=publisher,
     )
-    assert await _stopped_outcome(probe) == RunFinished(
-        status=AgentRunStatus.DEADLINE_EXCEEDED,
-        error_code=None,
-        quota_release_outcome=DailyQuotaReleaseOutcome.NOT_ELIGIBLE,
-        running_attempt_epoch=1,
-    )
+    assert await _stopped(probe) == DeadlineExceeded()
     clock.advance(200.0)
-    assert await _stopped_outcome(probe) == RunFinished(
-        status=AgentRunStatus.DEADLINE_EXCEEDED,
-        error_code=None,
-        quota_release_outcome=DailyQuotaReleaseOutcome.NOT_ELIGIBLE,
-        running_attempt_epoch=1,
-    )
+    assert await _stopped(probe) == DeadlineExceeded()
+    assert [
+        (run_id, epoch, event.model_dump(mode="json", by_alias=True))
+        for run_id, epoch, event in publisher.events
+    ] == [
+        (
+            run.id,
+            1,
+            {"type": "terminal", "status": "deadline_exceeded", "errorCode": None},
+        )
+    ]
 
     async with session_factory() as session:
         persisted = await session.get(AgentRun, run.id)

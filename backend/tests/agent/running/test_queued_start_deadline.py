@@ -21,14 +21,14 @@ import app.queue.tasks.agent_run as agent_run_tasks
 from app.agent.run_enqueuer import AgentRunTrigger
 from app.agent.running.daily_quota.release import DailyQuotaReleaseOutcome
 from app.agent.running.deadline.policy import RUN_DEADLINE_SECONDS
+from app.agent.running.finish_notice import ClosedQueuedRun
 from app.agent.running.state import (
     AttemptStarted,
-    RunFinished,
-    RunRejected,
-    RunRejectionReason,
+    CancelledByUser,
+    CannotContinue,
+    DeadlineExceeded,
 )
 from app.agent.running.state_repository import AgentRunStateRepository
-from app.agent.running.types import AgentRunErrorCode, AgentRunStatus
 from app.models.agent_message import AgentMessage
 from app.models.agent_run import AgentRun
 from app.models.agent_thread import AgentThread
@@ -211,16 +211,20 @@ async def test_expired_queued_run_terminalizes_and_releases_original_quota_atomi
 
     async with session_factory() as session:
         async with session.begin():
-            result = await AgentRunStateRepository(session).start_attempt(
+            repository = AgentRunStateRepository(session)
+            result = await repository.start_attempt(
                 seeded.run_id,
                 now=_DB_NOW,
             )
 
-    assert result == RunFinished(
-        status=AgentRunStatus.DEADLINE_EXCEEDED,
-        error_code=None,
-        quota_release_outcome=DailyQuotaReleaseOutcome.RELEASED,
-        running_attempt_epoch=None,
+    assert (result, repository.closed_runs) == (
+        DeadlineExceeded(),
+        [
+            ClosedQueuedRun(
+                run_id=seeded.run_id,
+                quota_release_outcome=DailyQuotaReleaseOutcome.RELEASED,
+            )
+        ],
     )
     run = await _read_run(session_factory, seeded.run_id)
     assert (run.status, run.error_code, run.attempt_epoch) == (
@@ -256,17 +260,21 @@ async def test_queued_start_deadline_starts_just_before_and_expires_at_boundary(
                 just_before.run_id,
                 now=_DB_NOW,
             )
-            exact_result = await AgentRunStateRepository(session).start_attempt(
+            exact_repository = AgentRunStateRepository(session)
+            exact_result = await exact_repository.start_attempt(
                 exact.run_id,
                 now=_DB_NOW,
             )
 
     assert before_result == AttemptStarted(attempt_epoch=1)
-    assert exact_result == RunFinished(
-        status=AgentRunStatus.DEADLINE_EXCEEDED,
-        error_code=None,
-        quota_release_outcome=DailyQuotaReleaseOutcome.RELEASED,
-        running_attempt_epoch=None,
+    assert (exact_result, exact_repository.closed_runs) == (
+        DeadlineExceeded(),
+        [
+            ClosedQueuedRun(
+                run_id=exact.run_id,
+                quota_release_outcome=DailyQuotaReleaseOutcome.RELEASED,
+            )
+        ],
     )
     before_run = await _read_run(session_factory, just_before.run_id)
     exact_run = await _read_run(session_factory, exact.run_id)
@@ -291,16 +299,20 @@ async def test_expired_legacy_queued_run_terminalizes_without_quota_release(
 
     async with session_factory() as session:
         async with session.begin():
-            result = await AgentRunStateRepository(session).start_attempt(
+            repository = AgentRunStateRepository(session)
+            result = await repository.start_attempt(
                 seeded.run_id,
                 now=_DB_NOW,
             )
 
-    assert result == RunFinished(
-        status=AgentRunStatus.DEADLINE_EXCEEDED,
-        error_code=None,
-        quota_release_outcome=DailyQuotaReleaseOutcome.NOT_ELIGIBLE,
-        running_attempt_epoch=None,
+    assert (result, repository.closed_runs) == (
+        DeadlineExceeded(),
+        [
+            ClosedQueuedRun(
+                run_id=seeded.run_id,
+                quota_release_outcome=DailyQuotaReleaseOutcome.NOT_ELIGIBLE,
+            )
+        ],
     )
     run = await _read_run(session_factory, seeded.run_id)
     assert (run.status, run.error_code) == ("deadline_exceeded", None)
@@ -322,16 +334,20 @@ async def test_expired_queued_run_with_missing_or_empty_counter_is_inconsistent(
 
     async with session_factory() as session:
         async with session.begin():
-            result = await AgentRunStateRepository(session).start_attempt(
+            repository = AgentRunStateRepository(session)
+            result = await repository.start_attempt(
                 seeded.run_id,
                 now=_DB_NOW,
             )
 
-    assert result == RunFinished(
-        status=AgentRunStatus.DEADLINE_EXCEEDED,
-        error_code=None,
-        quota_release_outcome=DailyQuotaReleaseOutcome.INCONSISTENT,
-        running_attempt_epoch=None,
+    assert (result, repository.closed_runs) == (
+        DeadlineExceeded(),
+        [
+            ClosedQueuedRun(
+                run_id=seeded.run_id,
+                quota_release_outcome=DailyQuotaReleaseOutcome.INCONSISTENT,
+            )
+        ],
     )
     run = await _read_run(session_factory, seeded.run_id)
     assert run.status == "deadline_exceeded"
@@ -391,7 +407,7 @@ async def test_quota_query_failure_rolls_back_queued_expiry_without_a_committed_
 async def test_cancel_winner_refunds_once_and_expired_start_reports_idempotent_skip(
     session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
-    """キャンセルが先に利用枠を返したRunを、期限後に届いた開始は終了済みとして拒否し、二重に返さない。"""
+    """キャンセルが先に利用枠を返したRunを、期限後に届いた開始は停止済みと見て開始せず、二重に返さない。"""
     seeded = await _seed_queued_run(
         session_factory,
         created_at=_DB_NOW - timedelta(seconds=RUN_DEADLINE_SECONDS + 1),
@@ -404,12 +420,11 @@ async def test_cancel_winner_refunds_once_and_expired_start_reports_idempotent_s
         session_factory() as start_session,
         session_factory() as observer,
     ):
-        start_task: asyncio.Task[AttemptStarted | RunFinished | RunRejected] | None = (
-            None
-        )
+        start_task: asyncio.Task[AttemptStarted | CannotContinue] | None = None
         try:
             await cancel_session.begin()
-            cancelled = await AgentRunStateRepository(cancel_session).cancel_for_user(
+            cancel_repository = AgentRunStateRepository(cancel_session)
+            cancelled = await cancel_repository.cancel_for_user(
                 seeded.run_id,
                 user_id=seeded.user_id,
                 now=cancelled_at,
@@ -418,8 +433,9 @@ async def test_cancel_winner_refunds_once_and_expired_start_reports_idempotent_s
             await start_session.begin()
             start_pid = await start_session.scalar(text("SELECT pg_backend_pid()"))
             assert isinstance(start_pid, int)
+            start_repository = AgentRunStateRepository(start_session)
             start_task = asyncio.create_task(
-                AgentRunStateRepository(start_session).start_attempt(
+                start_repository.start_attempt(
                     seeded.run_id,
                     now=_DB_NOW,
                 )
@@ -438,16 +454,16 @@ async def test_cancel_winner_refunds_once_and_expired_start_reports_idempotent_s
                 if session.in_transaction():
                     await session.rollback()
 
-    assert cancelled == RunFinished(
-        status=AgentRunStatus.FAILED,
-        error_code=AgentRunErrorCode.CANCELLED,
-        quota_release_outcome=DailyQuotaReleaseOutcome.RELEASED,
-        running_attempt_epoch=None,
+    assert (cancelled, cancel_repository.closed_runs) == (
+        CancelledByUser(),
+        [
+            ClosedQueuedRun(
+                run_id=seeded.run_id,
+                quota_release_outcome=DailyQuotaReleaseOutcome.RELEASED,
+            )
+        ],
     )
-    assert result == RunRejected(
-        reason=RunRejectionReason.ALREADY_FINISHED,
-        observed_status=AgentRunStatus.FAILED,
-    )
+    assert (result, start_repository.closed_runs) == (CancelledByUser(), [])
     run = await _read_run(session_factory, seeded.run_id)
     assert (run.status, run.error_code) == ("failed", "cancelled")
     assert await _read_counter(session_factory, usage_date=_USAGE_DATE) == 0

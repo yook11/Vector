@@ -10,7 +10,8 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.agent.running.daily_quota.release import DailyQuotaReleaseOutcome
-from app.agent.running.state import RunFinished
+from app.agent.running.finish_notice import ClosedQueuedRun, ClosedRunningRun
+from app.agent.running.state import DeadlineExceeded, FailureRecorded
 from app.agent.running.state_repository import AgentRunStateRepository
 from app.agent.running.types import AgentRunErrorCode, AgentRunStatus
 from app.models.agent_run import AgentRun
@@ -77,21 +78,22 @@ async def test_enqueue_failure_releases_quota_reserved_at_admission(
 
     async with session_factory() as session:
         async with session.begin():
-            result = await AgentRunStateRepository(session).record_enqueue_failure(
-                run.id, now=_NOW
-            )
+            repository = AgentRunStateRepository(session)
+            result = await repository.record_enqueue_failure(run.id, now=_NOW)
 
     assert (
         result,
+        repository.closed_runs,
         await _read_counter(session_factory),
         await _read_run(session_factory, run.id),
     ) == (
-        RunFinished(
-            status=AgentRunStatus.FAILED,
-            error_code=AgentRunErrorCode.ENQUEUE_FAILED,
-            quota_release_outcome=DailyQuotaReleaseOutcome.RELEASED,
-            running_attempt_epoch=None,
-        ),
+        FailureRecorded(),
+        [
+            ClosedQueuedRun(
+                run_id=run.id,
+                quota_release_outcome=DailyQuotaReleaseOutcome.RELEASED,
+            )
+        ],
         0,
         ("failed", "enqueue_failed", 0),
     )
@@ -113,21 +115,24 @@ async def test_cancel_after_deadline_expires_queued_run_and_releases_quota(
 
     async with session_factory() as session:
         async with session.begin():
-            result = await AgentRunStateRepository(session).cancel_for_user(
+            repository = AgentRunStateRepository(session)
+            result = await repository.cancel_for_user(
                 run.id, user_id=_USER_ID, now=_NOW
             )
 
     assert (
         result,
+        repository.closed_runs,
         await _read_counter(session_factory),
         await _read_run(session_factory, run.id),
     ) == (
-        RunFinished(
-            status=AgentRunStatus.DEADLINE_EXCEEDED,
-            error_code=None,
-            quota_release_outcome=DailyQuotaReleaseOutcome.RELEASED,
-            running_attempt_epoch=None,
-        ),
+        DeadlineExceeded(),
+        [
+            ClosedQueuedRun(
+                run_id=run.id,
+                quota_release_outcome=DailyQuotaReleaseOutcome.RELEASED,
+            )
+        ],
         0,
         ("deadline_exceeded", None, 0),
     )
@@ -148,17 +153,25 @@ async def test_cancel_after_deadline_expires_running_run_for_its_attempt(
 
     async with session_factory() as session:
         async with session.begin():
-            result = await AgentRunStateRepository(session).cancel_for_user(
+            repository = AgentRunStateRepository(session)
+            result = await repository.cancel_for_user(
                 run.id, user_id=_USER_ID, now=_NOW
             )
 
-    assert (result, await _read_run(session_factory, run.id)) == (
-        RunFinished(
-            status=AgentRunStatus.DEADLINE_EXCEEDED,
-            error_code=None,
-            quota_release_outcome=DailyQuotaReleaseOutcome.NOT_ELIGIBLE,
-            running_attempt_epoch=3,
-        ),
+    assert (
+        result,
+        repository.closed_runs,
+        await _read_run(session_factory, run.id),
+    ) == (
+        DeadlineExceeded(),
+        [
+            ClosedRunningRun(
+                run_id=run.id,
+                attempt_epoch=3,
+                status=AgentRunStatus.DEADLINE_EXCEEDED,
+                error_code=None,
+            )
+        ],
         ("deadline_exceeded", None, 3),
     )
 
@@ -179,20 +192,28 @@ async def test_failure_after_recovery_deadline_expires_answering_run(
 
     async with session_factory() as session:
         async with session.begin():
-            result = await AgentRunStateRepository(session).record_failure(
+            repository = AgentRunStateRepository(session)
+            result = await repository.record_failure(
                 run.id,
                 attempt_epoch=2,
                 error_code=AgentRunErrorCode.GENERATION_UNAVAILABLE,
                 now=_NOW,
             )
 
-    assert (result, await _read_run(session_factory, run.id)) == (
-        RunFinished(
-            status=AgentRunStatus.DEADLINE_EXCEEDED,
-            error_code=None,
-            quota_release_outcome=DailyQuotaReleaseOutcome.NOT_ELIGIBLE,
-            running_attempt_epoch=2,
-        ),
+    assert (
+        result,
+        repository.closed_runs,
+        await _read_run(session_factory, run.id),
+    ) == (
+        DeadlineExceeded(),
+        [
+            ClosedRunningRun(
+                run_id=run.id,
+                attempt_epoch=2,
+                status=AgentRunStatus.DEADLINE_EXCEEDED,
+                error_code=None,
+            )
+        ],
         ("deadline_exceeded", None, 2),
     )
 
@@ -212,16 +233,22 @@ async def test_start_after_deadline_reports_redelivered_running_attempt(
 
     async with session_factory() as session:
         async with session.begin():
-            result = await AgentRunStateRepository(session).start_attempt(
-                run.id, now=_NOW
-            )
+            repository = AgentRunStateRepository(session)
+            result = await repository.start_attempt(run.id, now=_NOW)
 
-    assert (result, await _read_run(session_factory, run.id)) == (
-        RunFinished(
-            status=AgentRunStatus.DEADLINE_EXCEEDED,
-            error_code=None,
-            quota_release_outcome=DailyQuotaReleaseOutcome.NOT_ELIGIBLE,
-            running_attempt_epoch=3,
-        ),
+    assert (
+        result,
+        repository.closed_runs,
+        await _read_run(session_factory, run.id),
+    ) == (
+        DeadlineExceeded(),
+        [
+            ClosedRunningRun(
+                run_id=run.id,
+                attempt_epoch=3,
+                status=AgentRunStatus.DEADLINE_EXCEEDED,
+                error_code=None,
+            )
+        ],
         ("deadline_exceeded", None, 3),
     )

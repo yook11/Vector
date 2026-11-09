@@ -50,9 +50,8 @@ from app.agent.planning.contract import (
     TargetTimeWindow,
 )
 from app.agent.research_handoff import ResearchHandoff, ResearchHandoffInput
-from app.agent.running.state import RunRejected, RunRejectionReason
+from app.agent.running.state import AttemptSuperseded
 from app.agent.running.stop import AnswerGenerationStopped
-from app.agent.running.types import AgentRunStatus
 from tests.agent.answering_runner._harness import (
     PassThroughOrganizer,
     fixed_scope,
@@ -351,12 +350,7 @@ class _StoppingEvidenceAnswerer:
     async def answer(self, input: EvidenceAnswerInput) -> EvidenceAnswerDraft:
         del input
         await asyncio.sleep(0)
-        raise AnswerGenerationStopped(
-            RunRejected(
-                reason=RunRejectionReason.ATTEMPT_SUPERSEDED,
-                observed_status=AgentRunStatus.RUNNING,
-            )
-        )
+        raise AnswerGenerationStopped(AttemptSuperseded())
 
 
 class _FailingEvidenceAnswerer:

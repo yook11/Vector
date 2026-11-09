@@ -55,15 +55,18 @@ from app.agent.running.deadline.scheduling import (
     AgentDeadlineScheduler,
     get_agent_deadline_scheduler,
 )
-from app.agent.running.finish_notice import notify_run_finished
 from app.agent.running.state import (
-    RunRejected,
-    RunRejectionReason,
+    AttemptAlreadyStarted,
+    CancelledByUser,
+    DeadlineExceeded,
+    FailureRecorded,
+    RunAlreadyCompleted,
+    RunAlreadyFailed,
+    RunNotFound,
     has_attempt_started,
     is_finished,
 )
-from app.agent.running.state_repository import AgentRunStateRepository
-from app.agent.running.types import AgentRunStatus
+from app.agent.running.state_service import AgentRunStateService
 from app.agent.threads.detail import read_owned_thread_detail
 from app.agent.threads.repository import AgentThreadRepository
 from app.db.fastapi import get_caller_managed_session
@@ -128,6 +131,16 @@ def get_agent_run_sse_timing() -> AgentRunSseTiming:
     return AgentRunSseTiming()
 
 
+def get_agent_run_state_service(
+    request: Request,
+    live: Annotated[AgentLiveTransport, Depends(get_agent_live_transport)],
+) -> AgentRunStateService:
+    return AgentRunStateService(
+        session_factory=request.app.state.session_factory,
+        publisher_for=live.publisher,
+    )
+
+
 @router.post(
     "/responses",
     operation_id="create_research_response",
@@ -155,7 +168,9 @@ async def create_research_response(
     # commit→kiq→failed の 2 tx を切るため、入口管理の UoW は使わない。
     session: Annotated[AsyncSession, Depends(get_caller_managed_session)],
     enqueuer: Annotated[AgentRunEnqueuer, Depends(get_agent_run_enqueuer)],
-    live: Annotated[AgentLiveTransport, Depends(get_agent_live_transport)],
+    state_service: Annotated[
+        AgentRunStateService, Depends(get_agent_run_state_service)
+    ],
 ) -> ResearchRunStartResponse | JSONResponse:
     repo = AgentRunCreationRepository(session)
     try:
@@ -216,10 +231,7 @@ async def create_research_response(
             run_id=str(created.run_id),
         )
         try:
-            async with session.begin():
-                recorded = await AgentRunStateRepository(
-                    session
-                ).record_enqueue_failure(created.run_id)
+            recorded = await state_service.record_enqueue_failure(created.run_id)
         except Exception as update_exc:
             logger.exception(
                 "agent_run_enqueue_failed_mark_failed_failed",
@@ -229,25 +241,34 @@ async def create_research_response(
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
                 detail="Failed to enqueue research run",
             ) from update_exc
-        if isinstance(recorded, RunRejected):
-            logger.info(
-                "agent_run_enqueue_failed_mark_failed_skipped",
-                run_id=str(created.run_id),
-                reason=recorded.reason.value,
-            )
-        else:
-            await notify_run_finished(
-                recorded,
-                run_id=created.run_id,
-                publisher_for=lambda attempt_epoch: live.publisher(
-                    created.run_id, attempt_epoch
-                ),
-            )
+        match recorded:
+            case FailureRecorded():
+                pass
+            case AttemptAlreadyStarted():
+                _log_enqueue_failure_skipped(created.run_id, "attempt_already_started")
+            case CancelledByUser():
+                _log_enqueue_failure_skipped(created.run_id, "cancelled_by_user")
+            case DeadlineExceeded():
+                _log_enqueue_failure_skipped(created.run_id, "deadline_exceeded")
+            case RunAlreadyCompleted():
+                _log_enqueue_failure_skipped(created.run_id, "run_already_completed")
+            case RunAlreadyFailed():
+                _log_enqueue_failure_skipped(created.run_id, "run_already_failed")
+            case RunNotFound():
+                _log_enqueue_failure_skipped(created.run_id, "run_not_found")
 
     background_tasks.add_task(
         deadline_scheduler.reserve, created.run_id, created.deadline_at
     )
     return ResearchRunStartResponse(thread_id=created.thread_id, run_id=created.run_id)
+
+
+def _log_enqueue_failure_skipped(run_id: UUID, reason: str) -> None:
+    logger.info(
+        "agent_run_enqueue_failed_mark_failed_skipped",
+        run_id=str(run_id),
+        reason=reason,
+    )
 
 
 @router.get(
@@ -276,13 +297,15 @@ async def get_research_thread(
     thread_id: UUID,
     user: Annotated[AuthenticatedUser, Depends(require_authenticated_user)],
     session: Annotated[AsyncSession, Depends(get_caller_managed_session)],
-    live: Annotated[AgentLiveTransport, Depends(get_agent_live_transport)],
+    state_service: Annotated[
+        AgentRunStateService, Depends(get_agent_run_state_service)
+    ],
 ) -> ResearchThreadDetail:
     response = await read_owned_thread_detail(
         session,
         thread_id=thread_id,
         user_id=user.id,
-        live=live,
+        state_service=state_service,
     )
     if response is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
@@ -325,28 +348,20 @@ async def delete_research_thread(
 async def cancel_research_run(
     run_id: UUID,
     user: Annotated[AuthenticatedUser, Depends(require_authenticated_user)],
-    session: Annotated[AsyncSession, Depends(get_caller_managed_session)],
-    live: Annotated[AgentLiveTransport, Depends(get_agent_live_transport)],
+    state_service: Annotated[
+        AgentRunStateService, Depends(get_agent_run_state_service)
+    ],
 ) -> Response:
-    async with session.begin():
-        outcome = await AgentRunStateRepository(session).cancel_for_user(
-            run_id, user_id=user.id
-        )
-    if isinstance(outcome, RunRejected):
-        if outcome.reason is RunRejectionReason.RUN_NOT_FOUND:
+    match await state_service.cancel_for_user(run_id, user_id=user.id):
+        case RunNotFound():
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
-        if outcome.observed_status is AgentRunStatus.COMPLETED:
+        case RunAlreadyCompleted():
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
                 detail=_RUN_ALREADY_COMPLETED_DETAIL,
             )
-        return Response(status_code=status.HTTP_204_NO_CONTENT)
-    await notify_run_finished(
-        outcome,
-        run_id=run_id,
-        publisher_for=lambda attempt_epoch: live.publisher(run_id, attempt_epoch),
-    )
-    return Response(status_code=status.HTTP_204_NO_CONTENT)
+        case CancelledByUser() | DeadlineExceeded() | RunAlreadyFailed():
+            return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
 @router.get(

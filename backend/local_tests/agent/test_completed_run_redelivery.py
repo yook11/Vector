@@ -12,9 +12,8 @@ from app.agent.contract import (
 )
 from app.agent.run_enqueuer import AgentRunTrigger
 from app.agent.running.creation import AgentRunCreationRepository
-from app.agent.running.state import RunRejected, RunRejectionReason
+from app.agent.running.state import AttemptSuperseded
 from app.agent.running.state_repository import AgentRunStateRepository
-from app.agent.running.types import AgentRunStatus
 from app.queue.tasks.agent_run import run_agent_answer
 from local_tests.agent.support import fetch_saved_run_result
 
@@ -108,10 +107,7 @@ async def test_reexecution_of_completed_run_preserves_saved_result(
     result_after_save_attempt = await fetch_saved_run_result(
         system_database, run_id=run_id, thread_id=created.thread_id
     )
-    assert completion == RunRejected(
-        reason=RunRejectionReason.ALREADY_FINISHED,
-        observed_status=AgentRunStatus.COMPLETED,
-    )
+    assert completion == AttemptSuperseded()
     assert result_after_save_attempt.run["status"] == "completed"
     assert len(result_after_save_attempt.assistant_messages) == 1
     assert (

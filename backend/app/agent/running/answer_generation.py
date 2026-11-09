@@ -1,15 +1,19 @@
-"""回答生成の開始・再生成許可を短命DB transactionで行う。"""
+"""回答生成の開始・再生成許可を、Runの状態を変える操作で行う。"""
 
 from __future__ import annotations
 
-from datetime import datetime
 from typing import Protocol
 from uuid import UUID
 
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
-
-from app.agent.running.state import AnswerGenerationStarted
-from app.agent.running.state_repository import AgentRunStateRepository
+from app.agent.running.state import (
+    AnswerGenerationStarted,
+    AttemptSuperseded,
+    CancelledByUser,
+    CanContinue,
+    DeadlineExceeded,
+    RunNotFound,
+)
+from app.agent.running.state_service import AgentRunStateService
 from app.agent.running.stop import AnswerGenerationStopped
 
 __all__ = [
@@ -27,42 +31,38 @@ class AnswerGenerationRepository(Protocol):
 class AgentAnswerGenerationRepository:
     def __init__(
         self,
-        session_factory: async_sessionmaker[AsyncSession],
+        state_service: AgentRunStateService,
         run_id: UUID,
         attempt_epoch: int,
     ) -> None:
-        self._session_factory = session_factory
+        self._state_service = state_service
         self._run_id = run_id
         self._attempt_epoch = attempt_epoch
 
-    async def start_answer_generation(
-        self, *, now: datetime | None = None
-    ) -> AnswerGenerationStarted:
-        async with self._session_factory() as session:
-            async with session.begin():
-                outcome = await AgentRunStateRepository(
-                    session
-                ).start_answer_generation(
-                    self._run_id,
-                    attempt_epoch=self._attempt_epoch,
-                    now=now,
-                )
-        # 期限切れの確定をcommitしてから止めるため、transactionを閉じた後に送出する。
-        if not isinstance(outcome, AnswerGenerationStarted):
-            raise AnswerGenerationStopped(outcome)
-        return outcome
+    async def start_answer_generation(self) -> AnswerGenerationStarted:
+        match await self._state_service.start_answer_generation(
+            self._run_id, attempt_epoch=self._attempt_epoch
+        ):
+            case AnswerGenerationStarted() as started:
+                return started
+            case (
+                CancelledByUser()
+                | DeadlineExceeded()
+                | AttemptSuperseded()
+                | RunNotFound()
+            ) as stopped:
+                raise AnswerGenerationStopped(stopped)
 
-    async def authorize_answer_regeneration(
-        self, *, now: datetime | None = None
-    ) -> None:
-        async with self._session_factory() as session:
-            async with session.begin():
-                stopped = await AgentRunStateRepository(
-                    session
-                ).authorize_answer_regeneration(
-                    self._run_id,
-                    attempt_epoch=self._attempt_epoch,
-                    now=now,
-                )
-        if stopped is not None:
-            raise AnswerGenerationStopped(stopped)
+    async def authorize_answer_regeneration(self) -> None:
+        match await self._state_service.authorize_answer_regeneration(
+            self._run_id, attempt_epoch=self._attempt_epoch
+        ):
+            case CanContinue():
+                return
+            case (
+                CancelledByUser()
+                | DeadlineExceeded()
+                | AttemptSuperseded()
+                | RunNotFound()
+            ) as stopped:
+                raise AnswerGenerationStopped(stopped)

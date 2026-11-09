@@ -113,7 +113,7 @@ quotaを重複返却したりしない。確認が完了した後に期限へ達
 - [公開API schema](../../backend/app/schemas/research.py): `ResearchThreadDetail`の正本。
 - [期限回収](../../backend/app/agent/run_deadline/persistence.py): 開始記録に応じた条件、quota、回収結果を扱う。
 - [回答生成の時間定義](../../backend/app/agent/answering/timing.py): 工程制限時間と回収猶予の共通定義。
-- [定期回収タスク](../../backend/app/agent/running/deadline/recovery.py): 回収commit後の観測・終了通知を扱う。
+- [定期回収タスク](../../backend/app/agent/running/deadline/recovery.py): 回収を実行し、結果をログに残す。commit後の観測・終了通知は[Runの状態の操作](../../backend/app/agent/running/state_service.py)が行う。
 - [frontendの詳細取得](../../frontend/src/features/research/api/get-research-thread.ts): `cache: "no-store"`で取得する。
 - [画面用データ取得](../../frontend/src/features/research/page-models/research-thread.ts): 詳細と一覧を並行取得する。
 

@@ -38,7 +38,12 @@ async def main():
     )
     from app.agent.evidence_collection.internal_search.ai import gemini
     from app.agent.running.answer_generation import AgentAnswerGenerationRepository
-    from app.agent.running.state import RunRejected
+    from app.agent.running.state import (
+        AttemptSuperseded,
+        CancelledByUser,
+        DeadlineExceeded,
+        RunNotFound,
+    )
     from app.agent.running.state_repository import AgentRunStateRepository
     from app.agent.running.stop import AnswerGenerationStopped
     from app.models.agent_run import AgentRun
@@ -139,12 +144,15 @@ async def main():
             try:
                 return await original_answer_start(repository, **kwargs)
             except AnswerGenerationStopped as stopped:
-                outcome = stopped.outcome
-                answer_generation_stop_reason = (
-                    outcome.reason.value
-                    if isinstance(outcome, RunRejected)
-                    else outcome.status.value
-                )
+                match stopped.stopped:
+                    case CancelledByUser():
+                        answer_generation_stop_reason = "cancelled_by_user"
+                    case DeadlineExceeded():
+                        answer_generation_stop_reason = "deadline_exceeded"
+                    case AttemptSuperseded():
+                        answer_generation_stop_reason = "attempt_superseded"
+                    case RunNotFound():
+                        answer_generation_stop_reason = "run_not_found"
                 raise
 
         class DeliveryObserver(TaskiqMiddleware):
