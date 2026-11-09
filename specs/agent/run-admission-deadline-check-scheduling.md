@@ -138,7 +138,7 @@ runを終了させない。このタスクから回答生成後の期限へ再�
 - [元の期限定義](../../backend/app/agent/running/deadline/policy.py): 受付から60秒の期限を定義する。
 - [共通回収処理](../../backend/app/agent/running/deadline/deadline_exceeded.py): 開始記録に応じた期限とquotaを扱う。
 - [生成工程の時間定義](../../backend/app/agent/answering/timing.py): 工程制限時間と回収猶予の正本。
-- [既存の回収タスク](../../backend/app/agent/running/deadline/recovery.py): 回収commit後の通知・観測を扱う。
+- [既存の回収タスク](../../backend/app/agent/running/deadline/recovery.py): 回収を実行し、結果をログに残す。commit後の通知・観測は[Runの状態の操作](../../backend/app/agent/running/state_service.py)が行う。
 - [scheduler構成](../../backend/app/queue/schedulers.py): agent用schedulerの現在のsource構成。
 - [Redis接続設定](../../backend/app/redis/clients.py): 用途別の接続・timeoutを管理する。
 - [既存依存](../../backend/pyproject.toml): Taskiqとtaskiq-redisを使用している。
