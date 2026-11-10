@@ -16,10 +16,15 @@ from app.agent.evidence_collection.external_search.contract import (
 from app.agent.evidence_collection.internal_search.query_embedding import (
     InternalQueryEmbedding,
 )
-from app.agent.running.answer_generation import AgentAnswerGenerationRepository
 from app.agent.running.creation import AgentRunCreationRepository
-from app.agent.running.state import AnswerGenerationStarted, AttemptStarted
-from app.agent.running.state_repository import AgentRunStateRepository
+from app.agent.running.state import (
+    AnswerGenerationStarted,
+    AttemptStarted,
+    AttemptSuperseded,
+    CancelledByUser,
+    DeadlineExceeded,
+    RunNotFound,
+)
 from app.agent.running.state_service import AgentRunStateService
 from app.ai_providers.errors import AIProviderError
 from app.analysis.embedding.domain.value_objects import EMBEDDING_DIMENSION
@@ -114,11 +119,12 @@ class _DiscardingLivePublisher:
         return None
 
 
-def state_service_for(session_factory):
+def state_service_for(session_factory, *, now=None):
     """テストの準備でRunの状態を変える操作を、渡したsession factoryで組み立てる。"""
     return AgentRunStateService(
         session_factory=session_factory,
         publisher_for=_DiscardingLivePublisher,  # type: ignore[arg-type]
+        now=now,
     )
 
 
@@ -140,9 +146,7 @@ async def create_user_run(session_factory, *, user_id, question):
 
 
 async def start_run_attempt(session_factory, run_id):
-    async with session_factory() as session:
-        async with session.begin():
-            started = await AgentRunStateRepository(session).start_attempt(run_id)
+    started = await state_service_for(session_factory).start_attempt(run_id)
     if not isinstance(started, AttemptStarted):
         raise RuntimeError(f"テスト用ランの実行を開始できませんでした: {started}")
     return started.attempt_epoch
@@ -158,17 +162,23 @@ async def create_answering_run(
 
     attempt_epoch = await start_run_attempt(session_factory, created.run_id)
 
-    answer_generation = await AgentAnswerGenerationRepository(
-        state_service_for(session_factory), created.run_id, attempt_epoch
-    ).start_answer_generation()
-    if not isinstance(answer_generation, AnswerGenerationStarted):
-        raise RuntimeError("テスト用ランの回答生成を開始できませんでした")
+    match await state_service_for(session_factory).start_answer_generation(
+        created.run_id, attempt_epoch=attempt_epoch
+    ):
+        case AnswerGenerationStarted(answer_started_at=answer_started_at):
+            pass
+        case (
+            CancelledByUser() | DeadlineExceeded() | AttemptSuperseded() | RunNotFound()
+        ) as stopped:
+            raise RuntimeError(
+                f"テスト用ランの回答生成を開始できませんでした: {stopped}"
+            )
 
     return PreparedAnsweringRun(
         run_id=created.run_id,
         thread_id=created.thread_id,
         attempt_epoch=attempt_epoch,
-        answer_started_at=answer_generation.answer_started_at,
+        answer_started_at=answer_started_at,
     )
 
 

@@ -61,6 +61,7 @@ from tests.agent.answering_runner._harness import (
 )
 from tests.agent.answering_runner._harness import (
     PassThroughOrganizer,
+    RecordingStageGate,
     fixed_scope,
 )
 from tests.agent.answering_runner._harness import (
@@ -198,6 +199,7 @@ def _runner(
     )
     runner = AnsweringRunner(
         phases_factory=lambda: phases,
+        stage_gate=RecordingStageGate(),
         events=events,  # type: ignore[arg-type]
     )
     return runner, answerer, factory

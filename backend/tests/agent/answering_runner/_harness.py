@@ -25,6 +25,7 @@ from app.agent.answering.evidence_answer.contract import (
     EvidenceAnswerInput,
 )
 from app.agent.answering_runner import AnsweringRunner, RunIdentity, RunInput
+from app.agent.contract import AnsweringStage
 from app.agent.evidence_collection import CollectedNews
 from app.agent.evidence_collection.external_search import ExternalSearchService
 from app.agent.evidence_collection.external_search.contract import (
@@ -44,7 +45,7 @@ from app.agent.planning.contract import (
     TargetTimeWindow,
 )
 from app.agent.research_handoff import ResearchHandoff, ResearchHandoffInput
-from app.agent.running.state import AnswerGenerationStarted
+from app.agent.running.state import CanContinue, CannotContinue
 from app.analysis.analyzed_article import InScopeAnalyzedArticle
 from app.analysis.assessment.domain.result import InScope, InScopeCategory
 
@@ -55,57 +56,33 @@ AS_OF = datetime(2026, 7, 20, 9, 30, tzinfo=UTC)
 DEFAULT_TARGET_TIME_WINDOW = TargetTimeWindow(kind="last_n_days", days=1)
 
 
-class AllowAnswerGenerationStart:
-    def __init__(self, timeline: list[str] | None = None) -> None:
-        self._timeline = timeline
-        self.calls = 0
-        self.start_calls = 0
-        self.authorize_calls = 0
+class RecordingStageGate:
+    """問い合わせた段階を順に記録し、stop_atの段階でだけ止まった理由を返す。"""
 
-    async def start_answer_generation(self) -> AnswerGenerationStarted:
-        self.calls += 1
-        self.start_calls += 1
-        if self._timeline is not None:
-            self._timeline.append("answer_start")
-        return AnswerGenerationStarted(RUN_ID, AS_OF)
-
-    async def authorize_answer_regeneration(self) -> None:
-        self.authorize_calls += 1
-
-
-class ScriptedAnswerGenerationRepository:
     def __init__(
         self,
         *,
-        start: AnswerGenerationStarted | BaseException = AnswerGenerationStarted(
-            RUN_ID, AS_OF
-        ),
-        authorizes: list[BaseException | None] | None = None,
         timeline: list[str] | None = None,
+        stop_at: AnsweringStage | None = None,
+        stopped: CannotContinue | None = None,
+        error: BaseException | None = None,
     ) -> None:
-        self.calls = 0
-        self.start_calls = 0
-        self.authorize_calls = 0
-        self._start = start
-        self._authorizes = list(authorizes or [])
+        self.stages: list[AnsweringStage] = []
         self._timeline = timeline
+        self._stop_at = stop_at
+        self._stopped = stopped
+        self._error = error
 
-    async def start_answer_generation(self) -> AnswerGenerationStarted:
-        self.calls += 1
-        self.start_calls += 1
+    async def enter(self, stage: AnsweringStage) -> CanContinue | CannotContinue:
+        self.stages.append(stage)
         if self._timeline is not None:
-            self._timeline.append("answer_start")
-        if isinstance(self._start, BaseException):
-            raise self._start
-        return self._start
-
-    async def authorize_answer_regeneration(self) -> None:
-        self.authorize_calls += 1
-        if not self._authorizes:
-            return
-        outcome = self._authorizes.pop(0)
-        if outcome is not None:
-            raise outcome
+            self._timeline.append(f"enter:{stage}")
+        if stage == self._stop_at:
+            if self._error is not None:
+                raise self._error
+            if self._stopped is not None:
+                return self._stopped
+        return CanContinue()
 
 
 def review_draft(

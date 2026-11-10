@@ -17,13 +17,13 @@ import logfire
 
 from app.agent.phase_span import agent_phase
 from app.agent.recording.types import PhaseStatus
-from app.agent.running.stop import AnswerGenerationStopped
 
 __all__ = [
     "DirectAnswerFailed",
     "DirectAnswerOutcome",
     "DirectAnswerRecorder",
     "DirectAnswerRecording",
+    "DirectAnswerStopped",
     "DirectAnswerSucceeded",
     "LogfireDirectAnswerRecorder",
     "logfire_direct_answer_recorder",
@@ -64,7 +64,14 @@ class DirectAnswerFailed:
             raise ValueError("attempt_count must be nonnegative")
 
 
-type DirectAnswerOutcome = DirectAnswerSucceeded | DirectAnswerFailed
+@dataclass(frozen=True, slots=True)
+class DirectAnswerStopped:
+    """書き直す前にRunが止まり、生成をやめた直接回答工程の結論。"""
+
+
+type DirectAnswerOutcome = (
+    DirectAnswerSucceeded | DirectAnswerFailed | DirectAnswerStopped
+)
 
 
 class DirectAnswerRecording(Protocol):
@@ -94,7 +101,7 @@ class _DirectAnswerRecording:
 @dataclass(frozen=True, slots=True)
 class _DirectAnswerExit:
     status: PhaseStatus
-    outcome: DirectAnswerOutcome | None
+    outcome: DirectAnswerSucceeded | DirectAnswerFailed | None
     error: BaseException | None
 
     @classmethod
@@ -104,32 +111,37 @@ class _DirectAnswerExit:
         outcome: DirectAnswerOutcome | None,
         error: BaseException | None,
     ) -> _DirectAnswerExit:
-        if isinstance(
-            error,
-            asyncio.CancelledError | GeneratorExit | AnswerGenerationStopped,
-        ):
+        if isinstance(error, asyncio.CancelledError | GeneratorExit):
             return cls(
                 status=PhaseStatus.STOPPED,
                 outcome=None,
                 error=error,
             )
-        if isinstance(outcome, DirectAnswerSucceeded) and error is None:
-            return cls(
-                status=PhaseStatus.COMPLETED,
-                outcome=outcome,
-                error=None,
-            )
-        if isinstance(outcome, DirectAnswerFailed):
-            return cls(
-                status=PhaseStatus.FAILED,
-                outcome=outcome,
-                error=error,
-            )
-        return cls(
-            status=PhaseStatus.FAILED,
-            outcome=None,
-            error=error,
-        )
+        match outcome:
+            case DirectAnswerSucceeded() if error is None:
+                return cls(
+                    status=PhaseStatus.COMPLETED,
+                    outcome=outcome,
+                    error=None,
+                )
+            case DirectAnswerStopped() if error is None:
+                return cls(
+                    status=PhaseStatus.STOPPED,
+                    outcome=None,
+                    error=None,
+                )
+            case DirectAnswerFailed():
+                return cls(
+                    status=PhaseStatus.FAILED,
+                    outcome=outcome,
+                    error=error,
+                )
+            case _:
+                return cls(
+                    status=PhaseStatus.FAILED,
+                    outcome=None,
+                    error=error,
+                )
 
 
 class LogfireDirectAnswerRecorder:
@@ -244,7 +256,7 @@ def _record_outcome(direct_answer_exit: _DirectAnswerExit) -> None:
         return
 
 
-def _outcome_label(outcome: DirectAnswerOutcome | None) -> str:
+def _outcome_label(outcome: DirectAnswerSucceeded | DirectAnswerFailed | None) -> str:
     if isinstance(outcome, DirectAnswerSucceeded):
         return "succeeded"
     if isinstance(outcome, DirectAnswerFailed):

@@ -34,11 +34,12 @@ from app.ai_providers.gemini.settings import GeminiConnectionSettings
 def test_answering_runner_builder_rejects_public_client_injection(
     unexpected_argument: str,
 ) -> None:
+    """runnerの組み立てはHTTPクライアントの差し込みを受け付けない。"""
     with pytest.raises(TypeError):
         composition.build_answering_runner(
-            schedule_deadline_check=_schedule_deadline_check,
             session_factory=object(),
-            repository=object(),
+            stage_gate=object(),
+            answer_generation_gate=object(),
             **{unexpected_argument: object()},
         )
 
@@ -311,6 +312,7 @@ class _KeywordObject:
 def test_build_answering_phases_wires_planner_to_shared_gemini_caller_scope(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """工程の組み立ては計画にGeminiの呼び出し口を、回答2工程に同じ回答の窓口を渡す。"""
     from app.agent.answering.direct_answer import service as direct_service
     from app.agent.answering.direct_answer.agent import DIRECT_ANSWER_AGENT
     from app.agent.answering.evidence_answer import service as evidence_service
@@ -362,11 +364,10 @@ def test_build_answering_phases_wires_planner_to_shared_gemini_caller_scope(
         lambda **kwargs: internal_search_calls.append(kwargs) or internal_search,
     )
 
-    answer_start = object()
+    answer_generation_gate = object()
     phases = composition._build_answering_phases(
-        schedule_deadline_check=_schedule_deadline_check,
         session_factory=object(),
-        repository=answer_start,
+        answer_generation_gate=answer_generation_gate,
         events=events,
     )
 
@@ -392,20 +393,16 @@ def test_build_answering_phases_wires_planner_to_shared_gemini_caller_scope(
         {
             "agent": DIRECT_ANSWER_AGENT,
             "llm_text_streamer_scope_factory": activate_gemini_llm_caller,
-            "repository": answer_start,
-            "schedule_deadline_check": _schedule_deadline_check,
+            "gate": answer_generation_gate,
             "delta_reporter": None,
-            "progress": None,
         }
     ]
     assert evidence_calls == [
         {
             "agent": EVIDENCE_ANSWER_AGENT,
             "llm_text_streamer_scope_factory": activate_gemini_llm_caller,
-            "repository": answer_start,
-            "schedule_deadline_check": _schedule_deadline_check,
+            "gate": answer_generation_gate,
             "delta_reporter": None,
-            "progress": None,
         }
     ]
 
@@ -413,6 +410,7 @@ def test_build_answering_phases_wires_planner_to_shared_gemini_caller_scope(
 def test_build_answering_phases_wires_query_embedding_cache_to_embedder_identity(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """内部検索のキャッシュは、embedderが使うspecと同じ識別子で組み立てられる。"""
     from app.agent.evidence_collection.internal_search import (
         article_repository,
     )
@@ -442,9 +440,8 @@ def test_build_answering_phases_wires_query_embedding_cache_to_embedder_identity
     )
 
     composition._build_answering_phases(
-        schedule_deadline_check=_schedule_deadline_check,
         session_factory=session_factory,
-        repository=object(),
+        answer_generation_gate=object(),
     )
 
     cache = internal_search_calls[0]["query_embedding_cache"]
@@ -457,13 +454,14 @@ def test_build_answering_phases_wires_query_embedding_cache_to_embedder_identity
 def test_build_answering_runner_captures_phase_dependencies_without_building_them(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """runnerは段階の口を持ち、工程は依存を覚えておくだけでRunごとに組み立てる。"""
     captured: list[dict[str, object]] = []
     phase_bundle = object()
     session_factory = object()
-    progress = object()
+    stage_gate = object()
     events = object()
     delta_reporter = object()
-    answer_start = object()
+    answer_generation_gate = object()
 
     monkeypatch.setattr(
         composition,
@@ -473,24 +471,22 @@ def test_build_answering_runner_captures_phase_dependencies_without_building_the
     )
 
     runner = composition.build_answering_runner(
-        schedule_deadline_check=_schedule_deadline_check,
         session_factory=session_factory,
-        repository=answer_start,
-        progress=progress,
+        stage_gate=stage_gate,
+        answer_generation_gate=answer_generation_gate,
         events=events,
         delta_reporter=delta_reporter,
     )
 
     assert captured == []
+    assert runner._stage_gate is stage_gate
     assert runner._phases_factory() is phase_bundle
     assert captured == [
         {
             "session_factory": session_factory,
-            "repository": answer_start,
-            "schedule_deadline_check": _schedule_deadline_check,
+            "answer_generation_gate": answer_generation_gate,
             "events": events,
             "delta_reporter": delta_reporter,
-            "progress": progress,
         }
     ]
 
@@ -498,6 +494,7 @@ def test_build_answering_runner_captures_phase_dependencies_without_building_the
 def test_composition_injects_same_live_controls_into_both_answer_services(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """回答2工程には同じ回答の窓口と下書きのreporterが渡る。"""
     import app.agent.answering.direct_answer.service as direct_service_module
     import app.agent.answering.evidence_answer.service as evidence_service_module
     import app.agent.evidence_collection.internal_search.ai.gemini as embedder_module
@@ -543,19 +540,15 @@ def test_composition_injects_same_live_controls_into_both_answer_services(
         lambda **_kwargs: object(),
     )
     delta_reporter = object()
-    answer_start = object()
-    progress = object()
+    answer_generation_gate = object()
 
     phases = composition._build_answering_phases(
-        schedule_deadline_check=_schedule_deadline_check,
         session_factory=cast(async_sessionmaker[AsyncSession], object()),
-        repository=answer_start,
+        answer_generation_gate=answer_generation_gate,
         delta_reporter=delta_reporter,
-        progress=progress,
     )
 
-    assert captured["direct"]["repository"] is answer_start
-    assert captured["direct"]["progress"] is progress
+    assert captured["direct"]["gate"] is answer_generation_gate
     assert captured["direct"]["delta_reporter"] is delta_reporter
     assert "continuation" not in captured["direct"]
     assert captured["direct"]["agent"] is DIRECT_ANSWER_AGENT
@@ -563,8 +556,7 @@ def test_composition_injects_same_live_controls_into_both_answer_services(
         captured["direct"]["llm_text_streamer_scope_factory"]
         is composition.activate_gemini_llm_caller
     )
-    assert captured["evidence"]["repository"] is answer_start
-    assert captured["evidence"]["progress"] is progress
+    assert captured["evidence"]["gate"] is answer_generation_gate
     assert captured["evidence"]["delta_reporter"] is delta_reporter
     assert "continuation" not in captured["evidence"]
     assert captured["evidence"]["agent"] is EVIDENCE_ANSWER_AGENT
@@ -576,7 +568,3 @@ def test_composition_injects_same_live_controls_into_both_answer_services(
     assert phases.collector.internal_search is internal_search
     assert phases.direct_answerer is not None
     assert phases.evidence_answerer is not None
-
-
-def _schedule_deadline_check(*_args):
-    pass

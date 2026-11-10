@@ -1,4 +1,4 @@
-"""AgentRunStateRepository.start_attempt の戻り値 assertion。"""
+"""AgentRunStateService.start_attempt の戻り値 assertion。"""
 
 from __future__ import annotations
 

@@ -6,7 +6,9 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Coroutine
 from datetime import UTC, date, datetime, timedelta
+from typing import Any
 from uuid import UUID
 
 import pytest
@@ -16,7 +18,6 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from app.agent.running.deadline.deadline_exceeded import _recover_deadline_exceeded_runs
 from app.agent.running.finish_notice import ClosedRunningRun
 from app.agent.running.state import CancelledByUser, FailureRecorded
-from app.agent.running.state_repository import AgentRunStateRepository
 from app.agent.running.types import AgentRunErrorCode, AgentRunStatus
 from app.models.agent_message import AgentMessage
 from app.models.agent_run import AgentRun
@@ -25,6 +26,11 @@ from app.models.agent_user_daily_quota import AgentUserDailyQuota
 from tests.agent.run_deadline.clock import (
     sweep_deadline_exceeded_runs_at,
     sweep_deadline_exceeded_runs_for_thread_at,
+)
+from tests.agent.running._state_service import (
+    ClosedRunNotices,
+    CommitGate,
+    state_service,
 )
 from tests.conftest import TEST_USER_ID
 
@@ -382,23 +388,28 @@ async def test_sweep_preserves_failure_or_cancellation_that_wins_run_lock(
         )
         await session.commit()
 
+    notices = ClosedRunNotices()
+    commit_gate = CommitGate(session_factory)
+    service = state_service(
+        commit_gate,  # type: ignore[arg-type]
+        notices=notices,
+        now=terminal_time,
+    )
     async with (
-        session_factory() as terminal_session,
         session_factory() as sweep_session,
         session_factory() as observer,
     ):
+        terminal_task: asyncio.Task[object] | None = None
         sweep_task: asyncio.Task[object] | None = None
         try:
-            await terminal_session.begin()
-            repository = AgentRunStateRepository(terminal_session)
+            terminal_operation: Coroutine[Any, Any, object]
             if terminalizer == "fail":
-                failure = await repository.record_failure(
+                terminal_operation = service.record_failure(
                     run.id,
                     attempt_epoch=2,
                     error_code=AgentRunErrorCode.INTERNAL_ERROR,
-                    now=terminal_time,
                 )
-                assert (failure, repository.closed_runs) == (
+                expected_terminal = (
                     FailureRecorded(),
                     [
                         ClosedRunningRun(
@@ -410,12 +421,8 @@ async def test_sweep_preserves_failure_or_cancellation_that_wins_run_lock(
                     ],
                 )
             else:
-                cancellation = await repository.cancel_for_user(
-                    run.id,
-                    user_id=_USER_ID,
-                    now=terminal_time,
-                )
-                assert (cancellation, repository.closed_runs) == (
+                terminal_operation = service.cancel_for_user(run.id, user_id=_USER_ID)
+                expected_terminal = (
                     CancelledByUser(),
                     [
                         ClosedRunningRun(
@@ -426,6 +433,8 @@ async def test_sweep_preserves_failure_or_cancellation_that_wins_run_lock(
                         )
                     ],
                 )
+            terminal_task = asyncio.create_task(terminal_operation)
+            await asyncio.wait_for(commit_gate.reached.wait(), timeout=5)
 
             await sweep_session.begin()
             sweep_pid = await sweep_session.scalar(text("SELECT pg_backend_pid()"))
@@ -440,17 +449,21 @@ async def test_sweep_preserves_failure_or_cancellation_that_wins_run_lock(
             )
             await _wait_until_blocked(observer, sweep_pid)
 
-            await terminal_session.commit()
+            commit_gate.open()
+            terminal_result = await asyncio.wait_for(terminal_task, timeout=5)
             sweep_result = await asyncio.wait_for(sweep_task, timeout=5)
             await sweep_session.commit()
         finally:
-            if sweep_task is not None:
-                if not sweep_task.done():
-                    sweep_task.cancel()
-                await asyncio.gather(sweep_task, return_exceptions=True)
-            for session in (terminal_session, sweep_session, observer):
+            for task in (terminal_task, sweep_task):
+                if task is not None:
+                    if not task.done():
+                        task.cancel()
+                    await asyncio.gather(task, return_exceptions=True)
+            for session in (sweep_session, observer):
                 if session.in_transaction():
                     await session.rollback()
+
+    assert (terminal_result, notices.closed_runs) == expected_terminal
 
     persisted = await _persisted_run(session_factory, run.id)
     assert sweep_result.total_count == 0

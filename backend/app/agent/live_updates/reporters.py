@@ -6,8 +6,8 @@ import asyncio
 from collections.abc import Awaitable
 
 from app.agent.contract import (
+    AnsweringStage,
     AnswerProgressEvent,
-    AnswerProgressStage,
 )
 from app.agent.live_updates.stream import (
     AgentRunLiveStreamActivityEvent,
@@ -22,10 +22,10 @@ class AgentRunLiveStageReporter:
     def __init__(self, stream_publisher: AgentRunLiveStreamPublisher) -> None:
         self._stream_publisher = stream_publisher
 
-    async def stage_changed(self, stage: AnswerProgressStage) -> None:
+    async def stage_changed(self, stage: AnsweringStage) -> None:
         await _publish(self._publish_stream(stage))
 
-    async def _publish_stream(self, stage: AnswerProgressStage) -> None:
+    async def _publish_stream(self, stage: AnsweringStage) -> None:
         await self._stream_publisher.publish(AgentRunLiveStreamStageEvent(stage=stage))
 
 

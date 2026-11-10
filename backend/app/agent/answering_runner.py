@@ -3,8 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Iterator
-from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Protocol, assert_never
@@ -15,11 +13,13 @@ from logfire import LogfireSpan
 
 from app.agent.answering.contract import AnsweringRequest
 from app.agent.answering.direct_answer.contract import (
+    DirectAnswerDraft,
     DirectAnswerer,
     DirectAnswerInput,
 )
 from app.agent.answering.direct_answer.failure import DirectAnswerError
 from app.agent.answering.evidence_answer.contract import (
+    EvidenceAnswerDraft,
     EvidenceAnswerer,
     EvidenceAnswerInput,
 )
@@ -32,11 +32,10 @@ from app.agent.contract import (
     AnswerEventReporter,
     AnswerPlanSummary,
     AnswerProgressEvent,
-    AnswerProgressReporter,
-    AnswerProgressStage,
     AnswerQuestionResult,
     AnswerSource,
     EvidenceReviewSelectedEvent,
+    StageGate,
 )
 from app.agent.evidence_collection import CollectedNews, EvidenceCollector
 from app.agent.evidence_review import (
@@ -56,7 +55,14 @@ from app.agent.planning.failure import PlanningError
 from app.agent.research_handoff.handoff import ResearchHandoff
 from app.agent.research_handoff.handoff_input import ResearchHandoffInput
 from app.agent.research_handoff.service import ResearchHandoffOrganizer
-from app.agent.running.stop import AnswerGenerationStopped
+from app.agent.running.state import (
+    AttemptSuperseded,
+    CancelledByUser,
+    CanContinue,
+    CannotContinue,
+    DeadlineExceeded,
+    RunNotFound,
+)
 from app.agent.threads.contracts import ThreadMessageSnapshot
 from app.ai_providers.errors import AIProviderError
 from app.shared.errors import ApplicationError
@@ -135,11 +141,11 @@ class AnsweringRunner:
         self,
         *,
         phases_factory: AnsweringPhasesFactory,
-        progress: AnswerProgressReporter | None = None,
+        stage_gate: StageGate,
         events: AnswerEventReporter | None = None,
     ) -> None:
         self._phases_factory = phases_factory
-        self._progress = progress
+        self._stage_gate = stage_gate
         self._events = events
 
     async def run(
@@ -147,13 +153,22 @@ class AnsweringRunner:
         input: RunInput,
         *,
         identity: RunIdentity,
-    ) -> RunResult:
-        with _answering_run_span(run_id=identity.run_id) as run_span:
+    ) -> RunResult | CannotContinue:
+        with logfire.span(_SPAN_NAME, run_id=str(identity.run_id)) as run_span:
             try:
                 previous_answer = _latest_assistant_answer(input.history)
                 phases = self._phases_factory()
 
-                await self._report_progress("planning")
+                match await self._stage_gate.enter("planning"):
+                    case CanContinue():
+                        pass
+                    case (
+                        CancelledByUser()
+                        | DeadlineExceeded()
+                        | AttemptSuperseded()
+                        | RunNotFound()
+                    ) as stopped:
+                        return stopped
                 planning_input = PlanningInput(
                     question=input.question,
                     history=input.history,
@@ -166,26 +181,44 @@ class AnsweringRunner:
                     as_of=identity.as_of,
                 )
                 plan = await phases.planner.plan(planning_input)
-                research_handoff: ResearchHandoff | None
                 match plan:
                     case DirectAnswerPlan():
-                        answer = await self._answer_directly(
+                        return await self._answer_directly(
                             phases=phases,
                             request=answering_request,
                             previous_answer=previous_answer,
                         )
-                        research_handoff = None
                     case SearchPlan():
-                        await self._report_progress("evidence_collection")
+                        match await self._stage_gate.enter("evidence_collection"):
+                            case CanContinue():
+                                pass
+                            case (
+                                CancelledByUser()
+                                | DeadlineExceeded()
+                                | AttemptSuperseded()
+                                | RunNotFound()
+                            ) as stopped:
+                                return stopped
                         collected_news = await phases.collector.collect(
                             plan=plan,
                             as_of=answering_request.as_of,
                         )
-                        evidence_run = await self._review_evidence(
+                        match await self._review_evidence(
                             phases=phases,
                             collected_news=collected_news,
                             as_of=answering_request.as_of,
-                        )
+                        ):
+                            case (
+                                EvidenceRunCompleted() | EvidenceRunFailed()
+                            ) as evidence_run:
+                                pass
+                            case (
+                                CancelledByUser()
+                                | DeadlineExceeded()
+                                | AttemptSuperseded()
+                                | RunNotFound()
+                            ) as stopped:
+                                return stopped
                         _record_evidence_run_span_attributes(
                             run_span,
                             collected_news=collected_news,
@@ -198,7 +231,7 @@ class AnsweringRunner:
                             evidence_run=evidence_run,
                             as_of=answering_request.as_of,
                         )
-                        answer, research_handoff = await self._answer_while_organizing(
+                        return await self._answer_while_organizing(
                             phases=phases,
                             request=answering_request,
                             plan=plan,
@@ -209,10 +242,6 @@ class AnsweringRunner:
                         )
                     case _ as unreachable:
                         assert_never(unreachable)
-                return RunResult(
-                    final_output=answer,
-                    research_handoff=research_handoff,
-                )
             # LLM呼び出し口の開閉で起きるAIの失敗は工程の外なので、ここで包む。
             except (
                 PlanningError,
@@ -232,26 +261,34 @@ class AnsweringRunner:
         evidence_run: EvidenceRunResult,
         run_span: LogfireSpan,
         handoff_input: ResearchHandoffInput | None,
-    ) -> tuple[AnswerQuestionResult, ResearchHandoff | None]:
+    ) -> RunResult | CannotContinue:
         """回答のストリーミングと並行して、次のリサーチで必要な情報を整理する
 
-        整理が間に合わない・失敗した場合は台帳だけを残す。停止と例外では
-        並行taskをcancelして合流してから、元の例外をそのまま送出する。
+        整理が間に合わない・失敗した場合は調査の履歴だけを残す。Runが止まったときと
+        例外では並行taskをcancelして合流してから、止まった理由を返すか元の例外を送出する。
         """
         if handoff_input is None:
-            answer = await self._answer_from_evidence(
+            match await self._answer_from_evidence(
                 phases=phases,
                 request=request,
                 plan=plan,
                 collected_news=collected_news,
                 evidence_run=evidence_run,
                 run_span=run_span,
-            )
-            return answer, None
+            ):
+                case AnswerQuestionResult() as answer:
+                    return RunResult(final_output=answer, research_handoff=None)
+                case (
+                    CancelledByUser()
+                    | DeadlineExceeded()
+                    | AttemptSuperseded()
+                    | RunNotFound()
+                ) as stopped:
+                    return stopped
 
         organizing = asyncio.ensure_future(phases.organizer.organize(handoff_input))
         try:
-            answer = await self._answer_from_evidence(
+            answered = await self._answer_from_evidence(
                 phases=phases,
                 request=request,
                 plan=plan,
@@ -260,9 +297,20 @@ class AnsweringRunner:
                 run_span=run_span,
             )
         except BaseException:
-            # 停止・cancel・回答失敗。整理を畳んで合流してから元の例外を送出する。
+            # cancel・回答失敗。整理を畳んで合流してから元の例外を送出する。
             await _cancel_and_join(organizing)
             raise
+        match answered:
+            case AnswerQuestionResult() as answer:
+                pass
+            case (
+                CancelledByUser()
+                | DeadlineExceeded()
+                | AttemptSuperseded()
+                | RunNotFound()
+            ) as stopped:
+                await _cancel_and_join(organizing)
+                return stopped
 
         try:
             research_handoff = await asyncio.wait_for(
@@ -274,7 +322,7 @@ class AnsweringRunner:
             research_handoff = handoff_input.handoff
         finally:
             await _cancel_and_join(organizing)
-        return answer, research_handoff
+        return RunResult(final_output=answer, research_handoff=research_handoff)
 
     async def _answer_directly(
         self,
@@ -282,17 +330,28 @@ class AnsweringRunner:
         phases: AnsweringPhases,
         request: AnsweringRequest,
         previous_answer: str,
-    ) -> AnswerQuestionResult:
-        draft = await phases.direct_answerer.answer(
+    ) -> RunResult | CannotContinue:
+        match await phases.direct_answerer.answer(
             DirectAnswerInput(request=request, previous_answer=previous_answer)
-        )
-        return AnswerQuestionResult(
-            status="answered",
-            answer=draft.answer,
-            sources=[],
-            missing_aspects=[],
-            plan_summary=AnswerPlanSummary(plan_type="direct_answer"),
-        )
+        ):
+            case DirectAnswerDraft(answer=answer):
+                return RunResult(
+                    final_output=AnswerQuestionResult(
+                        status="answered",
+                        answer=answer,
+                        sources=[],
+                        missing_aspects=[],
+                        plan_summary=AnswerPlanSummary(plan_type="direct_answer"),
+                    ),
+                    research_handoff=None,
+                )
+            case (
+                CancelledByUser()
+                | DeadlineExceeded()
+                | AttemptSuperseded()
+                | RunNotFound()
+            ) as stopped:
+                return stopped
 
     async def _review_evidence(
         self,
@@ -300,7 +359,7 @@ class AnsweringRunner:
         phases: AnsweringPhases,
         collected_news: CollectedNews,
         as_of: datetime,
-    ) -> EvidenceRunResult:
+    ) -> EvidenceRunResult | CannotContinue:
         """ヒットゼロのRunは精査を開始せず、stageもselected eventにも反映されない。"""
         if not collected_news.has_hits:
             return EvidenceRunCompleted(
@@ -308,7 +367,16 @@ class AnsweringRunner:
                 review_missing=(),
             )
 
-        await self._report_progress("evidence_review")
+        match await self._stage_gate.enter("evidence_review"):
+            case CanContinue():
+                pass
+            case (
+                CancelledByUser()
+                | DeadlineExceeded()
+                | AttemptSuperseded()
+                | RunNotFound()
+            ) as stopped:
+                return stopped
         evidence_run = await phases.reviewer.review(
             tasks=collected_news.tasks,
             as_of=as_of,
@@ -326,7 +394,7 @@ class AnsweringRunner:
         collected_news: CollectedNews,
         evidence_run: EvidenceRunResult,
         run_span: LogfireSpan,
-    ) -> AnswerQuestionResult:
+    ) -> AnswerQuestionResult | CannotContinue:
         if isinstance(evidence_run, EvidenceRunCompleted):
             answer_evidence = evidence_run.answer_evidence
             review_missing = evidence_run.review_missing
@@ -335,14 +403,23 @@ class AnsweringRunner:
             review_missing = ()
         evidence = build_answer_input_evidence(answer_evidence)
 
-        answer_outcome = await phases.evidence_answerer.answer(
+        match await phases.evidence_answerer.answer(
             EvidenceAnswerInput(
                 request=request,
                 evidence=tuple(evidence),
                 target_time_window=plan.target_time_window,
                 review_missing=review_missing,
             )
-        )
+        ):
+            case EvidenceAnswerDraft() as answer_outcome:
+                pass
+            case (
+                CancelledByUser()
+                | DeadlineExceeded()
+                | AttemptSuperseded()
+                | RunNotFound()
+            ) as stopped:
+                return stopped
         result = assemble_evidence_result(
             plan=plan,
             collected_news=collected_news,
@@ -369,11 +446,6 @@ class AnsweringRunner:
         if self._events is None:
             return
         await self._events.event_occurred(event)
-
-    async def _report_progress(self, stage: AnswerProgressStage) -> None:
-        if self._progress is None:
-            return
-        await self._progress.stage_changed(stage)
 
 
 async def _cancel_and_join(task: asyncio.Future[ResearchHandoff]) -> None:
@@ -431,19 +503,6 @@ def _record_citation_span_attributes(
         "external_cited_count",
         sum(1 for source in sources if source.kind == "external_url"),
     )
-
-
-@contextmanager
-def _answering_run_span(*, run_id: UUID) -> Iterator[LogfireSpan]:
-    """正常な停止制御を error にせず、同じ例外を span 終了後に再送出する。"""
-    stopped: AnswerGenerationStopped | None = None
-    with logfire.span(_SPAN_NAME, run_id=str(run_id)) as span:
-        try:
-            yield span
-        except AnswerGenerationStopped as exc:
-            stopped = exc
-    if stopped is not None:
-        raise stopped
 
 
 def _latest_assistant_answer(

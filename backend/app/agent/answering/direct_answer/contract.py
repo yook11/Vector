@@ -3,17 +3,18 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import ClassVar, Protocol
+from typing import TYPE_CHECKING, ClassVar, Protocol
 
 from pydantic import BaseModel, ConfigDict
 
 from app.agent.answering.contract import AnsweringRequest
 from app.agent.contract import NonBlankText
-from app.agent.running.stop import AnswerGenerationStopped
 from app.shared.errors import ApplicationError
 
+if TYPE_CHECKING:
+    from app.agent.running.state import CannotContinue
+
 __all__ = [
-    "AnswerGenerationStopped",
     "DirectAnswerInput",
     "DirectAnswerDraft",
     "DirectAnswerer",
@@ -49,7 +50,9 @@ class DirectAnswerInput:
 class DirectAnswerer(Protocol):
     """検索なしで自然に回答する工程。
 
-    分類済み工程失敗のDirectAnswerErrorまたはroutine stop signalを伝播する。
+    分類済み工程失敗はDirectAnswerErrorで伝播し、Runが止まったらその理由を返す。
     """
 
-    async def answer(self, input: DirectAnswerInput) -> DirectAnswerDraft: ...
+    async def answer(
+        self, input: DirectAnswerInput
+    ) -> DirectAnswerDraft | CannotContinue: ...

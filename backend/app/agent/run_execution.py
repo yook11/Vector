@@ -9,9 +9,13 @@ from uuid import UUID
 import redis.asyncio as aioredis
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from app.agent.answering_runner import AnsweringRunError, RunIdentity, RunInput
+from app.agent.answering_runner import (
+    AnsweringRunError,
+    RunIdentity,
+    RunInput,
+    RunResult,
+)
 from app.agent.composition import build_answering_runner
-from app.agent.contract import AnswerQuestionResult
 from app.agent.live_updates.answer_delta import AgentRunLiveAnswerDeltaReporter
 from app.agent.live_updates.reporters import (
     AgentRunLiveActivityReporter,
@@ -22,14 +26,12 @@ from app.agent.research_handoff import (
     ResearchHandoff,
     recall_research_handoff,
 )
-from app.agent.running.answer_generation import (
-    AgentAnswerGenerationRepository,
-)
-from app.agent.running.continuation import AgentRunExecutionProbe
+from app.agent.running.answer_generation import AgentRunAnswerGenerationGate
 from app.agent.running.question_reading import (
     AgentRunQuestionRepository,
     UserQuestionMessage,
 )
+from app.agent.running.stage_gate import AgentRunStageGate
 from app.agent.running.state import (
     AttemptStarted,
     AttemptSuperseded,
@@ -40,7 +42,6 @@ from app.agent.running.state import (
     RunNotFound,
 )
 from app.agent.running.state_service import AgentRunStateService
-from app.agent.running.stop import AnswerGenerationStopped
 from app.agent.running.types import AgentRunErrorCode
 from app.agent.threads.contracts import ThreadMessageSnapshot
 from app.agent.threads.history import HISTORY_MESSAGE_LIMIT, normalize_run_history
@@ -58,7 +59,6 @@ async def execute_run_attempt(
     live_redis: aioredis.Redis,
     schedule_deadline_check: Callable[[UUID, datetime], None],
 ) -> None:
-    result: AnswerQuestionResult | None = None
     research_handoff: ResearchHandoff | None = None
     publishers: dict[tuple[UUID, int], AgentRunLiveStreamPublisher] = {}
 
@@ -111,11 +111,6 @@ async def execute_run_attempt(
         run_id=run_id,
         attempt_epoch=attempt_epoch,
     )
-    continuation = AgentRunExecutionProbe(
-        state_service,
-        run_id,
-        attempt_epoch,
-    )
     try:
         await stream_events.begin_attempt()
     except Exception:
@@ -126,7 +121,7 @@ async def execute_run_attempt(
 
     try:
         activity_reporter = AgentRunLiveActivityReporter(stream_events)
-        progress_reporter = AgentRunLiveStageReporter(stream_events)
+        stage_reporter = AgentRunLiveStageReporter(stream_events)
         as_of = datetime.now(UTC)
         history = await _read_history(
             session_factory,
@@ -140,19 +135,24 @@ async def execute_run_attempt(
             run_id=run_id,
         )
         answering_runner = build_answering_runner(
-            schedule_deadline_check=schedule_deadline_check,
             session_factory=session_factory,
-            repository=AgentAnswerGenerationRepository(
+            stage_gate=AgentRunStageGate(
                 state_service,
                 run_id,
                 attempt_epoch,
+                stage_reporter=stage_reporter,
             ),
-            progress=progress_reporter,
+            answer_generation_gate=AgentRunAnswerGenerationGate(
+                state_service,
+                run_id,
+                attempt_epoch,
+                schedule_deadline_check=schedule_deadline_check,
+                stage_reporter=stage_reporter,
+            ),
             events=activity_reporter,
             delta_reporter=delta_reporter,
         )
-        await continuation.ensure_can_continue()
-        run_result = await answering_runner.run(
+        run_outcome = await answering_runner.run(
             RunInput(
                 question=question.content,
                 history=tuple(history),
@@ -165,15 +165,6 @@ async def execute_run_attempt(
                 as_of=as_of,
             ),
         )
-        result = run_result.final_output
-        research_handoff = run_result.research_handoff
-    except AnswerGenerationStopped as stopped:
-        logger.info(
-            "agent_run_generation_stopped",
-            run_id=str(run_id),
-            reason=_stop_reason(stopped.stopped),
-        )
-        return
     except AnsweringRunError as exc:
         logger.info(
             "agent_run_generation_unavailable",
@@ -201,8 +192,18 @@ async def execute_run_attempt(
         )
         return
 
-    if result is None:
-        raise RuntimeError("completed run is missing its answer")
+    match run_outcome:
+        case RunResult(final_output=result, research_handoff=research_handoff):
+            pass
+        case (
+            CancelledByUser() | DeadlineExceeded() | AttemptSuperseded() | RunNotFound()
+        ) as stopped:
+            logger.info(
+                "agent_run_generation_stopped",
+                run_id=str(run_id),
+                reason=_stop_reason(stopped),
+            )
+            return
 
     serialized_research_handoff = _serialize_research_handoff(
         research_handoff,

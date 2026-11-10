@@ -6,6 +6,7 @@ taskiq の宣言のテストだけはDBを使わない。
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
 from types import SimpleNamespace
@@ -54,19 +55,19 @@ from app.agent.research_handoff import (
     ResearchTaskRecord,
 )
 from app.agent.run_enqueuer import AgentRunTrigger
+from app.agent.running.answer_generation import AgentRunAnswerGenerationGate
+from app.agent.running.stage_gate import AgentRunStageGate
 from app.agent.running.state import (
-    AnswerGenerationStarted,
     AttemptSuperseded,
     CancelledByUser,
+    CanContinue,
     CannotContinue,
     DeadlineExceeded,
     FailureRecorded,
     RunCompleted,
     RunNotFound,
 )
-from app.agent.running.state_repository import AgentRunStateRepository
 from app.agent.running.state_service import AgentRunStateService
-from app.agent.running.stop import AnswerGenerationStopped
 from app.agent.running.types import AgentRunErrorCode
 from app.agent.threads.contracts import ThreadMessageSnapshot
 from app.agent.threads.repository import AgentThreadRepository
@@ -94,6 +95,7 @@ from tests.agent.running._seed import (
 from tests.agent.running._start_run_outcomes import (
     started_attempt_epoch,
 )
+from tests.agent.running._state_service import state_service
 from tests.conftest import TEST_USER_ID
 
 _RECEIVED_AT = datetime(2026, 1, 1, tzinfo=UTC)
@@ -104,19 +106,13 @@ class FakeAgent:
         self,
         result: AnswerQuestionResult | None = None,
         exc: Exception | None = None,
-        stage: str | None = None,
     ) -> None:
         self.result = result
         self.exc = exc
-        self.stage = stage
-        self.progress = None
         self.calls: list[object] = []
 
     async def answer(self) -> AnswerQuestionResult:
         self.calls.append(None)
-        if self.stage is not None:
-            assert self.progress is not None
-            await self.progress.stage_changed(self.stage)
         if self.exc is not None:
             raise self.exc
         assert self.result is not None
@@ -139,7 +135,7 @@ class FakeAnsweringRunner:
         self.exc = exc
         self.research_handoff = research_handoff
         self.execution: object | None = None
-        self.repository: object | None = None
+        self.answer_generation_gate: object | None = None
         self.calls: list[FakeAnsweringRunnerCall] = []
 
     async def run(
@@ -147,7 +143,7 @@ class FakeAnsweringRunner:
         input: RunInput,
         *,
         identity: RunIdentity,
-    ) -> RunResult:
+    ) -> RunResult | CannotContinue:
         self.calls.append(
             FakeAnsweringRunnerCall(
                 input=input,
@@ -157,8 +153,17 @@ class FakeAnsweringRunner:
         if self.exc is not None:
             raise self.exc
         assert self.execution is not None
-        assert self.repository is not None
-        await cast(Any, self.repository).start_answer_generation()
+        assert self.answer_generation_gate is not None
+        match await cast(Any, self.answer_generation_gate).start():
+            case CanContinue():
+                pass
+            case (
+                CancelledByUser()
+                | DeadlineExceeded()
+                | AttemptSuperseded()
+                | RunNotFound()
+            ) as stopped:
+                return stopped
         final_output = await cast(Any, self.execution).answer()
         return RunResult(
             final_output=final_output,
@@ -234,11 +239,14 @@ class RevisionReportingAgent:
         self.result = result
         self.text = text
         self.delta_reporter: object | None = None
-        self.continuation: object | None = None
+        self.answer_generation_gate: object | None = None
 
     async def answer(self) -> AnswerQuestionResult:
         assert self.delta_reporter is not None
-        assert self.continuation is not None
+        assert self.answer_generation_gate is not None
+        assert await cast(Any, self.answer_generation_gate).regenerate() == (
+            CanContinue()
+        )
         await self.delta_reporter.reset(generation=2)  # type: ignore[attr-defined]
         await self.delta_reporter.append(  # type: ignore[attr-defined]
             generation=2,
@@ -264,40 +272,56 @@ class CapturingDeltaReporter:
         CapturingDeltaReporter.instances.append(self)
 
 
-class CapturingExecutionProbe:
-    instances: list[CapturingExecutionProbe] = []
+class CapturingStageGate(AgentRunStageGate):
+    """本物の口として動き、組み立てた引数を残す。"""
+
+    instances: list[CapturingStageGate] = []
 
     def __init__(
         self,
-        state_service: object,
+        state_service: AgentRunStateService,
         run_id: UUID,
         attempt_epoch: int,
+        *,
+        stage_reporter: AgentRunLiveStageReporter,
     ) -> None:
+        super().__init__(
+            state_service, run_id, attempt_epoch, stage_reporter=stage_reporter
+        )
         self.state_service = state_service
         self.run_id = run_id
         self.attempt_epoch = attempt_epoch
-        CapturingExecutionProbe.instances.append(self)
-
-    async def ensure_can_continue(self) -> None:
-        return None
+        self.stage_reporter = stage_reporter
+        CapturingStageGate.instances.append(self)
 
 
-class CapturingAnswerStart:
-    instances: list[CapturingAnswerStart] = []
+class CapturingAnswerGenerationGate(AgentRunAnswerGenerationGate):
+    """本物の口として動き、組み立てた引数を残す。"""
+
+    instances: list[CapturingAnswerGenerationGate] = []
 
     def __init__(
         self,
-        state_service: object,
+        state_service: AgentRunStateService,
         run_id: UUID,
         attempt_epoch: int,
+        *,
+        schedule_deadline_check: Callable[[UUID, datetime], None],
+        stage_reporter: AgentRunLiveStageReporter,
     ) -> None:
+        super().__init__(
+            state_service,
+            run_id,
+            attempt_epoch,
+            schedule_deadline_check=schedule_deadline_check,
+            stage_reporter=stage_reporter,
+        )
         self.state_service = state_service
         self.run_id = run_id
         self.attempt_epoch = attempt_epoch
-        CapturingAnswerStart.instances.append(self)
-
-    async def start_answer_generation(self) -> AnswerGenerationStarted:
-        return AnswerGenerationStarted(self.run_id, datetime.now(UTC))
+        self.schedule_deadline_check = schedule_deadline_check
+        self.stage_reporter = stage_reporter
+        CapturingAnswerGenerationGate.instances.append(self)
 
 
 class ForbiddenConstruction:
@@ -331,7 +355,7 @@ def _patch_worker_execution(
 
     def build_runner(**kwargs: object) -> FakeAnsweringRunner:
         answering_runner.execution = cast(Any, execution_builder)(**kwargs)
-        answering_runner.repository = kwargs["repository"]
+        answering_runner.answer_generation_gate = kwargs["answer_generation_gate"]
         return answering_runner
 
     monkeypatch.setattr(
@@ -403,15 +427,14 @@ async def test_run_agent_answer_completes_run_and_persists_assistant_message(
     persisted_results: list[AnswerQuestionResult] = []
     completed_epochs: list[int] = []
 
-    class CapturingStateRepository(AgentRunStateRepository):
+    class CapturingStateService(AgentRunStateService):
         async def complete(
             self,
             run_id: UUID,
             *,
             attempt_epoch: int,
             result: AnswerQuestionResult,
-            research_handoff: dict[str, Any] | None = None,
-            now: datetime | None = None,
+            research_handoff: dict[str, Any] | None,
         ) -> RunCompleted | CannotContinue:
             persisted_results.append(result)
             completed_epochs.append(attempt_epoch)
@@ -420,7 +443,6 @@ async def test_run_agent_answer_completes_run_and_persists_assistant_message(
                 attempt_epoch=attempt_epoch,
                 result=result,
                 research_handoff=research_handoff,
-                now=now,
             )
 
     answering_runner = _patch_worker_execution(
@@ -428,9 +450,9 @@ async def test_run_agent_answer_completes_run_and_persists_assistant_message(
         lambda **_kwargs: fake_agent,
     )
     monkeypatch.setattr(
-        state_service_module,
-        "AgentRunStateRepository",
-        CapturingStateRepository,
+        run_execution,
+        "AgentRunStateService",
+        CapturingStateService,
     )
 
     await agent_run_tasks.run_agent_answer(
@@ -498,15 +520,14 @@ def _capture_completion_handoffs(
     """完了の保存へ渡る handoff payload を記録しつつ、本物へ委譲する。"""
     captured: list[dict[str, Any] | None] = []
 
-    class CapturingStateRepository(AgentRunStateRepository):
+    class CapturingStateService(AgentRunStateService):
         async def complete(
             self,
             run_id: UUID,
             *,
             attempt_epoch: int,
             result: AnswerQuestionResult,
-            research_handoff: dict[str, Any] | None = None,
-            now: datetime | None = None,
+            research_handoff: dict[str, Any] | None,
         ) -> RunCompleted | CannotContinue:
             captured.append(research_handoff)
             return await super().complete(
@@ -514,13 +535,12 @@ def _capture_completion_handoffs(
                 attempt_epoch=attempt_epoch,
                 result=result,
                 research_handoff=research_handoff,
-                now=now,
             )
 
     monkeypatch.setattr(
-        state_service_module,
-        "AgentRunStateRepository",
-        CapturingStateRepository,
+        run_execution,
+        "AgentRunStateService",
+        CapturingStateService,
     )
     return captured
 
@@ -819,16 +839,13 @@ async def test_run_agent_answer_completion_preserves_last_progress_stage(
     session_factory: async_sessionmaker[AsyncSession],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """回答を始めた口が送った「回答中」の段階は、完了しても1件のまま残る。"""
     async with session_factory() as session:
         _thread, _message, run = await _create_thread_message_run(session)
-    fake_agent = FakeAgent(_direct_result(), stage="answering")
+    fake_agent = FakeAgent(_direct_result())
     FakeLiveStreamPublisher.instances = []
 
-    def build_agent(**kwargs: object) -> FakeAgent:
-        fake_agent.progress = kwargs["progress"]
-        return fake_agent
-
-    _patch_worker_execution(monkeypatch, build_agent)
+    _patch_worker_execution(monkeypatch, lambda **_kwargs: fake_agent)
     monkeypatch.setattr(
         run_execution,
         "AgentRunLiveStreamPublisher",
@@ -920,15 +937,17 @@ async def test_run_agent_answer_binds_attempt_epoch_to_live_and_db_controls(
     session_factory: async_sessionmaker[AsyncSession],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """開始した世代で、liveの部品と2つの口を同じ操作・同じ段階の通知へ結びつけてrunnerに渡す。"""
     async with session_factory() as session:
         _thread, _message, run = await _create_thread_message_run(session)
     fake_agent = FakeAgent(_direct_result())
     captured_kwargs: dict[str, object] = {}
     redis = object()
+    ctx = _ctx(session_factory, agent_live_redis=redis)
     FakeLiveStreamPublisher.instances = []
     CapturingDeltaReporter.instances = []
-    CapturingExecutionProbe.instances = []
-    CapturingAnswerStart.instances = []
+    CapturingStageGate.instances = []
+    CapturingAnswerGenerationGate.instances = []
 
     def build_agent(**kwargs: object) -> FakeAgent:
         captured_kwargs.update(kwargs)
@@ -946,44 +965,43 @@ async def test_run_agent_answer_binds_attempt_epoch_to_live_and_db_controls(
         CapturingDeltaReporter,
         raising=False,
     )
+    monkeypatch.setattr(run_execution, "AgentRunStageGate", CapturingStageGate)
     monkeypatch.setattr(
         run_execution,
-        "AgentRunExecutionProbe",
-        CapturingExecutionProbe,
-        raising=False,
-    )
-    monkeypatch.setattr(
-        run_execution,
-        "AgentAnswerGenerationRepository",
-        CapturingAnswerStart,
-        raising=False,
+        "AgentRunAnswerGenerationGate",
+        CapturingAnswerGenerationGate,
     )
 
     await agent_run_tasks.run_agent_answer(
         trigger=AgentRunTrigger(run_id=run.id),
-        ctx=_ctx(session_factory, agent_live_redis=redis),
+        ctx=ctx,
     )
 
     assert len(CapturingDeltaReporter.instances) == 1
-    assert len(CapturingExecutionProbe.instances) == 1
-    assert len(CapturingAnswerStart.instances) == 1
+    assert len(CapturingStageGate.instances) == 1
+    assert len(CapturingAnswerGenerationGate.instances) == 1
     stream = FakeLiveStreamPublisher.instances[0]
     delta_reporter = CapturingDeltaReporter.instances[0]
-    probe = CapturingExecutionProbe.instances[0]
-    answer_start = CapturingAnswerStart.instances[0]
+    stage_gate = CapturingStageGate.instances[0]
+    answer_gate = CapturingAnswerGenerationGate.instances[0]
     assert delta_reporter.publisher is stream
     assert delta_reporter.run_id == run.id
     assert delta_reporter.attempt_epoch == 1
-    assert isinstance(probe.state_service, state_service_module.AgentRunStateService)
-    assert probe.run_id == run.id
-    assert probe.attempt_epoch == 1
-    assert answer_start.state_service is probe.state_service
-    assert answer_start.run_id == run.id
-    assert answer_start.attempt_epoch == 1
-    assert isinstance(captured_kwargs["progress"], AgentRunLiveStageReporter)
+    assert isinstance(
+        stage_gate.state_service, state_service_module.AgentRunStateService
+    )
+    assert (stage_gate.run_id, stage_gate.attempt_epoch) == (run.id, 1)
+    assert answer_gate.state_service is stage_gate.state_service
+    assert (answer_gate.run_id, answer_gate.attempt_epoch) == (run.id, 1)
+    assert isinstance(stage_gate.stage_reporter, AgentRunLiveStageReporter)
+    assert answer_gate.stage_reporter is stage_gate.stage_reporter
+    assert (
+        answer_gate.schedule_deadline_check
+        is ctx.state.agent_deadline_scheduler.reserve_in_background
+    )
+    assert captured_kwargs["stage_gate"] is stage_gate
+    assert captured_kwargs["answer_generation_gate"] is answer_gate
     assert captured_kwargs["delta_reporter"] is delta_reporter
-    assert "continuation" not in captured_kwargs
-    assert captured_kwargs["repository"] is answer_start
 
 
 @pytest.mark.asyncio
@@ -997,34 +1015,29 @@ async def test_answer_start_deadline_publishes_existing_terminal_event(
     FakeLiveStreamPublisher.instances = []
 
     class DeadlineAtAnswerStartRunner:
-        def __init__(self, answer_start: object) -> None:
-            self._answer_start = answer_start
+        def __init__(self, answer_generation_gate: object) -> None:
+            self._answer_generation_gate = answer_generation_gate
 
-        async def run(self, input: RunInput, *, identity: RunIdentity) -> RunResult:
+        async def run(
+            self, input: RunInput, *, identity: RunIdentity
+        ) -> RunResult | CannotContinue:
             del input, identity
             async with session_factory() as session:
                 async with session.begin():
                     persisted = await session.get(AgentRun, run.id)
                     assert persisted is not None
                     persisted.deadline_at = datetime.now(UTC) - timedelta(seconds=1)
-            with pytest.raises(AnswerGenerationStopped) as stopped:
-                await cast(Any, self._answer_start).start_answer_generation()
-            assert stopped.value.stopped == DeadlineExceeded()
-            raise stopped.value
+            stopped = await cast(Any, self._answer_generation_gate).start()
+            assert stopped == DeadlineExceeded()
+            return stopped
 
     def build_runner(**kwargs: object) -> DeadlineAtAnswerStartRunner:
-        return DeadlineAtAnswerStartRunner(kwargs["repository"])
+        return DeadlineAtAnswerStartRunner(kwargs["answer_generation_gate"])
 
     monkeypatch.setattr(
         run_execution,
         "build_answering_runner",
         build_runner,
-        raising=False,
-    )
-    monkeypatch.setattr(
-        run_execution,
-        "AgentRunExecutionProbe",
-        CapturingExecutionProbe,
         raising=False,
     )
     monkeypatch.setattr(
@@ -1096,8 +1109,8 @@ async def test_idempotent_skip_does_not_create_or_start_stream_publisher(
         )
     FakeLiveStreamPublisher.instances = []
     CapturingDeltaReporter.instances = []
-    CapturingExecutionProbe.instances = []
-    CapturingAnswerStart.instances = []
+    CapturingStageGate.instances = []
+    CapturingAnswerGenerationGate.instances = []
 
     def forbidden_builder(*_args: object, **_kwargs: object) -> None:
         pytest.fail(
@@ -1124,15 +1137,13 @@ async def test_idempotent_skip_does_not_create_or_start_stream_publisher(
     )
     monkeypatch.setattr(
         run_execution,
-        "AgentRunExecutionProbe",
+        "AgentRunStageGate",
         ForbiddenConstruction,
-        raising=False,
     )
     monkeypatch.setattr(
         run_execution,
-        "AgentAnswerGenerationRepository",
+        "AgentRunAnswerGenerationGate",
         ForbiddenConstruction,
-        raising=False,
     )
 
     await agent_run_tasks.run_agent_answer(
@@ -1142,8 +1153,8 @@ async def test_idempotent_skip_does_not_create_or_start_stream_publisher(
 
     assert FakeLiveStreamPublisher.instances == []
     assert CapturingDeltaReporter.instances == []
-    assert CapturingExecutionProbe.instances == []
-    assert CapturingAnswerStart.instances == []
+    assert CapturingStageGate.instances == []
+    assert CapturingAnswerGenerationGate.instances == []
 
 
 @pytest.mark.asyncio
@@ -1247,10 +1258,11 @@ async def test_run_agent_answer_passes_answering_runner_identity_and_history(
     runner_kwargs = runner_builder_calls[0]
     assert runner_kwargs["session_factory"] is session_factory
     assert isinstance(runner_kwargs["events"], AgentRunLiveActivityReporter)
-    assert runner_kwargs["progress"] is not None
+    assert isinstance(runner_kwargs["stage_gate"], AgentRunStageGate)
+    assert isinstance(
+        runner_kwargs["answer_generation_gate"], AgentRunAnswerGenerationGate
+    )
     assert runner_kwargs["delta_reporter"] is not None
-    assert runner_kwargs["repository"] is not None
-    assert "continuation" not in runner_kwargs
     stream = FakeLiveStreamPublisher.instances[0]
     assert stream.run_id == run.id
     assert stream.attempt_epoch == 5
@@ -1401,24 +1413,28 @@ async def test_generation_stopped_is_routine_return_without_run_transition(
     session_factory: async_sessionmaker[AsyncSession],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """古い世代として止められた回答工程は、Runを変えず終了も通知せずに戻る。"""
+    """runner が別の試行に引き継がれたことを返すと、Runを変えず終了も通知せずに戻る。"""
     async with session_factory() as session:
         _thread, _message, run = await _create_thread_message_run(session)
-    fake_agent = FakeAgent(exc=AnswerGenerationStopped(AttemptSuperseded()))
     complete_calls: list[tuple[UUID, int]] = []
     mark_failed_calls: list[tuple[UUID, int]] = []
 
-    class ObservingStateRepository(AgentRunStateRepository):
+    class SupersededRunner:
+        async def run(
+            self, input: RunInput, *, identity: RunIdentity
+        ) -> RunResult | CannotContinue:
+            del input, identity
+            return AttemptSuperseded()
+
+    class ObservingStateService(AgentRunStateService):
         async def complete(
             self,
             run_id: UUID,
             *,
             attempt_epoch: int,
             result: AnswerQuestionResult,
-            research_handoff: dict[str, Any] | None = None,
-            now: datetime | None = None,
+            research_handoff: dict[str, Any] | None,
         ) -> RunCompleted | CannotContinue:
-            assert result == fake_agent.result
             complete_calls.append((run_id, attempt_epoch))
             return AttemptSuperseded()
 
@@ -1428,20 +1444,25 @@ async def test_generation_stopped_is_routine_return_without_run_transition(
             *,
             attempt_epoch: int,
             error_code: AgentRunErrorCode,
-            now: datetime | None = None,
         ) -> FailureRecorded | CannotContinue:
             assert error_code == AgentRunErrorCode.INTERNAL_ERROR
             mark_failed_calls.append((run_id, attempt_epoch))
             return AttemptSuperseded()
 
-    _patch_delta_worker(
-        monkeypatch,
-        lambda **_kwargs: fake_agent,
+    FakeLiveStreamPublisher.instances = []
+    monkeypatch.setattr(FakeLiveStreamPublisher, "publish_outcomes", [])
+    monkeypatch.setattr(
+        run_execution, "AgentRunLiveStreamPublisher", FakeLiveStreamPublisher
     )
     monkeypatch.setattr(
-        state_service_module,
-        "AgentRunStateRepository",
-        ObservingStateRepository,
+        run_execution,
+        "build_answering_runner",
+        lambda **_kwargs: SupersededRunner(),
+    )
+    monkeypatch.setattr(
+        run_execution,
+        "AgentRunStateService",
+        ObservingStateService,
     )
 
     await agent_run_tasks.run_agent_answer(
@@ -1487,81 +1508,48 @@ async def test_generation_stopped_is_routine_return_without_run_transition(
 
 
 @pytest.mark.asyncio
-async def test_epoch_advance_before_answer_start_stops_old_worker_through_actual_probe(
+async def test_epoch_advance_before_answer_start_stops_old_worker_at_next_stage(
     read_logs,
     session_factory: async_sessionmaker[AsyncSession],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """回答開始前に世代が進むと、古いworkerは実際の継続確認で止まり、Runを変えない。"""
+    """回答開始前に世代が進むと、古いworkerは本物の口で次の工程に入るときに止まり、Runを変えない。"""
     async with session_factory() as session:
         _thread, _message, run = await _create_thread_message_run(session)
 
-    class ManualClock:
-        def __init__(self) -> None:
-            self.now = 0.0
-
-        def __call__(self) -> float:
-            return self.now
-
-    clock = ManualClock()
-    production_probe_type = run_execution.AgentRunExecutionProbe
-    probe_bindings: list[tuple[object, UUID, int]] = []
     complete_calls: list[tuple[UUID, int]] = []
     mark_failed_calls: list[tuple[UUID, int]] = []
-    probes: list[object] = []
-
-    def build_probe(
-        bound_state_service: AgentRunStateService,
-        run_id: UUID,
-        attempt_epoch: int,
-    ) -> object:
-        probe_bindings.append((bound_state_service, run_id, attempt_epoch))
-        probe = production_probe_type(
-            bound_state_service,
-            run_id,
-            attempt_epoch,
-            clock=clock,
-        )
-        probes.append(probe)
-        return probe
+    CapturingStageGate.instances = []
 
     class EpochAdvancingRunner:
-        def __init__(self) -> None:
-            self.continuation: object | None = None
+        def __init__(self, stage_gate: object) -> None:
+            self._stage_gate = stage_gate
 
-        async def run(self, input: RunInput, *, identity: RunIdentity) -> RunResult:
-            assert self.continuation is not None
-            await self.continuation.ensure_can_continue()  # type: ignore[attr-defined]
-            async with session_factory() as restart_session:
-                async with restart_session.begin():
-                    attempt_epoch = started_attempt_epoch(
-                        await AgentRunStateRepository(restart_session).start_attempt(
-                            run.id
-                        )
-                    )
+        async def run(
+            self, input: RunInput, *, identity: RunIdentity
+        ) -> RunResult | CannotContinue:
+            del input, identity
+            gate = cast(Any, self._stage_gate)
+            assert await gate.enter("planning") == CanContinue()
+            attempt_epoch = started_attempt_epoch(
+                await state_service(session_factory).start_attempt(run.id)
+            )
             assert attempt_epoch == 2
-            clock.now = 2.0
-            with pytest.raises(AnswerGenerationStopped) as stopped:
-                await self.continuation.ensure_can_continue()  # type: ignore[attr-defined]
-            assert stopped.value.stopped == AttemptSuperseded()
-            raise stopped.value
-
-    fake_runner = EpochAdvancingRunner()
+            stopped = await gate.enter("evidence_collection")
+            assert stopped == AttemptSuperseded()
+            return stopped
 
     def build_runner(**kwargs: object) -> EpochAdvancingRunner:
-        del kwargs
-        fake_runner.continuation = probes[0]
-        return fake_runner
+        return EpochAdvancingRunner(kwargs["stage_gate"])
 
-    class ObservingStateRepository(AgentRunStateRepository):
+    class ObservingStateService(AgentRunStateService):
         async def complete(
             self,
             run_id: UUID,
             *,
             attempt_epoch: int,
             result: AnswerQuestionResult,
-            research_handoff: dict[str, Any] | None = None,
-            now: datetime | None = None,
+            research_handoff: dict[str, Any] | None,
         ) -> RunCompleted | CannotContinue:
             complete_calls.append((run_id, attempt_epoch))
             return AttemptSuperseded()
@@ -1572,7 +1560,6 @@ async def test_epoch_advance_before_answer_start_stops_old_worker_through_actual
             *,
             attempt_epoch: int,
             error_code: AgentRunErrorCode,
-            now: datetime | None = None,
         ) -> FailureRecorded | CannotContinue:
             assert error_code == AgentRunErrorCode.INTERNAL_ERROR
             mark_failed_calls.append((run_id, attempt_epoch))
@@ -1584,11 +1571,11 @@ async def test_epoch_advance_before_answer_start_stops_old_worker_through_actual
         run_execution, "AgentRunLiveStreamPublisher", FakeLiveStreamPublisher
     )
     monkeypatch.setattr(run_execution, "build_answering_runner", build_runner)
-    monkeypatch.setattr(run_execution, "AgentRunExecutionProbe", build_probe)
+    monkeypatch.setattr(run_execution, "AgentRunStageGate", CapturingStageGate)
     monkeypatch.setattr(
-        state_service_module,
-        "AgentRunStateRepository",
-        ObservingStateRepository,
+        run_execution,
+        "AgentRunStateService",
+        ObservingStateService,
     )
 
     await agent_run_tasks.run_agent_answer(
@@ -1597,7 +1584,9 @@ async def test_epoch_advance_before_answer_start_stops_old_worker_through_actual
     )
     logs = read_logs()
 
-    assert [binding[1:] for binding in probe_bindings] == [(run.id, 1)]
+    assert [
+        (gate.run_id, gate.attempt_epoch) for gate in CapturingStageGate.instances
+    ] == [(run.id, 1)]
     assert complete_calls == []
     assert mark_failed_calls == []
     stop_logs = [
@@ -1640,7 +1629,7 @@ async def test_deadline_stop_publishes_terminal_without_mark_failed(
     session_factory: async_sessionmaker[AsyncSession],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """継続確認で期限切れになったRunは失敗を記録せず終了を通知し、利用枠を返さない。"""
+    """工程に入る口で期限切れになったRunは失敗を記録せず終了を通知し、利用枠を返さない。"""
     usage_date = date(2026, 9, 2)
     async with session_factory() as session:
         _thread, _message, run = await _create_thread_message_run(
@@ -1656,74 +1645,49 @@ async def test_deadline_stop_publishes_terminal_without_mark_failed(
         )
         await session.commit()
 
-    class ManualClock:
-        def __init__(self) -> None:
-            self.now = 0.0
-
-        def __call__(self) -> float:
-            return self.now
-
-    clock = ManualClock()
-    production_probe_type = run_execution.AgentRunExecutionProbe
     mark_failed_calls: list[tuple[UUID, int]] = []
-    probes: list[object] = []
 
-    def build_probe(
-        bound_state_service: AgentRunStateService,
-        run_id: UUID,
-        attempt_epoch: int,
-    ) -> object:
-        probe = production_probe_type(
-            bound_state_service,
-            run_id,
-            attempt_epoch,
-            clock=clock,
-        )
-        probes.append(probe)
-        return probe
+    class DeadlineExpiringRunner:
+        def __init__(self, stage_gate: object) -> None:
+            self._stage_gate = stage_gate
 
-    class DeadlineExpiringAgent:
-        def __init__(self) -> None:
-            self.continuation: object | None = None
-
-        async def answer(self) -> AnswerQuestionResult:
-            assert self.continuation is not None
+        async def run(
+            self, input: RunInput, *, identity: RunIdentity
+        ) -> RunResult | CannotContinue:
+            del input, identity
             async with session_factory() as expire_session:
                 async with expire_session.begin():
                     persisted = await expire_session.get(AgentRun, run.id)
                     assert persisted is not None
                     persisted.deadline_at = datetime.now(UTC) - timedelta(seconds=1)
-            clock.now = 2.0
-            with pytest.raises(AnswerGenerationStopped) as stopped:
-                await self.continuation.ensure_can_continue()  # type: ignore[attr-defined]
-            assert stopped.value.stopped == DeadlineExceeded()
-            raise stopped.value
+            stopped = await cast(Any, self._stage_gate).enter("evidence_collection")
+            assert stopped == DeadlineExceeded()
+            return stopped
 
-    fake_agent = DeadlineExpiringAgent()
+    def build_runner(**kwargs: object) -> DeadlineExpiringRunner:
+        return DeadlineExpiringRunner(kwargs["stage_gate"])
 
-    def build_agent(**kwargs: object) -> DeadlineExpiringAgent:
-        del kwargs
-        fake_agent.continuation = probes[0]
-        return fake_agent
-
-    class ObservingStateRepository(AgentRunStateRepository):
+    class ObservingStateService(AgentRunStateService):
         async def record_failure(
             self,
             run_id: UUID,
             *,
             attempt_epoch: int,
             error_code: AgentRunErrorCode,
-            now: datetime | None = None,
         ) -> FailureRecorded | CannotContinue:
             mark_failed_calls.append((run_id, attempt_epoch))
             return DeadlineExceeded()
 
-    _patch_delta_worker(monkeypatch, build_agent)
-    monkeypatch.setattr(run_execution, "AgentRunExecutionProbe", build_probe)
+    FakeLiveStreamPublisher.instances = []
+    monkeypatch.setattr(FakeLiveStreamPublisher, "publish_outcomes", [])
     monkeypatch.setattr(
-        state_service_module,
-        "AgentRunStateRepository",
-        ObservingStateRepository,
+        run_execution, "AgentRunLiveStreamPublisher", FakeLiveStreamPublisher
+    )
+    monkeypatch.setattr(run_execution, "build_answering_runner", build_runner)
+    monkeypatch.setattr(
+        run_execution,
+        "AgentRunStateService",
+        ObservingStateService,
     )
 
     await agent_run_tasks.run_agent_answer(
@@ -1772,18 +1736,17 @@ async def test_delta_finish_precedes_completed_commit_and_terminal(
 
     def build_agent(**kwargs: object) -> DeltaReportingAgent:
         fake_agent.delta_reporter = kwargs["delta_reporter"]
-        assert kwargs["repository"] is not None
+        assert kwargs["answer_generation_gate"] is not None
         return fake_agent
 
-    class ObservingStateRepository(AgentRunStateRepository):
+    class ObservingStateService(AgentRunStateService):
         async def complete(
             self,
             run_id: UUID,
             *,
             attempt_epoch: int,
             result: AnswerQuestionResult,
-            research_handoff: dict[str, Any] | None = None,
-            now: datetime | None = None,
+            research_handoff: dict[str, Any] | None,
         ) -> RunCompleted | CannotContinue:
             order.append("complete_start")
             assert attempt_epoch == 1
@@ -1792,14 +1755,13 @@ async def test_delta_finish_precedes_completed_commit_and_terminal(
                 attempt_epoch=attempt_epoch,
                 result=result,
                 research_handoff=research_handoff,
-                now=now,
             )
 
     _patch_delta_worker(monkeypatch, build_agent)
     monkeypatch.setattr(
-        state_service_module,
-        "AgentRunStateRepository",
-        ObservingStateRepository,
+        run_execution,
+        "AgentRunStateService",
+        ObservingStateService,
     )
 
     await agent_run_tasks.run_agent_answer(
@@ -1810,6 +1772,7 @@ async def test_delta_finish_precedes_completed_commit_and_terminal(
     assert order == ["delta_finish", "complete_start"]
     stream = FakeLiveStreamPublisher.instances[0]
     assert [type(event) for event in stream.published] == [
+        AgentRunLiveStreamStageEvent,
         AgentRunLiveStreamAnswerDeltaEvent,
         AgentRunLiveStreamTerminalEvent,
     ]
@@ -1836,7 +1799,7 @@ async def test_evidence_revision_events_precede_persisted_completed_terminal(
     def build_agent(**kwargs: object) -> RevisionReportingAgent:
         captured_controls.update(kwargs)
         fake_agent.delta_reporter = kwargs["delta_reporter"]
-        fake_agent.continuation = kwargs["repository"]
+        fake_agent.answer_generation_gate = kwargs["answer_generation_gate"]
         return fake_agent
 
     class CommitCheckingPublisher(FakeLiveStreamPublisher):
@@ -1869,6 +1832,7 @@ async def test_evidence_revision_events_precede_persisted_completed_terminal(
 
     stream = FakeLiveStreamPublisher.instances[0]
     assert stream.published == [
+        AgentRunLiveStreamStageEvent(stage="answering"),
         AgentRunLiveStreamAnswerResetEvent(generation=2),
         AgentRunLiveStreamAnswerDeltaEvent(
             generation=2,
@@ -1877,7 +1841,9 @@ async def test_evidence_revision_events_precede_persisted_completed_terminal(
         AgentRunLiveStreamTerminalEvent(status="completed"),
     ]
     assert captured_controls["delta_reporter"] is fake_agent.delta_reporter
-    assert captured_controls["repository"] is fake_agent.continuation
+    assert (
+        captured_controls["answer_generation_gate"] is fake_agent.answer_generation_gate
+    )
 
 
 @pytest.mark.asyncio
@@ -1900,7 +1866,8 @@ async def test_delta_breaker_open_does_not_block_final_commit_or_terminal(
     monkeypatch.setattr(
         FakeLiveStreamPublisher,
         "publish_outcomes",
-        [None, None, None, "terminal-0"],
+        # 先頭は回答開始の口が送る「回答中」の段階。
+        ["stage-0", None, None, None, "terminal-0"],
     )
 
     await agent_run_tasks.run_agent_answer(
@@ -1956,6 +1923,7 @@ async def test_provider_failure_after_delta_commits_failed_without_assistant(
 
     stream = FakeLiveStreamPublisher.instances[0]
     assert [type(event) for event in stream.published] == [
+        AgentRunLiveStreamStageEvent,
         AgentRunLiveStreamAnswerDeltaEvent,
         AgentRunLiveStreamTerminalEvent,
     ]
@@ -2000,15 +1968,14 @@ async def test_completion_loser_with_existing_delta_has_no_terminal_or_assistant
         fake_agent.delta_reporter = kwargs["delta_reporter"]
         return fake_agent
 
-    class RejectingStateRepository(AgentRunStateRepository):
+    class RejectingStateService(AgentRunStateService):
         async def complete(
             self,
             run_id: UUID,
             *,
             attempt_epoch: int,
             result: AnswerQuestionResult,
-            research_handoff: dict[str, Any] | None = None,
-            now: datetime | None = None,
+            research_handoff: dict[str, Any] | None,
         ) -> RunCompleted | CannotContinue:
             assert (run_id, result, attempt_epoch) == (
                 run.id,
@@ -2019,9 +1986,9 @@ async def test_completion_loser_with_existing_delta_has_no_terminal_or_assistant
 
     _patch_delta_worker(monkeypatch, build_agent)
     monkeypatch.setattr(
-        state_service_module,
-        "AgentRunStateRepository",
-        RejectingStateRepository,
+        run_execution,
+        "AgentRunStateService",
+        RejectingStateService,
     )
 
     await agent_run_tasks.run_agent_answer(
@@ -2073,15 +2040,14 @@ async def test_completion_failure_publishes_failed_terminal(
     fake_agent = FakeAgent(_direct_result())
     FakeLiveStreamPublisher.instances = []
 
-    class FailingStateRepository(AgentRunStateRepository):
+    class FailingStateService(AgentRunStateService):
         async def complete(
             self,
             run_id: UUID,
             *,
             attempt_epoch: int,
             result: AnswerQuestionResult,
-            research_handoff: dict[str, Any] | None = None,
-            now: datetime | None = None,
+            research_handoff: dict[str, Any] | None,
         ) -> RunCompleted | CannotContinue:
             raise RuntimeError("completion failed")
 
@@ -2092,9 +2058,9 @@ async def test_completion_failure_publishes_failed_terminal(
         FakeLiveStreamPublisher,
     )
     monkeypatch.setattr(
-        state_service_module,
-        "AgentRunStateRepository",
-        FailingStateRepository,
+        run_execution,
+        "AgentRunStateService",
+        FailingStateService,
     )
 
     await agent_run_tasks.run_agent_answer(
@@ -2132,15 +2098,14 @@ async def test_completion_skip_does_not_publish_terminal(
     fake_agent = FakeAgent(_direct_result())
     FakeLiveStreamPublisher.instances = []
 
-    class RejectingStateRepository(AgentRunStateRepository):
+    class RejectingStateService(AgentRunStateService):
         async def complete(
             self,
             run_id: UUID,
             *,
             attempt_epoch: int,
             result: AnswerQuestionResult,
-            research_handoff: dict[str, Any] | None = None,
-            now: datetime | None = None,
+            research_handoff: dict[str, Any] | None,
         ) -> RunCompleted | CannotContinue:
             assert (run_id, result, attempt_epoch) == (
                 run.id,
@@ -2156,9 +2121,9 @@ async def test_completion_skip_does_not_publish_terminal(
         FakeLiveStreamPublisher,
     )
     monkeypatch.setattr(
-        state_service_module,
-        "AgentRunStateRepository",
-        RejectingStateRepository,
+        run_execution,
+        "AgentRunStateService",
+        RejectingStateService,
     )
 
     await agent_run_tasks.run_agent_answer(
@@ -2192,14 +2157,13 @@ async def test_failed_transition_loser_does_not_publish_terminal(
     )
     FakeLiveStreamPublisher.instances = []
 
-    class RejectingStateRepository(AgentRunStateRepository):
+    class RejectingStateService(AgentRunStateService):
         async def record_failure(
             self,
             run_id: UUID,
             *,
             attempt_epoch: int,
             error_code: AgentRunErrorCode,
-            now: datetime | None = None,
         ) -> FailureRecorded | CannotContinue:
             assert (run_id, error_code, attempt_epoch) == (
                 run.id,
@@ -2215,9 +2179,9 @@ async def test_failed_transition_loser_does_not_publish_terminal(
         FakeLiveStreamPublisher,
     )
     monkeypatch.setattr(
-        state_service_module,
-        "AgentRunStateRepository",
-        RejectingStateRepository,
+        run_execution,
+        "AgentRunStateService",
+        RejectingStateService,
     )
 
     await agent_run_tasks.run_agent_answer(
@@ -2240,15 +2204,11 @@ async def test_terminal_publish_failure_does_not_revert_completed_run(
 ) -> None:
     async with session_factory() as session:
         _thread, _message, run = await _create_thread_message_run(session)
-    fake_agent = FakeAgent(_direct_result(), stage="answering")
+    fake_agent = FakeAgent(_direct_result())
     FakeLiveStreamPublisher.instances = []
     monkeypatch.setattr(FakeLiveStreamPublisher, "raise_on_publish", True)
 
-    def build_agent(**kwargs: object) -> FakeAgent:
-        fake_agent.progress = kwargs["progress"]
-        return fake_agent
-
-    _patch_worker_execution(monkeypatch, build_agent)
+    _patch_worker_execution(monkeypatch, lambda **_kwargs: fake_agent)
     monkeypatch.setattr(
         run_execution,
         "AgentRunLiveStreamPublisher",
@@ -2569,22 +2529,31 @@ async def test_run_agent_answer_generation_error_preserves_death_progress_stage(
     session_factory: async_sessionmaker[AsyncSession],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """収集の工程に入ったあとのAIの失敗は、generation_unavailableの失敗として記録される。"""
     async with session_factory() as session:
         _thread, _message, run = await _create_thread_message_run(session)
-    fake_agent = FakeAgent(
-        exc=AnsweringRunError(
-            cause=AIProviderResultError(
-                "SHOULD_NOT_LEAK", reason=AIProviderResultReason.RESPONSE_UNPARSEABLE
+
+    class FailingAfterStageEntryRunner:
+        def __init__(self, stage_gate: object) -> None:
+            self._stage_gate = stage_gate
+
+        async def run(
+            self, input: RunInput, *, identity: RunIdentity
+        ) -> RunResult | CannotContinue:
+            del input, identity
+            entered = await cast(Any, self._stage_gate).enter("evidence_collection")
+            assert entered == CanContinue()
+            raise AnsweringRunError(
+                cause=AIProviderResultError(
+                    "SHOULD_NOT_LEAK",
+                    reason=AIProviderResultReason.RESPONSE_UNPARSEABLE,
+                )
             )
-        ),
-        stage="evidence_collection",
-    )
 
-    def build_agent(**kwargs: object) -> FakeAgent:
-        fake_agent.progress = kwargs["progress"]
-        return fake_agent
+    def build_runner(**kwargs: object) -> FailingAfterStageEntryRunner:
+        return FailingAfterStageEntryRunner(kwargs["stage_gate"])
 
-    _patch_worker_execution(monkeypatch, build_agent)
+    monkeypatch.setattr(run_execution, "build_answering_runner", build_runner)
 
     await agent_run_tasks.run_agent_answer(
         trigger=AgentRunTrigger(run_id=run.id),

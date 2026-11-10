@@ -6,7 +6,7 @@ API / UI / graph runtime から独立した final result と plan 型をここ�
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Annotated, Final, Literal, Protocol, Self
+from typing import TYPE_CHECKING, Annotated, Final, Literal, Protocol, Self
 
 from pydantic import (
     BaseModel,
@@ -18,11 +18,14 @@ from pydantic import (
 
 from app.shared.web_url import WebUrl
 
+if TYPE_CHECKING:
+    from app.agent.running.state import CanContinue, CannotContinue
+
 __all__ = [
     "AnswerDeltaReporter",
-    "AnswerProgressReporter",
+    "AnswerGenerationGate",
     "AnswerProgressEvent",
-    "AnswerProgressStage",
+    "AnsweringStage",
     "AnswerQuestionResult",
     "AnswerPlanSummary",
     "AnswerEventReporter",
@@ -44,10 +47,11 @@ __all__ = [
     "PlanType",
     "RESEARCH_GOAL_MAX_CHARS",
     "RESEARCH_TASK_LIMIT",
+    "StageGate",
 ]
 
 PlanType = Literal["direct_answer", "search"]
-AnswerProgressStage = Literal[
+AnsweringStage = Literal[
     "safety_check",
     "context_resolution",
     "planning",
@@ -197,10 +201,18 @@ class AnswerDeltaReporter(Protocol):
     async def abort(self, *, generation: int) -> None: ...
 
 
-class AnswerProgressReporter(Protocol):
-    """agent core が回答工程の粗い進捗を通知する sink。"""
+class StageGate(Protocol):
+    """工程に入る前に続けてよいかを問い合わせ、よいときだけ段階を通知する口。"""
 
-    async def stage_changed(self, stage: AnswerProgressStage) -> None: ...
+    async def enter(self, stage: AnsweringStage) -> CanContinue | CannotContinue: ...
+
+
+class AnswerGenerationGate(Protocol):
+    """回答の生成を始めてよいか・書き直してよいかを問い合わせる口。"""
+
+    async def start(self) -> CanContinue | CannotContinue: ...
+
+    async def regenerate(self) -> CanContinue | CannotContinue: ...
 
 
 class AnswerEventReporter(Protocol):

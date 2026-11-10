@@ -17,7 +17,6 @@ import logfire
 
 from app.agent.phase_span import agent_phase
 from app.agent.recording.types import PhaseStatus
-from app.agent.running.stop import AnswerGenerationStopped
 
 __all__ = [
     "LogfireResearchHandoffRecorder",
@@ -96,10 +95,7 @@ class _ResearchHandoffExit:
         error: BaseException | None,
     ) -> _ResearchHandoffExit:
         # 回答の停止とcancelでこの工程も畳まれる。失敗ではなく停止として残す。
-        if isinstance(
-            error,
-            asyncio.CancelledError | GeneratorExit | AnswerGenerationStopped,
-        ):
+        if isinstance(error, asyncio.CancelledError | GeneratorExit):
             return cls(status=PhaseStatus.STOPPED, outcome=None, error=error)
         if isinstance(outcome, ResearchHandoffSucceeded) and error is None:
             return cls(status=PhaseStatus.COMPLETED, outcome=outcome, error=None)

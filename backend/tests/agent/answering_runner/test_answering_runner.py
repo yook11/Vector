@@ -38,14 +38,14 @@ from app.agent.planning.contract import (
     QuestionPlan,
 )
 from app.agent.planning.failure import PlanningError
-from app.agent.running.state import AttemptSuperseded
-from app.agent.running.stop import AnswerGenerationStopped
+from app.agent.running.state import AttemptSuperseded, CancelledByUser, CannotContinue
 from app.agent.threads.contracts import ThreadMessageSnapshot
 from app.ai_providers.errors import AIProviderNotSentError, AIProviderNotSentReason
 from tests.agent.answering_runner._harness import (
     THREAD_ID,
     USER_ID,
     PassThroughOrganizer,
+    RecordingStageGate,
 )
 from tests.logfire._span_helpers import (
     domain_attr_keys,
@@ -60,14 +60,6 @@ pytestmark = pytest.mark.usefixtures("capfire")
 
 def _direct_plan() -> DirectAnswerPlan:
     return DirectAnswerPlan()
-
-
-class _FakeProgressReporter:
-    def __init__(self) -> None:
-        self.calls: list[str] = []
-
-    async def stage_changed(self, stage: str) -> None:
-        self.calls.append(stage)
 
 
 class _FakeEventReporter:
@@ -125,7 +117,7 @@ class _UnreachableEvidenceAnswerer:
 class _FakeDirectAnswerer:
     def __init__(
         self,
-        outcomes: list[DirectAnswerDraft | BaseException],
+        outcomes: list[DirectAnswerDraft | CannotContinue | BaseException],
         *,
         events: list[str] | None = None,
         span_probe: bool = False,
@@ -135,7 +127,9 @@ class _FakeDirectAnswerer:
         self._span_probe = span_probe
         self.calls: list[tuple[AnsweringRequest, str]] = []
 
-    async def answer(self, input: DirectAnswerInput) -> DirectAnswerDraft:
+    async def answer(
+        self, input: DirectAnswerInput
+    ) -> DirectAnswerDraft | CannotContinue:
         if self._span_probe:
             with logfire.span("answering_runner_direct_answer_probe"):
                 return self._answer(input.request, input.previous_answer)
@@ -145,7 +139,7 @@ class _FakeDirectAnswerer:
         self,
         request: AnsweringRequest,
         previous_answer: str,
-    ) -> DirectAnswerDraft:
+    ) -> DirectAnswerDraft | CannotContinue:
         self.calls.append((request, previous_answer))
         if self._events is not None:
             self._events.append("direct_answerer")
@@ -206,12 +200,12 @@ class _PhasesFactory:
 def _runner(
     phases_factory: object,
     *,
-    progress: object | None = None,
+    stage_gate: RecordingStageGate | None = None,
     events: object | None = None,
 ) -> AnsweringRunner:
     return AnsweringRunner(
         phases_factory=phases_factory,  # type: ignore[arg-type]
-        progress=progress,  # type: ignore[arg-type]
+        stage_gate=stage_gate or RecordingStageGate(),
         events=events,  # type: ignore[arg-type]
     )
 
@@ -227,7 +221,7 @@ def _run_identity(*, run_id: UUID = RUN_ID, as_of: datetime = AS_OF) -> RunIdent
 
 def _direct_factory(
     *,
-    answers: list[str | BaseException],
+    answers: list[str | CannotContinue | BaseException],
     events: list[str] | None = None,
     span_probe: bool = False,
     factory_error: BaseException | None = None,
@@ -239,9 +233,7 @@ def _direct_factory(
     )
     direct_answerer = _FakeDirectAnswerer(
         [
-            outcome
-            if isinstance(outcome, BaseException)
-            else DirectAnswerDraft(answer=outcome)
+            DirectAnswerDraft(answer=outcome) if isinstance(outcome, str) else outcome
             for outcome in answers
         ],
         events=events,
@@ -316,20 +308,12 @@ async def test_failure_before_planning_prevents_later_work(
     assert exception_event(run_span) is not None
 
 
-@pytest.mark.parametrize(
-    "error",
-    [
-        pytest.param(RuntimeError("answer failed"), id="unexpected-answer-error"),
-        pytest.param(
-            AnswerGenerationStopped(AttemptSuperseded()),
-            id="generation-stopped",
-        ),
-    ],
-)
-async def test_phase_exception_propagates_same_instance(error: BaseException) -> None:
+async def test_phase_exception_propagates_same_instance() -> None:
+    """回答工程の想定外の例外は、包まずに同じインスタンスのまま送出される。"""
+    error = RuntimeError("answer failed")
     factory, _, direct_answerer = _direct_factory(answers=[error])
 
-    with pytest.raises(type(error)) as raised:
+    with pytest.raises(RuntimeError) as raised:
         await _runner(factory).run(
             RunInput(question="元の質問", history=()),
             identity=_run_identity(),
@@ -392,22 +376,43 @@ async def test_stopping_failure_is_wrapped_as_run_error_with_the_same_cause(
     )
 
 
-async def test_generation_stopped_closes_run_span_without_error(
+async def test_stopped_answer_returns_the_reason_and_closes_run_span_without_error(
     capfire: CaptureLogfire,
 ) -> None:
-    error = AnswerGenerationStopped(AttemptSuperseded())
-    factory, _, _ = _direct_factory(answers=[error])
+    """回答工程が止まった理由を返すと、runnerは同じ理由を返しspanをerrorにしない。"""
+    factory, _, _ = _direct_factory(answers=[AttemptSuperseded()])
 
-    with pytest.raises(AnswerGenerationStopped) as raised:
-        await _runner(factory).run(
-            RunInput(question="元の質問", history=()),
-            identity=_run_identity(),
-        )
+    outcome = await _runner(factory).run(
+        RunInput(question="元の質問", history=()),
+        identity=_run_identity(),
+    )
 
     span = one_span_named(capfire, "agent_answering_run")
-    assert raised.value is error
+    assert outcome == AttemptSuperseded()
     assert exception_event(span) is None
     assert span["attributes"].get("logfire.level_num", 0) < 17
+
+
+async def test_stop_before_planning_returns_the_reason_without_planning() -> None:
+    """計画に入る問い合わせで止まると、計画も回答も呼ばずに止まった理由を返す。"""
+    events: list[str] = []
+    factory, planner, direct_answerer = _direct_factory(
+        answers=["最終回答"], events=events
+    )
+    gate = RecordingStageGate(stop_at="planning", stopped=CancelledByUser())
+
+    outcome = await _runner(factory, stage_gate=gate).run(
+        RunInput(question="元の質問", history=()),
+        identity=_run_identity(),
+    )
+
+    assert (outcome, events, gate.stages, planner.calls, direct_answerer.calls) == (
+        CancelledByUser(),
+        ["phases_factory"],
+        ["planning"],
+        [],
+        [],
+    )
 
 
 async def test_same_runner_builds_fresh_phases_per_run() -> None:

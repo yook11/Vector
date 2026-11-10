@@ -48,11 +48,6 @@ _answer_delta_breaker_open = logfire.metric_counter(
     unit="1",
     description="Direct answer delta breaker opened after publish failures",
 )
-_execution_probe_unavailable = logfire.metric_counter(
-    "vector.agent.execution_probe.unavailable",
-    unit="1",
-    description="Agent run execution probe database check unavailable",
-)
 
 
 def record_agent_run_sse_open() -> None:
@@ -85,11 +80,4 @@ def record_answer_delta_breaker_open() -> None:
     _answer_delta_breaker_open.add(
         1,
         attributes={"reason": "consecutive_publish_failures"},
-    )
-
-
-def record_agent_run_execution_probe_unavailable() -> None:
-    _execution_probe_unavailable.add(
-        1,
-        attributes={"reason": "database_unavailable"},
     )

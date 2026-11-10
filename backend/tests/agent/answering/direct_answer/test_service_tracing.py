@@ -15,18 +15,17 @@ from opentelemetry.trace import StatusCode
 
 from app.agent.answering.contract import AnsweringRequest
 from app.agent.answering.direct_answer.agent import DIRECT_ANSWER_AGENT
-from app.agent.answering.direct_answer.contract import DirectAnswerInput
+from app.agent.answering.direct_answer.contract import (
+    DirectAnswerDraft,
+    DirectAnswerInput,
+)
 from app.agent.answering.direct_answer.failure import DirectAnswerError
 from app.agent.answering.direct_answer.service import DirectAnswerService
 from app.agent.llm_call.caller import LlmTextStreamer
 from app.agent.llm_call.gemini import GeminiLlmCaller
 from app.agent.running.state import AttemptSuperseded
-from app.agent.running.stop import AnswerGenerationStopped
 from app.logfire.redaction import install_exception_redaction
-from tests.agent.answering_runner._harness import (
-    AllowAnswerGenerationStart,
-    ScriptedAnswerGenerationRepository,
-)
+from tests.agent.answering._fakes import ScriptedAnswerGenerationGate
 from tests.agent.llm_call._helpers import FakeGeminiClient
 from tests.agent.llm_call._tracing_helpers import (
     application_attribute_keys,
@@ -87,10 +86,9 @@ async def test_phase_owns_detached_streaming_attempt_without_model_text(
         yield GeminiLlmCaller(client=cast(AsyncClient, client))
 
     draft = await DirectAnswerService(
-        schedule_deadline_check=lambda *_: None,
         agent=DIRECT_ANSWER_AGENT,
         llm_text_streamer_scope_factory=streamer_scope,
-        repository=AllowAnswerGenerationStart(),
+        gate=ScriptedAnswerGenerationGate(),
     ).answer(_input())
 
     spans = capfire.exporter.exported_spans
@@ -106,14 +104,13 @@ async def test_phase_owns_detached_streaming_attempt_without_model_text(
         if span.name == "agent_provider_call"
         and (span.attributes or {}).get("logfire.span_type") == "span"
     ]
-    assert draft.answer == "MODEL_ANSWER_SENTINEL"
+    assert draft == DirectAnswerDraft(answer="MODEL_ANSWER_SENTINEL")
     assert len(phase_spans) == 1
     assert len(attempt_spans) == 1
     phase = phase_spans[0]
     attempt = attempt_spans[0]
     phase_attributes = dict(phase.attributes or {})
-    # evidence answerと同じphase="answering"を共有し、agent_nameだけで経路を区別する
-    # (specs/agent-phase-span-vocabulary-slice.md Test contract)。
+    # evidence answerと同じphase="answering"を共有し、agent_nameだけで経路を区別する。
     assert phase_attributes["phase"] == "answering"
     assert phase_attributes["agent_name"] == "direct_answer"
     provider_request = client.models.generate_content_stream.await_args.kwargs
@@ -166,10 +163,9 @@ async def test_unclassified_stream_error_is_redacted_in_phase_and_attempt(
 
     with pytest.raises(RuntimeError) as exc_info:
         await DirectAnswerService(
-            schedule_deadline_check=lambda *_: None,
             agent=DIRECT_ANSWER_AGENT,
             llm_text_streamer_scope_factory=streamer_scope,
-            repository=AllowAnswerGenerationStart(),
+            gate=ScriptedAnswerGenerationGate(),
         ).answer(_input())
 
     spans = capfire.exporter.exported_spans
@@ -220,17 +216,16 @@ async def test_retry_provider_request_does_not_add_repair_context() -> None:
         yield GeminiLlmCaller(client=cast(AsyncClient, client))
 
     draft = await DirectAnswerService(
-        schedule_deadline_check=lambda *_: None,
         agent=DIRECT_ANSWER_AGENT,
         llm_text_streamer_scope_factory=streamer_scope,
-        repository=AllowAnswerGenerationStart(),
+        gate=ScriptedAnswerGenerationGate(),
     ).answer(_input())
 
     requests = client.models.generate_content_stream.await_args_list
     first_contents = requests[0].kwargs["contents"]
     retry_contents = requests[1].kwargs["contents"]
 
-    assert draft.answer == "再試行後の回答"
+    assert draft == DirectAnswerDraft(answer="再試行後の回答")
     assert len(requests) == 2
     assert first_contents == retry_contents
     assert "# Repair Context" not in retry_contents
@@ -255,10 +250,9 @@ async def test_terminal_failure_closes_phase_with_code_without_exception_event(
 
     with pytest.raises(DirectAnswerError) as exc_info:
         await DirectAnswerService(
-            schedule_deadline_check=lambda *_: None,
             agent=DIRECT_ANSWER_AGENT,
             llm_text_streamer_scope_factory=streamer_scope,
-            repository=AllowAnswerGenerationStart(),
+            gate=ScriptedAnswerGenerationGate(),
         ).answer(_input())
 
     spans = capfire.exporter.exported_spans
@@ -300,22 +294,15 @@ async def test_start_rejection_does_not_open_phase_or_attempt(
         yield cast(LlmTextStreamer, UnusedStreamer())
 
     service = DirectAnswerService(
-        schedule_deadline_check=lambda *_: None,
         agent=DIRECT_ANSWER_AGENT,
         llm_text_streamer_scope_factory=streamer_scope,
-        repository=ScriptedAnswerGenerationRepository(
-            start=AnswerGenerationStopped(AttemptSuperseded())
-        ),
+        gate=ScriptedAnswerGenerationGate(start=AttemptSuperseded()),
     )
-    try:
-        await service.answer(_input())
-    except AnswerGenerationStopped as error:
-        stopped = error
-    else:
-        raise AssertionError("routine stop must propagate")
+
+    result = await service.answer(_input())
 
     spans = capfire.exporter.exported_spans
-    assert isinstance(stopped, AnswerGenerationStopped)
+    assert result == AttemptSuperseded()
     assert not any(
         span.name in ("agent_phase", "agent_provider_call") for span in spans
     )

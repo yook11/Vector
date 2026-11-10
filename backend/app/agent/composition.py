@@ -6,11 +6,9 @@ builder when they actually execute an agent run.
 
 from __future__ import annotations
 
-from collections.abc import AsyncIterator, Callable
+from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
-from datetime import datetime
 from typing import TYPE_CHECKING
-from uuid import UUID
 
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
@@ -20,16 +18,14 @@ from app.agent.answering_runner import AnsweringPhases, AnsweringRunner
 from app.agent.contract import (
     AnswerDeltaReporter,
     AnswerEventReporter,
-    AnswerProgressReporter,
+    AnswerGenerationGate,
+    StageGate,
 )
 from app.agent.evidence_collection import EvidenceCollectionService
 from app.agent.evidence_collection.external_search.contract import ExternalSearch
 from app.agent.evidence_review.agent import EVIDENCE_REVIEWER_AGENT
 from app.agent.planning.agent import QUESTION_PLANNER_AGENT
 from app.agent.research_handoff.agent import RESEARCH_HANDOFF_AGENT
-from app.agent.running.answer_generation import (
-    AnswerGenerationRepository,
-)
 from app.ai_providers.errors import (
     AIProviderNotSentError,
     AIProviderNotSentReason,
@@ -85,11 +81,9 @@ async def activate_gemini_llm_caller() -> AsyncIterator[GeminiLlmCaller]:
 def _build_answering_phases(
     *,
     session_factory: async_sessionmaker[AsyncSession],
-    repository: AnswerGenerationRepository,
-    schedule_deadline_check: Callable[[UUID, datetime], None],
+    answer_generation_gate: AnswerGenerationGate,
     events: AnswerEventReporter | None = None,
     delta_reporter: AnswerDeltaReporter | None = None,
-    progress: AnswerProgressReporter | None = None,
 ) -> AnsweringPhases:
     from app.agent.answering.direct_answer.service import DirectAnswerService
     from app.agent.answering.evidence_answer.service import EvidenceAnswerService
@@ -138,18 +132,14 @@ def _build_answering_phases(
         direct_answerer=DirectAnswerService(
             agent=DIRECT_ANSWER_AGENT,
             llm_text_streamer_scope_factory=activate_gemini_llm_caller,
-            repository=repository,
-            schedule_deadline_check=schedule_deadline_check,
+            gate=answer_generation_gate,
             delta_reporter=delta_reporter,
-            progress=progress,
         ),
         evidence_answerer=EvidenceAnswerService(
             agent=EVIDENCE_ANSWER_AGENT,
             llm_text_streamer_scope_factory=activate_gemini_llm_caller,
-            repository=repository,
-            schedule_deadline_check=schedule_deadline_check,
+            gate=answer_generation_gate,
             delta_reporter=delta_reporter,
-            progress=progress,
         ),
         organizer=ResearchHandoffService(
             agent=RESEARCH_HANDOFF_AGENT,
@@ -161,22 +151,19 @@ def _build_answering_phases(
 def build_answering_runner(
     *,
     session_factory: async_sessionmaker[AsyncSession],
-    repository: AnswerGenerationRepository,
-    schedule_deadline_check: Callable[[UUID, datetime], None],
-    progress: AnswerProgressReporter | None = None,
+    stage_gate: StageGate,
+    answer_generation_gate: AnswerGenerationGate,
     events: AnswerEventReporter | None = None,
     delta_reporter: AnswerDeltaReporter | None = None,
 ) -> AnsweringRunner:
     return AnsweringRunner(
         phases_factory=lambda: _build_answering_phases(
             session_factory=session_factory,
-            repository=repository,
-            schedule_deadline_check=schedule_deadline_check,
+            answer_generation_gate=answer_generation_gate,
             events=events,
             delta_reporter=delta_reporter,
-            progress=progress,
         ),
-        progress=progress,
+        stage_gate=stage_gate,
         events=events,
     )
 

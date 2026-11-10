@@ -259,6 +259,7 @@ def test_search_probe_injects_events_into_runner() -> None:
     assert len(runner_calls) == 1
     assert {keyword.arg for keyword in runner_calls[0].keywords} == {
         "phases_factory",
+        "stage_gate",
         "events",
     }
     assert "requested_agent_count" not in _loaded_names(search)
@@ -347,9 +348,9 @@ def test_search_probe_passes_actual_internal_and_external_dependencies_to_phases
     evidence_answerer = _keyword_value(phase, "evidence_answerer")
     assert isinstance(evidence_answerer, ast.Call)
     assert _call_name(evidence_answerer) == "EvidenceAnswerService"
-    evidence_answer_start = _keyword_value(evidence_answerer, "repository")
-    assert isinstance(evidence_answer_start, ast.Call)
-    assert _call_name(evidence_answer_start) == "_ProbeAnswerGenerationStart"
+    evidence_answer_gate = _keyword_value(evidence_answerer, "gate")
+    assert isinstance(evidence_answer_gate, ast.Call)
+    assert _call_name(evidence_answer_gate) == "_ProbeGate"
 
 
 def test_search_probe_summary_uses_final_result_plan_summary_and_events_only() -> None:
@@ -411,9 +412,9 @@ def test_direct_probe_keeps_dependencies_unreachable_and_uses_plan_summary() -> 
     assert direct_agent.id == "DIRECT_ANSWER_AGENT"
     assert isinstance(direct_scope_factory, ast.Name)
     assert direct_scope_factory.id == "activate_gemini_llm_caller"
-    direct_answer_start = _keyword_value(direct_answerer, "repository")
-    assert isinstance(direct_answer_start, ast.Call)
-    assert _call_name(direct_answer_start) == "_ProbeAnswerGenerationStart"
+    direct_answer_gate = _keyword_value(direct_answerer, "gate")
+    assert isinstance(direct_answer_gate, ast.Call)
+    assert _call_name(direct_answer_gate) == "_ProbeGate"
 
 
 def test_probe_uses_direct_answer_and_search_plans_without_legacy_plan_paths() -> None:

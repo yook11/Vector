@@ -30,6 +30,7 @@ from app.agent.answering_runner import (
     AnsweringRunner,
     RunIdentity,
     RunInput,
+    RunResult,
 )
 from app.agent.composition import (
     activate_external_search,
@@ -37,6 +38,7 @@ from app.agent.composition import (
     activate_gemini_llm_caller,
 )
 from app.agent.contract import (
+    AnsweringStage,
     AnswerProgressEvent,
     AnswerQuestionResult,
     AnswerSource,
@@ -67,7 +69,13 @@ from app.agent.research_handoff.agent import RESEARCH_HANDOFF_AGENT
 from app.agent.research_handoff.handoff import ResearchHandoff
 from app.agent.research_handoff.handoff_input import ResearchHandoffInput
 from app.agent.research_handoff.service import ResearchHandoffService
-from app.agent.running.state import AnswerGenerationStarted
+from app.agent.running.state import (
+    AttemptSuperseded,
+    CancelledByUser,
+    CanContinue,
+    DeadlineExceeded,
+    RunNotFound,
+)
 from app.config import settings
 from app.db.engine import create_cli_engine
 from app.db.session import caller_managed_session_factory
@@ -78,12 +86,17 @@ DEFAULT_DIRECT_QUESTION = "Vector の使い方を短く教えて"
 MAX_EXTERNAL_RESEARCH_TASKS = 3
 
 
-class _ProbeAnswerGenerationStart:
-    async def start_answer_generation(self) -> AnswerGenerationStarted:
-        return AnswerGenerationStarted(uuid4(), datetime.now(UTC))
+class _ProbeGate:
+    """Run を持たない probe では、工程に入る・回答を始める・書き直すをすべて許す。"""
 
-    async def authorize_answer_regeneration(self) -> None:
-        return None
+    async def enter(self, stage: AnsweringStage) -> CanContinue:  # noqa: ARG002
+        return CanContinue()
+
+    async def start(self) -> CanContinue:
+        return CanContinue()
+
+    async def regenerate(self) -> CanContinue:
+        return CanContinue()
 
 
 class _UnreachableInternalSearch:
@@ -242,7 +255,7 @@ async def _probe_search(
                 evidence_answerer=EvidenceAnswerService(
                     agent=EVIDENCE_ANSWER_AGENT,
                     llm_text_streamer_scope_factory=activate_gemini_llm_caller,
-                    repository=_ProbeAnswerGenerationStart(),
+                    gate=_ProbeGate(),
                 ),
                 direct_answerer=_UnreachableDirectAnswerer(),
                 organizer=ResearchHandoffService(
@@ -250,14 +263,15 @@ async def _probe_search(
                     llm_caller_scope_factory=activate_gemini_llm_caller,
                 ),
             ),
+            stage_gate=_ProbeGate(),
             events=events,
         )
-        result = (
+        result = _final_output(
             await runner.run(
                 RunInput(question=question, history=()),
                 identity=_probe_identity(as_of=as_of),
             )
-        ).final_output
+        )
     finally:
         await engine.dispose()
 
@@ -290,23 +304,40 @@ async def _probe_direct(*, question: str) -> None:
             direct_answerer=DirectAnswerService(
                 agent=DIRECT_ANSWER_AGENT,
                 llm_text_streamer_scope_factory=activate_gemini_llm_caller,
-                repository=_ProbeAnswerGenerationStart(),
+                gate=_ProbeGate(),
             ),
             organizer=_UnreachableOrganizer(),
         ),
+        stage_gate=_ProbeGate(),
     )
-    result = (
+    result = _final_output(
         await runner.run(
             RunInput(question=question, history=()),
             identity=_probe_identity(as_of=as_of),
         )
-    ).final_output
+    )
 
     print("direct:")
     print(f"  as_of={as_of.isoformat()}")
     print("  plan_type=direct_answer")
     print()
     _print_answer_result(result)
+
+
+def _final_output(
+    outcome: RunResult
+    | CancelledByUser
+    | DeadlineExceeded
+    | AttemptSuperseded
+    | RunNotFound,
+) -> AnswerQuestionResult:
+    match outcome:
+        case RunResult(final_output=result):
+            return result
+        case (
+            CancelledByUser() | DeadlineExceeded() | AttemptSuperseded() | RunNotFound()
+        ) as stopped:
+            raise SystemExit(f"probe run stopped: {type(stopped).__name__}")
 
 
 def _probe_identity(*, as_of: datetime) -> RunIdentity:

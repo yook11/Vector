@@ -20,7 +20,12 @@ from app.agent.answering.evidence_answer.contract import (
     EvidenceAnswerDraftInvalidError,
     EvidenceAnswerInput,
 )
-from app.agent.answering_runner import AnsweringPhases, AnsweringRunner, RunInput
+from app.agent.answering_runner import (
+    AnsweringPhases,
+    AnsweringRunner,
+    RunInput,
+    RunResult,
+)
 from app.agent.contract import AnswerQuestionResult, ExternalUrlSource
 from app.agent.evidence_collection import EvidenceCollectionService
 from app.agent.evidence_collection.external_search import (
@@ -49,6 +54,13 @@ from app.agent.planning.contract import (
     ResearchTask,
     SearchPlan,
     TargetTimeWindow,
+)
+from app.agent.running.state import (
+    AttemptSuperseded,
+    CancelledByUser,
+    CanContinue,
+    DeadlineExceeded,
+    RunNotFound,
 )
 from app.agent.threads.contracts import ThreadMessageSnapshot
 from app.ai_providers.errors import AIProviderResultError, AIProviderResultReason
@@ -545,15 +557,18 @@ class CallTimeline:
         self.events.append(event)
 
 
-class FakeProgressReporter:
+class FakeStageGate:
+    """工程に入る問い合わせをいつも許し、問い合わせた段階を記録する。"""
+
     def __init__(self, *, timeline: CallTimeline | None = None) -> None:
         self._timeline = timeline
         self.stages: list[str] = []
 
-    async def stage_changed(self, stage: str) -> None:
+    async def enter(self, stage: str) -> CanContinue:
         if self._timeline is not None:
-            self._timeline.record(f"progress:{stage}")
+            self._timeline.record(f"stage:{stage}")
         self.stages.append(stage)
+        return CanContinue()
 
 
 class _WorkflowHarness:
@@ -561,11 +576,11 @@ class _WorkflowHarness:
         self,
         *,
         phases: AnsweringPhases,
-        progress: FakeProgressReporter | None,
+        stage_gate: FakeStageGate,
         timeline: CallTimeline | None = None,
     ) -> None:
         self._phases = phases
-        self._progress = progress
+        self._stage_gate = stage_gate
         self._timeline = timeline
 
     async def answer(self, input: _WorkflowInput) -> AnswerQuestionResult:
@@ -581,9 +596,9 @@ class _WorkflowHarness:
         )
         runner = AnsweringRunner(
             phases_factory=lambda: self._phases,
-            progress=self._progress,
+            stage_gate=self._stage_gate,
         )
-        result = await runner.run(
+        match await runner.run(
             RunInput(
                 question=input.question,
                 history=history,
@@ -592,8 +607,16 @@ class _WorkflowHarness:
                 run_id=UUID("019bd239-1ed4-7fbb-a336-04fe3c197651"),
                 as_of=input.as_of,
             ),
-        )
-        return result.final_output
+        ):
+            case RunResult(final_output=final_output):
+                return final_output
+            case (
+                CancelledByUser()
+                | DeadlineExceeded()
+                | AttemptSuperseded()
+                | RunNotFound()
+            ) as stopped:
+                raise AssertionError(f"run must not stop: {stopped}")
 
 
 def _orchestrator(
@@ -609,7 +632,7 @@ def _orchestrator(
         "direct answerer must not be called"
     ),
     internal_error: Exception | None = None,
-    progress: FakeProgressReporter | None = None,
+    stage_gate: FakeStageGate | None = None,
     timeline: CallTimeline | None = None,
     reviewer_caller: object | None = None,
     external_caller_override: ExternalScopes | None = None,
@@ -658,7 +681,7 @@ def _orchestrator(
     )
     workflow = _WorkflowHarness(
         phases=phases,
-        progress=progress,
+        stage_gate=FakeStageGate() if stage_gate is None else stage_gate,
         timeline=timeline,
     )
     return workflow, planner, internal_search, evidence_answerer, direct_answerer
@@ -701,10 +724,10 @@ async def test_answer_evidence_plan_orders_progress_and_port_calls() -> None:
     """evidence経路はplanning→
 
     evidence_collection→evidence_reviewの順に報告され、各報告は対応する
-    port呼び出しの直前になる。回答生成中の報告は回答サービスが開始確定後に出す。
+    port呼び出しの直前になる。回答中の報告は回答の生成の口が開始を記録した後に出す。
     """
     timeline = CallTimeline()
-    progress = FakeProgressReporter(timeline=timeline)
+    stage_gate = FakeStageGate(timeline=timeline)
     orchestrator, _, _, _, _ = _orchestrator(
         plan=_search_plan(),
         outcome=_both_evidence_outcome(),
@@ -712,23 +735,23 @@ async def test_answer_evidence_plan_orders_progress_and_port_calls() -> None:
             answer="根拠から確認できます。",
             cited_refs=["1", "2"],
         ),
-        progress=progress,
+        stage_gate=stage_gate,
         timeline=timeline,
     )
 
     await orchestrator.answer(_input())
 
     assert timeline.events[:2] == [
-        "progress:planning",
+        "stage:planning",
         "planner.plan",
     ]
-    assert timeline.events[2] == "progress:evidence_collection"
+    assert timeline.events[2] == "stage:evidence_collection"
     assert set(timeline.events[3:5]) == {
         "internal_search.search_articles",
         "external_search.activate",
     }
     assert timeline.events[5:] == [
-        "progress:evidence_review",
+        "stage:evidence_review",
         "reviewer.review",
         "evidence_answerer.answer",
     ]
@@ -742,7 +765,7 @@ async def test_answer_evidence_plan_skips_evidence_review_for_zero_hits() -> Non
     (answering_runner.py:345-353相当の経路)。
     """
     timeline = CallTimeline()
-    progress = FakeProgressReporter(timeline=timeline)
+    stage_gate = FakeStageGate(timeline=timeline)
     task = _task(0)
     zero_hit_caller = ExternalScopes(
         external_search=ExternalSearchService(
@@ -764,19 +787,19 @@ async def test_answer_evidence_plan_skips_evidence_review_for_zero_hits() -> Non
             ),
             cited_refs=[],
         ),
-        progress=progress,
+        stage_gate=stage_gate,
         timeline=timeline,
     )
 
     result = await orchestrator.answer(_input())
 
     assert result.status == "insufficient"
-    assert "progress:evidence_review" not in timeline.events
+    assert "stage:evidence_review" not in timeline.events
     assert timeline.events[:2] == [
-        "progress:planning",
+        "stage:planning",
         "planner.plan",
     ]
-    assert timeline.events[2] == "progress:evidence_collection"
+    assert timeline.events[2] == "stage:evidence_collection"
     assert set(timeline.events[3:5]) == {
         "internal_search.search_articles",
         "external_search.activate",
@@ -797,7 +820,7 @@ async def test_answer_evidence_plan_reports_evidence_review_when_review_fails() 
     呼び出しの前後にどの進捗報告が挟まるかだけを固定する)。
     """
     timeline = CallTimeline()
-    progress = FakeProgressReporter(timeline=timeline)
+    stage_gate = FakeStageGate(timeline=timeline)
     failure = AIProviderResultError(reason=AIProviderResultReason.RESPONSE_UNPARSEABLE)
     orchestrator, _, _, _, _ = _orchestrator(
         plan=_search_plan(),
@@ -810,7 +833,7 @@ async def test_answer_evidence_plan_reports_evidence_review_when_review_fails() 
             ),
             cited_refs=[],
         ),
-        progress=progress,
+        stage_gate=stage_gate,
         timeline=timeline,
     )
 
@@ -818,16 +841,16 @@ async def test_answer_evidence_plan_reports_evidence_review_when_review_fails() 
 
     assert result.status == "insufficient"
     assert timeline.events[:2] == [
-        "progress:planning",
+        "stage:planning",
         "planner.plan",
     ]
-    assert timeline.events[2] == "progress:evidence_collection"
+    assert timeline.events[2] == "stage:evidence_collection"
     assert set(timeline.events[3:5]) == {
         "internal_search.search_articles",
         "external_search.activate",
     }
     assert timeline.events[5:] == [
-        "progress:evidence_review",
+        "stage:evidence_review",
         "reviewer.review",
         "reviewer.review",
         "evidence_answerer.answer",
@@ -1046,7 +1069,7 @@ async def test_answer_passes_none_time_window_for_search_plan() -> None:
             AssertionError("evidence_answerer must not be called"),
             "planner failed",
             [
-                "progress:planning",
+                "stage:planning",
                 "planner.plan",
             ],
         ),
@@ -1083,7 +1106,7 @@ async def test_answer_step_failure_stops_before_later_progress_or_ports(
         outcome=outcome,
         draft=draft,
         internal_error=internal_error,
-        progress=FakeProgressReporter(timeline=timeline),
+        stage_gate=FakeStageGate(timeline=timeline),
         timeline=timeline,
     )
 
@@ -1094,7 +1117,7 @@ async def test_answer_step_failure_stops_before_later_progress_or_ports(
         assert timeline.events == expected_planner_timeline
         return
 
-    evidence_collection_index = timeline.events.index("progress:evidence_collection")
+    evidence_collection_index = timeline.events.index("stage:evidence_collection")
     branch_start_indices = {
         event: timeline.events.index(event)
         for event in (
@@ -1106,8 +1129,8 @@ async def test_answer_step_failure_stops_before_later_progress_or_ports(
         index > evidence_collection_index for index in branch_start_indices.values()
     )
     if internal_error is not None:
-        assert "progress:evidence_review" not in timeline.events
-        assert "progress:answering" not in timeline.events
+        assert "stage:evidence_review" not in timeline.events
+        assert "stage:answering" not in timeline.events
         assert "evidence_answerer.answer" not in timeline.events
         return
 
@@ -1121,7 +1144,7 @@ async def test_answer_direct_failure_stops_before_later_progress_or_ports() -> N
     orchestrator, _, _, _, _ = _orchestrator(
         plan=_direct_plan(),
         direct_draft=RuntimeError("direct failed"),
-        progress=FakeProgressReporter(timeline=timeline),
+        stage_gate=FakeStageGate(timeline=timeline),
         timeline=timeline,
     )
 
@@ -1129,7 +1152,7 @@ async def test_answer_direct_failure_stops_before_later_progress_or_ports() -> N
         await orchestrator.answer(_input("こんにちは"))
 
     assert timeline.events == [
-        "progress:planning",
+        "stage:planning",
         "planner.plan",
         "direct_answerer.answer",
     ]

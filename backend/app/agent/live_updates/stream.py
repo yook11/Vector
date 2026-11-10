@@ -21,7 +21,7 @@ from pydantic import (
     model_validator,
 )
 
-from app.agent.contract import AnswerProgressEvent, AnswerProgressStage
+from app.agent.contract import AnsweringStage, AnswerProgressEvent
 from app.agent.running.types import AgentRunErrorCode
 from app.log_policy.policies.research import RESEARCH_LOG_RULES
 from app.log_policy.runtime import create_policy_json_logger
@@ -44,7 +44,7 @@ class AgentRunLiveStreamAttemptStartedEvent(_StreamEventBase):
 
 class AgentRunLiveStreamStageEvent(_StreamEventBase):
     type: Literal["stage"] = "stage"
-    stage: AnswerProgressStage
+    stage: AnsweringStage
 
 
 class AgentRunLiveStreamActivityEvent(_StreamEventBase):

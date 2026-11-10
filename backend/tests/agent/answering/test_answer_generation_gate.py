@@ -1,4 +1,4 @@
-"""回答生成 repository の開始・再生成許可の呼び出し契約。
+"""回答生成の口(AgentRunAnswerGenerationGate)の開始・書き直しの問い合わせ方。
 
 前提: DB は使わず、AgentRunStateService の操作を差し替える。
 """
@@ -10,7 +10,8 @@ from uuid import UUID
 
 import pytest
 
-from app.agent.running.answer_generation import AgentAnswerGenerationRepository
+from app.agent.live_updates.reporters import AgentRunLiveStageReporter
+from app.agent.running.answer_generation import AgentRunAnswerGenerationGate
 from app.agent.running.state import AnswerGenerationStarted, CanContinue
 from app.agent.running.state_service import AgentRunStateService
 
@@ -27,13 +28,18 @@ def _unused_publisher(_run_id: UUID, _attempt_epoch: int) -> object:
     raise AssertionError("no run is closed in this test")
 
 
+class _DiscardingPublisher:
+    async def publish(self, _event: object) -> str | None:
+        return None
+
+
 @pytest.mark.asyncio
-async def test_start_and_authorize_each_call_repository(
+async def test_start_and_regenerate_ask_the_state_service_every_time(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """開始と再生成許可は呼ぶたびに AgentRunStateService の操作へ問い合わせる。"""
+    """開始と書き直しは結果を覚えず、呼ぶたびにRunの状態を変える操作へ問い合わせる。"""
     start_calls = 0
-    authorize_calls = 0
+    regenerate_calls = 0
 
     async def start_once(*_args: object, **_kwargs: object) -> AnswerGenerationStarted:
         nonlocal start_calls
@@ -41,27 +47,28 @@ async def test_start_and_authorize_each_call_repository(
         return AnswerGenerationStarted(RUN_ID, STARTED_AT)
 
     async def authorize_once(*_args: object, **_kwargs: object) -> CanContinue:
-        nonlocal authorize_calls
-        authorize_calls += 1
+        nonlocal regenerate_calls
+        regenerate_calls += 1
         return CanContinue()
 
     monkeypatch.setattr(AgentRunStateService, "start_answer_generation", start_once)
     monkeypatch.setattr(
         AgentRunStateService, "authorize_answer_regeneration", authorize_once
     )
-    repository = AgentAnswerGenerationRepository(
+    gate = AgentRunAnswerGenerationGate(
         AgentRunStateService(
             session_factory=_unused_session_factory,  # type: ignore[arg-type]
             publisher_for=_unused_publisher,  # type: ignore[arg-type]
         ),
         RUN_ID,
         ATTEMPT_EPOCH,
+        schedule_deadline_check=lambda *_: None,
+        stage_reporter=AgentRunLiveStageReporter(_DiscardingPublisher()),  # type: ignore[arg-type]
     )
 
-    await repository.start_answer_generation()
-    await repository.start_answer_generation()
-    await repository.authorize_answer_regeneration()
-    await repository.authorize_answer_regeneration()
+    await gate.start()
+    await gate.start()
+    await gate.regenerate()
+    await gate.regenerate()
 
-    assert start_calls == 2
-    assert authorize_calls == 2
+    assert (start_calls, regenerate_calls) == (2, 2)

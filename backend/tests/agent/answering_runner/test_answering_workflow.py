@@ -16,7 +16,12 @@ from app.agent.answering.evidence_answer.contract import (
     EvidenceAnswerDraft,
     EvidenceAnswerInput,
 )
-from app.agent.answering_runner import AnsweringPhases, AnsweringRunner, RunInput
+from app.agent.answering_runner import (
+    AnsweringPhases,
+    AnsweringRunner,
+    RunInput,
+    RunResult,
+)
 from app.agent.evidence_collection import EvidenceCollectionService
 from app.agent.evidence_collection.external_search import ExternalSearchService
 from app.agent.evidence_collection.external_search.contract import ExternalQueryDraft
@@ -32,9 +37,12 @@ from app.agent.planning.contract import (
     ResearchTask,
     SearchPlan,
 )
+from app.agent.running.state import DeadlineExceeded, RunNotFound
 from tests.agent.answering_runner._harness import (
     PassThroughOrganizer,
+    RecordingStageGate,
     fixed_scope,
+    internal_hit,
     run_identity,
 )
 from tests.agent.llm_call._fakes import caller_payload
@@ -56,14 +64,15 @@ class _Planner:
 
 
 class _InternalSearch:
-    def __init__(self, timeline: list[str]) -> None:
+    def __init__(self, timeline: list[str], hits: list[object] | None = None) -> None:
         self._timeline = timeline
+        self._hits = hits or []
         self.calls: list[InternalSearchQueries] = []
 
     async def search(self, queries: InternalSearchQueries) -> list[object]:
         self._timeline.append("internal_search")
         self.calls.append(queries)
-        return []
+        return list(self._hits)
 
 
 def _direct_plan() -> DirectAnswerPlan:
@@ -131,18 +140,12 @@ class _EvidenceAnswerer:
         )
 
 
-class _Progress:
-    def __init__(self, timeline: list[str]) -> None:
-        self._timeline = timeline
-
-    async def stage_changed(self, stage: str) -> None:
-        self._timeline.append(f"progress:{stage}")
-
-
 def _runner(
     *,
     plan: QuestionPlan,
     timeline: list[str],
+    stage_gate: RecordingStageGate | None = None,
+    internal_hits: list[object] | None = None,
 ) -> tuple[
     AnsweringRunner,
     _Planner,
@@ -151,7 +154,7 @@ def _runner(
     _EvidenceAnswerer,
 ]:
     planner = _Planner(plan, timeline)
-    internal_search = _InternalSearch(timeline)
+    internal_search = _InternalSearch(timeline, internal_hits)
     direct_answerer = _DirectAnswerer(timeline)
     evidence_answerer = _EvidenceAnswerer(timeline)
 
@@ -175,7 +178,7 @@ def _runner(
     return (
         AnsweringRunner(
             phases_factory=phases_factory,
-            progress=_Progress(timeline),
+            stage_gate=stage_gate or RecordingStageGate(timeline=timeline),
         ),
         planner,
         internal_search,
@@ -185,6 +188,7 @@ def _runner(
 
 
 async def test_direct_workflow_order_and_question_passthrough() -> None:
+    """直接回答のRunは計画に入る問い合わせのあと計画・直接回答の順に進み、質問をそのまま渡す。"""
     timeline: list[str] = []
     runner, planner, internal_search, direct_answerer, evidence_answerer = _runner(
         plan=_direct_plan(),
@@ -198,7 +202,7 @@ async def test_direct_workflow_order_and_question_passthrough() -> None:
 
     assert timeline == [
         "phases_factory",
-        "progress:planning",
+        "enter:planning",
         "planner",
         "direct_answerer",
     ]
@@ -209,6 +213,7 @@ async def test_direct_workflow_order_and_question_passthrough() -> None:
 
 
 async def test_search_workflow_starts_both_retrieval_ports() -> None:
+    """検索のRunは計画と収集のそれぞれに入る前に問い合わせ、内部・外部の収集を両方始める。"""
     timeline: list[str] = []
     plan = _search_plan()
     runner, planner, internal_search, direct_answerer, evidence_answerer = _runner(
@@ -223,12 +228,12 @@ async def test_search_workflow_starts_both_retrieval_ports() -> None:
 
     assert timeline[:4] == [
         "phases_factory",
-        "progress:planning",
+        "enter:planning",
         "planner",
-        "progress:evidence_collection",
+        "enter:evidence_collection",
     ]
     assert set(timeline[4:6]) == {"internal_search", "external_search_scope"}
-    # ヒットが内外ともゼロのため精査は呼ばれず、evidence_review は報告されない。
+    # ヒットが内外ともゼロのため精査は呼ばれず、evidence_review の問い合わせもしない。
     assert timeline[6:] == [
         "evidence_answerer",
     ]
@@ -236,4 +241,55 @@ async def test_search_workflow_starts_both_retrieval_ports() -> None:
     assert internal_search.calls == [InternalSearchQueries(queries=("検索語",))]
     assert evidence_answerer.calls[0].request.question == "元の質問"
     assert direct_answerer.calls == []
+    assert isinstance(result, RunResult)
     assert result.final_output.status == "insufficient"
+
+
+async def test_stop_before_collection_returns_the_reason_without_collecting() -> None:
+    """収集に入る問い合わせで止まると、収集も回答も呼ばずに止まった理由を返す。"""
+    timeline: list[str] = []
+    gate = RecordingStageGate(
+        timeline=timeline, stop_at="evidence_collection", stopped=DeadlineExceeded()
+    )
+    runner, _, internal_search, _, evidence_answerer = _runner(
+        plan=_search_plan(), timeline=timeline, stage_gate=gate
+    )
+
+    outcome = await runner.run(
+        RunInput(question="元の質問", history=()),
+        identity=run_identity(run_id=RUN_ID, as_of=AS_OF),
+    )
+
+    assert (outcome, timeline, internal_search.calls, evidence_answerer.calls) == (
+        DeadlineExceeded(),
+        ["phases_factory", "enter:planning", "planner", "enter:evidence_collection"],
+        [],
+        [],
+    )
+
+
+async def test_stop_before_review_returns_the_reason_without_reviewing() -> None:
+    """ヒットがあって精査に入る問い合わせで止まると、精査も回答も呼ばずに止まった理由を返す。"""
+    timeline: list[str] = []
+    gate = RecordingStageGate(
+        timeline=timeline, stop_at="evidence_review", stopped=RunNotFound()
+    )
+    runner, _, _, _, evidence_answerer = _runner(
+        plan=_search_plan(),
+        timeline=timeline,
+        stage_gate=gate,
+        internal_hits=[internal_hit(assessment_id=1, curation_id=1, title="記事")],
+    )
+
+    outcome = await runner.run(
+        RunInput(question="元の質問", history=()),
+        identity=run_identity(run_id=RUN_ID, as_of=AS_OF),
+    )
+
+    assert set(timeline[4:6]) == {"internal_search", "external_search_scope"}
+    assert (outcome, timeline[:4], timeline[6:], evidence_answerer.calls) == (
+        RunNotFound(),
+        ["phases_factory", "enter:planning", "planner", "enter:evidence_collection"],
+        ["enter:evidence_review"],
+        [],
+    )
