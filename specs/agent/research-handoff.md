@@ -116,7 +116,7 @@ handoff を触らない。
   収集ヒット・採用 evidence・reviewer missing は揃っており、回答本文を待つ理由がない。
 - Run 末尾で結果を待ち合わせ、`complete_run()` と同一トランザクションで確定する。
   attempt_epoch の競合で Run 完了が成立しなければ handoff も書かれない。
-- 停止(`AnswerGenerationStopped`)では並行タスクを cancel し、何も書かない。
+- Run が止まったとき(回答工程が止まった理由を返したとき)は並行タスクを cancel し、何も書かない。
 - 整理の生成が失敗した場合は、台帳だけ更新し、整理は前回の値を据え置く案とする。
 - 台帳を組み立てられなかった Run(精査失敗、記録可能 task 0 件)は handoff を触らない。
 
@@ -207,7 +207,7 @@ def render_planning_instruction(handoff: ResearchHandoff | None) -> str:
   DB 列 `agent_threads.research_handoff` と同語になる。他の工程は `planning` → `QuestionPlan` の
   ように工程名と成果物名を分けており揃っていないが、エージェント構成の見直しで動く見込みが
   高いため据え置く。
-- `AnswerProgressStage` から `context_resolution` を落とす(ステップ 5)。整理の生成は
+- `AnsweringStage` から `context_resolution` を落とす(ステップ 5)。整理の生成は
   回答確定前の後処理であり、進捗 stage としては見せない。
 
 ## 実装ステップ(案)
@@ -236,11 +236,11 @@ def render_planning_instruction(handoff: ResearchHandoff | None) -> str:
    `app/agent/recording/research_handoff.py`。answering と並行起動し、Run 末尾で
    `HANDOFF_ORGANIZE_TIMEOUT_SECONDS` を上限に待ち合わせる。
    planner prompt version は v10。列の増減がないため migration は伴わない。
-   `AgentPhase` に `research_handoff` を足すにあたり、`AnswerProgressStage` との集合一致を
+   `AgentPhase` に `research_handoff` を足すにあたり、`AnsweringStage` との集合一致を
    要求していた不変条件を包含関係へ緩めた(正本は
-   `backend/specs/agent-phase-span-vocabulary-slice.md`)。
+   `backend/tests/agent/test_phase_vocabulary_contract.py`)。
 4. 旧列 `agent_runs.research_checkpoint` の drop。package はステップ 2 で削除済み。
-5. `AnswerProgressStage` / `AgentPhase` / `AgentRunProgressStage` / API schema / CHECK 制約から
+5. `AnsweringStage` / `AgentPhase` / `AgentRunProgressStage` / API schema / CHECK 制約から
    `context_resolution` と、#191 以降到達不能な `safety_check` をまとめて落とす。
    alembic migration(CHECK 縮小と既存行の NULL 化)、frontend の stage 語彙、`/gen-types` を伴う。
    ステップ 1 の後は `context_resolution` が報告されなくなるだけで、
