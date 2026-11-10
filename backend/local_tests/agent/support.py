@@ -26,6 +26,7 @@ from app.agent.running.state import (
     RunNotFound,
 )
 from app.agent.running.state_service import AgentRunStateService
+from app.agent.running.types import RunAttempt
 from app.ai_providers.errors import AIProviderError
 from app.analysis.embedding.domain.value_objects import EMBEDDING_DIMENSION
 from app.models.agent_message import AgentMessage, AgentMessageSource
@@ -111,9 +112,8 @@ class AgentProviderResponses:
 class _DiscardingLivePublisher:
     """準備の操作がRunを閉じたときの終了通知を、画面へ送らずに捨てる。"""
 
-    def __init__(self, run_id, attempt_epoch):
-        self.run_id = run_id
-        self.attempt_epoch = attempt_epoch
+    def __init__(self, attempt):
+        self.attempt = attempt
 
     async def publish(self, event):
         return None
@@ -149,7 +149,7 @@ async def start_run_attempt(session_factory, run_id):
     started = await state_service_for(session_factory).start_attempt(run_id)
     if not isinstance(started, AttemptStarted):
         raise RuntimeError(f"テスト用ランの実行を開始できませんでした: {started}")
-    return started.attempt_epoch
+    return started.attempt.epoch
 
 
 async def create_answering_run(
@@ -163,7 +163,7 @@ async def create_answering_run(
     attempt_epoch = await start_run_attempt(session_factory, created.run_id)
 
     match await state_service_for(session_factory).start_answer_generation(
-        created.run_id, attempt_epoch=attempt_epoch
+        RunAttempt(run_id=created.run_id, epoch=attempt_epoch)
     ):
         case AnswerGenerationStarted(answer_started_at=answer_started_at):
             pass

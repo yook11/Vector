@@ -14,6 +14,7 @@ from app.agent.live_updates.reporters import AgentRunLiveStageReporter
 from app.agent.running.answer_generation import AgentRunAnswerGenerationGate
 from app.agent.running.state import AnswerGenerationStarted, CanContinue
 from app.agent.running.state_service import AgentRunStateService
+from app.agent.running.types import RunAttempt
 
 RUN_ID = UUID("019bd239-1ed4-7fbb-a336-04fe3c197652")
 ATTEMPT_EPOCH = 3
@@ -24,7 +25,7 @@ def _unused_session_factory() -> object:
     raise AssertionError("state service operations are replaced in this test")
 
 
-def _unused_publisher(_run_id: UUID, _attempt_epoch: int) -> object:
+def _unused_publisher(_attempt: RunAttempt) -> object:
     raise AssertionError("no run is closed in this test")
 
 
@@ -60,8 +61,7 @@ async def test_start_and_regenerate_ask_the_state_service_every_time(
             session_factory=_unused_session_factory,  # type: ignore[arg-type]
             publisher_for=_unused_publisher,  # type: ignore[arg-type]
         ),
-        RUN_ID,
-        ATTEMPT_EPOCH,
+        RunAttempt(run_id=RUN_ID, epoch=ATTEMPT_EPOCH),
         schedule_deadline_check=lambda *_: None,
         stage_reporter=AgentRunLiveStageReporter(_DiscardingPublisher()),  # type: ignore[arg-type]
     )

@@ -31,6 +31,7 @@ from app.agent.live_updates.stream import (
     agent_run_live_stream_key,
     is_stream_id_before,
 )
+from app.agent.running.types import RunAttempt
 from app.config import settings
 
 pytestmark = pytest.mark.xdist_group("redis")
@@ -159,8 +160,12 @@ async def _sleep_forever() -> None:
 @pytest.mark.asyncio
 async def test_stream_round_trip_filters_epoch_and_skips_bad_payload() -> None:
     redis = MemoryRedis()
-    publisher_1 = AgentRunLiveStreamPublisher(redis, RUN_ID, EPOCH_1)
-    publisher_2 = AgentRunLiveStreamPublisher(redis, RUN_ID, EPOCH_2)
+    publisher_1 = AgentRunLiveStreamPublisher(
+        redis, RunAttempt(run_id=RUN_ID, epoch=EPOCH_1)
+    )
+    publisher_2 = AgentRunLiveStreamPublisher(
+        redis, RunAttempt(run_id=RUN_ID, epoch=EPOCH_2)
+    )
 
     assert await publisher_1.begin_attempt() == "1-0"
     assert (
@@ -585,20 +590,13 @@ async def test_reader_skips_invalid_integer_epoch_strings(
     assert [entry.stream_id for entry in result.events] == ["2-0"]
 
 
-@pytest.mark.parametrize("attempt_epoch", [0, -1])
-def test_publisher_rejects_nonpositive_attempt_epoch(attempt_epoch: int) -> None:
-    with pytest.raises(ValueError, match="attempt epoch must be positive"):
-        AgentRunLiveStreamPublisher(UnexpectedRedisAccess(), RUN_ID, attempt_epoch)
-
-
 @pytest.mark.asyncio
 async def test_lazy_retry_allows_same_epoch_marker_duplicate() -> None:
     redis = MemoryRedis()
     redis.hang_after_append_once = True
     publisher = AgentRunLiveStreamPublisher(
         redis,
-        RUN_ID,
-        EPOCH_1,
+        RunAttempt(run_id=RUN_ID, epoch=EPOCH_1),
         timeout_seconds=0.01,
     )
 
@@ -634,7 +632,9 @@ async def test_logical_read_timeout_is_not_per_redis_command() -> None:
 
 @pytest.mark.asyncio
 async def test_failures_do_not_leak_payload_or_redis_error_to_logs(read_logs) -> None:
-    publisher = AgentRunLiveStreamPublisher(RaisingRedis(), RUN_ID, EPOCH_1)
+    publisher = AgentRunLiveStreamPublisher(
+        RaisingRedis(), RunAttempt(run_id=RUN_ID, epoch=EPOCH_1)
+    )
     reader = AgentRunLiveStreamReader(RaisingRedis())
 
     assert (
@@ -676,7 +676,9 @@ async def test_real_redis_orders_entries_and_readers_replay_independently() -> N
     redis = aioredis.from_url(settings.redis_url, decode_responses=True)
     run_id = uuid4()
     try:
-        publisher = AgentRunLiveStreamPublisher(redis, run_id, EPOCH_1)
+        publisher = AgentRunLiveStreamPublisher(
+            redis, RunAttempt(run_id=run_id, epoch=EPOCH_1)
+        )
         reader = AgentRunLiveStreamReader(redis)
 
         marker_id = await publisher.begin_attempt()
@@ -704,8 +706,12 @@ async def test_real_redis_excludes_zombie_epoch_and_allows_duplicate_marker() ->
     redis = aioredis.from_url(settings.redis_url, decode_responses=True)
     run_id = uuid4()
     try:
-        old_attempt = AgentRunLiveStreamPublisher(redis, run_id, EPOCH_1)
-        current_attempt = AgentRunLiveStreamPublisher(redis, run_id, EPOCH_2)
+        old_attempt = AgentRunLiveStreamPublisher(
+            redis, RunAttempt(run_id=run_id, epoch=EPOCH_1)
+        )
+        current_attempt = AgentRunLiveStreamPublisher(
+            redis, RunAttempt(run_id=run_id, epoch=EPOCH_2)
+        )
 
         await old_attempt.begin_attempt()
         await old_attempt.publish(AgentRunLiveStreamStageEvent(stage="planning"))
@@ -713,7 +719,9 @@ async def test_real_redis_excludes_zombie_epoch_and_allows_duplicate_marker() ->
         await old_attempt.publish(
             AgentRunLiveStreamStageEvent(stage="evidence_collection")
         )
-        await AgentRunLiveStreamPublisher(redis, run_id, EPOCH_2).begin_attempt()
+        await AgentRunLiveStreamPublisher(
+            redis, RunAttempt(run_id=run_id, epoch=EPOCH_2)
+        ).begin_attempt()
 
         result = await AgentRunLiveStreamReader(redis).read_after(run_id, EPOCH_2, None)
 
@@ -734,7 +742,9 @@ async def test_real_redis_marker_trim_keeps_epoch_filter_and_flags_old_cursor() 
     redis = aioredis.from_url(settings.redis_url, decode_responses=True)
     run_id = uuid4()
     try:
-        publisher = AgentRunLiveStreamPublisher(redis, run_id, EPOCH_2)
+        publisher = AgentRunLiveStreamPublisher(
+            redis, RunAttempt(run_id=run_id, epoch=EPOCH_2)
+        )
         marker_id = await publisher.begin_attempt()
         await publisher.publish(AgentRunLiveStreamStageEvent(stage="answering"))
         assert marker_id is not None
@@ -765,7 +775,9 @@ async def test_real_redis_pages_current_epoch_and_enforces_ttl() -> None:
     redis = aioredis.from_url(settings.redis_url, decode_responses=True)
     run_id = uuid4()
     try:
-        publisher = AgentRunLiveStreamPublisher(redis, run_id, EPOCH_1)
+        publisher = AgentRunLiveStreamPublisher(
+            redis, RunAttempt(run_id=run_id, epoch=EPOCH_1)
+        )
         await publisher.begin_attempt()
         for _ in range(130):
             await publisher.publish(AgentRunLiveStreamStageEvent(stage="planning"))
@@ -797,7 +809,9 @@ async def test_real_redis_passes_events_after_terminal() -> None:
     redis = aioredis.from_url(settings.redis_url, decode_responses=True)
     run_id = uuid4()
     try:
-        publisher = AgentRunLiveStreamPublisher(redis, run_id, EPOCH_1)
+        publisher = AgentRunLiveStreamPublisher(
+            redis, RunAttempt(run_id=run_id, epoch=EPOCH_1)
+        )
         await publisher.begin_attempt()
         await publisher.publish(AgentRunLiveStreamTerminalEvent(status="completed"))
         await publisher.publish(
@@ -820,7 +834,9 @@ async def test_real_redis_passes_events_after_terminal() -> None:
 @pytest.mark.asyncio
 async def test_policy_blocked_terminal_replays_without_an_error_code() -> None:
     redis = MemoryRedis()
-    publisher = AgentRunLiveStreamPublisher(redis, RUN_ID, EPOCH_1)
+    publisher = AgentRunLiveStreamPublisher(
+        redis, RunAttempt(run_id=RUN_ID, epoch=EPOCH_1)
+    )
 
     await publisher.begin_attempt()
     await publisher.publish(AgentRunLiveStreamTerminalEvent(status="policy_blocked"))
@@ -874,7 +890,9 @@ def test_terminal_event_rejects_status_error_code_mismatch(
 @pytest.mark.parametrize("status", ["completed", "policy_blocked"])
 async def test_non_error_terminal_encoding_omits_error_code_key(status: str) -> None:
     redis = MemoryRedis()
-    publisher = AgentRunLiveStreamPublisher(redis, RUN_ID, EPOCH_1)
+    publisher = AgentRunLiveStreamPublisher(
+        redis, RunAttempt(run_id=RUN_ID, epoch=EPOCH_1)
+    )
 
     await publisher.begin_attempt()
     await publisher.publish(AgentRunLiveStreamTerminalEvent(status=status))  # type: ignore[arg-type]

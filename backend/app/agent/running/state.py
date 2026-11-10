@@ -10,7 +10,7 @@ from typing import assert_never
 from uuid import UUID
 
 from app.agent.answering import timing as answer_timing
-from app.agent.running.types import AgentRunErrorCode, AgentRunStatus
+from app.agent.running.types import AgentRunErrorCode, AgentRunStatus, RunAttempt
 
 __all__ = [
     "ACTIVE_STATUSES",
@@ -103,11 +103,7 @@ class AttemptAlreadyStarted:
 
 @dataclass(frozen=True, slots=True)
 class AttemptStarted:
-    attempt_epoch: int
-
-    def __post_init__(self) -> None:
-        if not _is_positive_epoch(self.attempt_epoch):
-            raise ValueError("started attempt requires a positive attempt epoch")
+    attempt: RunAttempt
 
 
 @dataclass(frozen=True, slots=True)
@@ -269,7 +265,3 @@ def _within(deadline: datetime, *, now: datetime) -> CanContinue | DeadlineExcee
     if now >= deadline:
         return DeadlineExceeded()
     return CanContinue()
-
-
-def _is_positive_epoch(value: object) -> bool:
-    return isinstance(value, int) and not isinstance(value, bool) and value >= 1

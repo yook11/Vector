@@ -35,7 +35,7 @@ from app.agent.running.state import (
     RunCompleted,
     RunNotFound,
 )
-from app.agent.running.types import AgentRunErrorCode, AgentRunStatus
+from app.agent.running.types import AgentRunErrorCode, AgentRunStatus, RunAttempt
 from app.models.agent_message import AgentMessage
 from app.models.agent_run import AgentRun
 from app.models.agent_thread import AgentThread
@@ -341,8 +341,7 @@ async def test_running_quota_cancel_is_not_eligible_and_returns_execution_epoch(
         CancelledByUser(),
         [
             ClosedRunningRun(
-                run_id=seeded.run_id,
-                attempt_epoch=1,
+                attempt=RunAttempt(run_id=seeded.run_id, epoch=1),
                 status=AgentRunStatus.FAILED,
                 error_code=AgentRunErrorCode.CANCELLED,
             )
@@ -614,8 +613,7 @@ async def test_cancel_waiting_on_run_lock_uses_winning_status_update_for_release
         CancelledByUser(),
         [
             ClosedRunningRun(
-                run_id=seeded.run_id,
-                attempt_epoch=1,
+                attempt=RunAttempt(run_id=seeded.run_id, epoch=1),
                 status=AgentRunStatus.FAILED,
                 error_code=AgentRunErrorCode.CANCELLED,
             )
@@ -740,16 +738,14 @@ async def test_record_failure_never_refunds(
     recorded = await state_service(
         session_factory, notices=transition_notices
     ).record_failure(
-        seeded.run_id,
-        attempt_epoch=3,
+        RunAttempt(run_id=seeded.run_id, epoch=3),
         error_code=AgentRunErrorCode.INTERNAL_ERROR,
     )
     assert (recorded, transition_notices.closed_runs) == (
         FailureRecorded(),
         [
             ClosedRunningRun(
-                run_id=seeded.run_id,
-                attempt_epoch=3,
+                attempt=RunAttempt(run_id=seeded.run_id, epoch=3),
                 status=AgentRunStatus.FAILED,
                 error_code=AgentRunErrorCode.INTERNAL_ERROR,
             )
@@ -829,8 +825,7 @@ async def test_competing_terminal_transition_wins_without_refund(
                         notices=notices,
                         now=_NOW,
                     ).complete(
-                        seeded.run_id,
-                        attempt_epoch=1,
+                        RunAttempt(run_id=seeded.run_id, epoch=1),
                         result=_completed_result(),
                         research_handoff=None,
                     )
@@ -872,8 +867,7 @@ async def test_competing_terminal_transition_wins_without_refund(
                 assert completed == RunCompleted()
                 expected_closed = [
                     ClosedRunningRun(
-                        run_id=seeded.run_id,
-                        attempt_epoch=1,
+                        attempt=RunAttempt(run_id=seeded.run_id, epoch=1),
                         status=AgentRunStatus.COMPLETED,
                         error_code=None,
                     )

@@ -68,7 +68,7 @@ from app.agent.running.state import (
     RunNotFound,
 )
 from app.agent.running.state_service import AgentRunStateService
-from app.agent.running.types import AgentRunErrorCode
+from app.agent.running.types import AgentRunErrorCode, RunAttempt
 from app.agent.threads.contracts import ThreadMessageSnapshot
 from app.agent.threads.repository import AgentThreadRepository
 from app.ai_providers.errors import (
@@ -177,10 +177,10 @@ class FakeLiveStreamPublisher:
     raise_on_publish = False
     publish_outcomes: list[str | None | BaseException] = []
 
-    def __init__(self, redis: object, run_id: UUID, attempt_epoch: int) -> None:
+    def __init__(self, redis: object, attempt: RunAttempt) -> None:
         self.redis = redis
-        self.run_id = run_id
-        self.attempt_epoch = attempt_epoch
+        self.run_id = attempt.run_id
+        self.attempt_epoch = attempt.epoch
         self.begin_attempt_calls = 0
         self.published: list[object] = []
         FakeLiveStreamPublisher.instances.append(self)
@@ -263,12 +263,11 @@ class CapturingDeltaReporter:
         self,
         publisher: object,
         *,
-        run_id: UUID,
-        attempt_epoch: int,
+        attempt: RunAttempt,
     ) -> None:
         self.publisher = publisher
-        self.run_id = run_id
-        self.attempt_epoch = attempt_epoch
+        self.run_id = attempt.run_id
+        self.attempt_epoch = attempt.epoch
         CapturingDeltaReporter.instances.append(self)
 
 
@@ -280,17 +279,14 @@ class CapturingStageGate(AgentRunStageGate):
     def __init__(
         self,
         state_service: AgentRunStateService,
-        run_id: UUID,
-        attempt_epoch: int,
+        attempt: RunAttempt,
         *,
         stage_reporter: AgentRunLiveStageReporter,
     ) -> None:
-        super().__init__(
-            state_service, run_id, attempt_epoch, stage_reporter=stage_reporter
-        )
+        super().__init__(state_service, attempt, stage_reporter=stage_reporter)
         self.state_service = state_service
-        self.run_id = run_id
-        self.attempt_epoch = attempt_epoch
+        self.run_id = attempt.run_id
+        self.attempt_epoch = attempt.epoch
         self.stage_reporter = stage_reporter
         CapturingStageGate.instances.append(self)
 
@@ -303,22 +299,20 @@ class CapturingAnswerGenerationGate(AgentRunAnswerGenerationGate):
     def __init__(
         self,
         state_service: AgentRunStateService,
-        run_id: UUID,
-        attempt_epoch: int,
+        attempt: RunAttempt,
         *,
         schedule_deadline_check: Callable[[UUID, datetime], None],
         stage_reporter: AgentRunLiveStageReporter,
     ) -> None:
         super().__init__(
             state_service,
-            run_id,
-            attempt_epoch,
+            attempt,
             schedule_deadline_check=schedule_deadline_check,
             stage_reporter=stage_reporter,
         )
         self.state_service = state_service
-        self.run_id = run_id
-        self.attempt_epoch = attempt_epoch
+        self.run_id = attempt.run_id
+        self.attempt_epoch = attempt.epoch
         self.schedule_deadline_check = schedule_deadline_check
         self.stage_reporter = stage_reporter
         CapturingAnswerGenerationGate.instances.append(self)
@@ -430,17 +424,15 @@ async def test_run_agent_answer_completes_run_and_persists_assistant_message(
     class CapturingStateService(AgentRunStateService):
         async def complete(
             self,
-            run_id: UUID,
+            attempt: RunAttempt,
             *,
-            attempt_epoch: int,
             result: AnswerQuestionResult,
             research_handoff: dict[str, Any] | None,
         ) -> RunCompleted | CannotContinue:
             persisted_results.append(result)
-            completed_epochs.append(attempt_epoch)
+            completed_epochs.append(attempt.epoch)
             return await super().complete(
-                run_id,
-                attempt_epoch=attempt_epoch,
+                attempt,
                 result=result,
                 research_handoff=research_handoff,
             )
@@ -523,16 +515,14 @@ def _capture_completion_handoffs(
     class CapturingStateService(AgentRunStateService):
         async def complete(
             self,
-            run_id: UUID,
+            attempt: RunAttempt,
             *,
-            attempt_epoch: int,
             result: AnswerQuestionResult,
             research_handoff: dict[str, Any] | None,
         ) -> RunCompleted | CannotContinue:
             captured.append(research_handoff)
             return await super().complete(
-                run_id,
-                attempt_epoch=attempt_epoch,
+                attempt,
                 result=result,
                 research_handoff=research_handoff,
             )
@@ -1429,24 +1419,22 @@ async def test_generation_stopped_is_routine_return_without_run_transition(
     class ObservingStateService(AgentRunStateService):
         async def complete(
             self,
-            run_id: UUID,
+            attempt: RunAttempt,
             *,
-            attempt_epoch: int,
             result: AnswerQuestionResult,
             research_handoff: dict[str, Any] | None,
         ) -> RunCompleted | CannotContinue:
-            complete_calls.append((run_id, attempt_epoch))
+            complete_calls.append((attempt.run_id, attempt.epoch))
             return AttemptSuperseded()
 
         async def record_failure(
             self,
-            run_id: UUID,
+            attempt: RunAttempt,
             *,
-            attempt_epoch: int,
             error_code: AgentRunErrorCode,
         ) -> FailureRecorded | CannotContinue:
             assert error_code == AgentRunErrorCode.INTERNAL_ERROR
-            mark_failed_calls.append((run_id, attempt_epoch))
+            mark_failed_calls.append((attempt.run_id, attempt.epoch))
             return AttemptSuperseded()
 
     FakeLiveStreamPublisher.instances = []
@@ -1545,24 +1533,22 @@ async def test_epoch_advance_before_answer_start_stops_old_worker_at_next_stage(
     class ObservingStateService(AgentRunStateService):
         async def complete(
             self,
-            run_id: UUID,
+            attempt: RunAttempt,
             *,
-            attempt_epoch: int,
             result: AnswerQuestionResult,
             research_handoff: dict[str, Any] | None,
         ) -> RunCompleted | CannotContinue:
-            complete_calls.append((run_id, attempt_epoch))
+            complete_calls.append((attempt.run_id, attempt.epoch))
             return AttemptSuperseded()
 
         async def record_failure(
             self,
-            run_id: UUID,
+            attempt: RunAttempt,
             *,
-            attempt_epoch: int,
             error_code: AgentRunErrorCode,
         ) -> FailureRecorded | CannotContinue:
             assert error_code == AgentRunErrorCode.INTERNAL_ERROR
-            mark_failed_calls.append((run_id, attempt_epoch))
+            mark_failed_calls.append((attempt.run_id, attempt.epoch))
             return AttemptSuperseded()
 
     FakeLiveStreamPublisher.instances = []
@@ -1670,12 +1656,11 @@ async def test_deadline_stop_publishes_terminal_without_mark_failed(
     class ObservingStateService(AgentRunStateService):
         async def record_failure(
             self,
-            run_id: UUID,
+            attempt: RunAttempt,
             *,
-            attempt_epoch: int,
             error_code: AgentRunErrorCode,
         ) -> FailureRecorded | CannotContinue:
-            mark_failed_calls.append((run_id, attempt_epoch))
+            mark_failed_calls.append((attempt.run_id, attempt.epoch))
             return DeadlineExceeded()
 
     FakeLiveStreamPublisher.instances = []
@@ -1742,17 +1727,15 @@ async def test_delta_finish_precedes_completed_commit_and_terminal(
     class ObservingStateService(AgentRunStateService):
         async def complete(
             self,
-            run_id: UUID,
+            attempt: RunAttempt,
             *,
-            attempt_epoch: int,
             result: AnswerQuestionResult,
             research_handoff: dict[str, Any] | None,
         ) -> RunCompleted | CannotContinue:
             order.append("complete_start")
-            assert attempt_epoch == 1
+            assert attempt.epoch == 1
             return await super().complete(
-                run_id,
-                attempt_epoch=attempt_epoch,
+                attempt,
                 result=result,
                 research_handoff=research_handoff,
             )
@@ -1971,13 +1954,12 @@ async def test_completion_loser_with_existing_delta_has_no_terminal_or_assistant
     class RejectingStateService(AgentRunStateService):
         async def complete(
             self,
-            run_id: UUID,
+            attempt: RunAttempt,
             *,
-            attempt_epoch: int,
             result: AnswerQuestionResult,
             research_handoff: dict[str, Any] | None,
         ) -> RunCompleted | CannotContinue:
-            assert (run_id, result, attempt_epoch) == (
+            assert (attempt.run_id, result, attempt.epoch) == (
                 run.id,
                 fake_agent.result,
                 1,
@@ -2043,9 +2025,8 @@ async def test_completion_failure_publishes_failed_terminal(
     class FailingStateService(AgentRunStateService):
         async def complete(
             self,
-            run_id: UUID,
+            attempt: RunAttempt,
             *,
-            attempt_epoch: int,
             result: AnswerQuestionResult,
             research_handoff: dict[str, Any] | None,
         ) -> RunCompleted | CannotContinue:
@@ -2101,13 +2082,12 @@ async def test_completion_skip_does_not_publish_terminal(
     class RejectingStateService(AgentRunStateService):
         async def complete(
             self,
-            run_id: UUID,
+            attempt: RunAttempt,
             *,
-            attempt_epoch: int,
             result: AnswerQuestionResult,
             research_handoff: dict[str, Any] | None,
         ) -> RunCompleted | CannotContinue:
-            assert (run_id, result, attempt_epoch) == (
+            assert (attempt.run_id, result, attempt.epoch) == (
                 run.id,
                 fake_agent.result,
                 1,
@@ -2160,12 +2140,11 @@ async def test_failed_transition_loser_does_not_publish_terminal(
     class RejectingStateService(AgentRunStateService):
         async def record_failure(
             self,
-            run_id: UUID,
+            attempt: RunAttempt,
             *,
-            attempt_epoch: int,
             error_code: AgentRunErrorCode,
         ) -> FailureRecorded | CannotContinue:
-            assert (run_id, error_code, attempt_epoch) == (
+            assert (attempt.run_id, error_code, attempt.epoch) == (
                 run.id,
                 AgentRunErrorCode.GENERATION_UNAVAILABLE,
                 1,

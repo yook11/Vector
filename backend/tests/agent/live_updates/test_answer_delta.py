@@ -16,6 +16,7 @@ from app.agent.live_updates.stream import (
     AgentRunLiveStreamAnswerDeltaEvent,
     AgentRunLiveStreamAnswerResetEvent,
 )
+from app.agent.running.types import RunAttempt
 from tests.logfire._metric_helpers import collected_metrics
 
 RUN_ID = UUID("00000000-0000-4000-a000-000000000011")
@@ -99,8 +100,7 @@ def _new_reporter(
 ) -> AgentRunLiveAnswerDeltaReporter:
     return AgentRunLiveAnswerDeltaReporter(
         publisher,
-        run_id=RUN_ID,
-        attempt_epoch=ATTEMPT_EPOCH,
+        attempt=RunAttempt(run_id=RUN_ID, epoch=ATTEMPT_EPOCH),
         sleep=sleeper.sleep,
     )
 

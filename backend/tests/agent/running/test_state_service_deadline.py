@@ -12,7 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from app.agent.running.daily_quota.release import DailyQuotaReleaseOutcome
 from app.agent.running.finish_notice import ClosedQueuedRun, ClosedRunningRun
 from app.agent.running.state import DeadlineExceeded, FailureRecorded
-from app.agent.running.types import AgentRunErrorCode, AgentRunStatus
+from app.agent.running.types import AgentRunErrorCode, AgentRunStatus, RunAttempt
 from app.models.agent_run import AgentRun
 from app.models.agent_user_daily_quota import AgentUserDailyQuota
 from tests.agent.running._seed import create_thread_message_run
@@ -165,8 +165,7 @@ async def test_cancel_after_deadline_expires_running_run_for_its_attempt(
         DeadlineExceeded(),
         [
             ClosedRunningRun(
-                run_id=run.id,
-                attempt_epoch=3,
+                attempt=RunAttempt(run_id=run.id, epoch=3),
                 status=AgentRunStatus.DEADLINE_EXCEEDED,
                 error_code=None,
             )
@@ -194,7 +193,8 @@ async def test_failure_after_recovery_deadline_expires_answering_run(
     service = state_service(session_factory, notices=notices, now=_NOW)
 
     result = await service.record_failure(
-        run.id, attempt_epoch=2, error_code=AgentRunErrorCode.GENERATION_UNAVAILABLE
+        RunAttempt(run_id=run.id, epoch=2),
+        error_code=AgentRunErrorCode.GENERATION_UNAVAILABLE,
     )
 
     assert (
@@ -205,8 +205,7 @@ async def test_failure_after_recovery_deadline_expires_answering_run(
         DeadlineExceeded(),
         [
             ClosedRunningRun(
-                run_id=run.id,
-                attempt_epoch=2,
+                attempt=RunAttempt(run_id=run.id, epoch=2),
                 status=AgentRunStatus.DEADLINE_EXCEEDED,
                 error_code=None,
             )
@@ -242,8 +241,7 @@ async def test_start_after_deadline_reports_redelivered_running_attempt(
         DeadlineExceeded(),
         [
             ClosedRunningRun(
-                run_id=run.id,
-                attempt_epoch=3,
+                attempt=RunAttempt(run_id=run.id, epoch=3),
                 status=AgentRunStatus.DEADLINE_EXCEEDED,
                 error_code=None,
             )

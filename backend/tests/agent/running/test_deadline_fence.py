@@ -25,7 +25,7 @@ from app.agent.running.state import (
     RunCompleted,
     RunPhaseMismatchError,
 )
-from app.agent.running.types import AgentRunStatus
+from app.agent.running.types import AgentRunStatus, RunAttempt
 from app.models.agent_message import AgentMessage, AgentMessageSource
 from app.models.agent_run import AgentRun
 from app.models.agent_thread import AgentThread
@@ -256,8 +256,7 @@ async def test_complete_run_uses_answer_recovery_deadline(
     accepted_after_original_outcome = await state_service(
         session_factory, notices=notices, now=_CREATED_AT + timedelta(seconds=67)
     ).complete(
-        accepted_after_original_deadline.run_id,
-        attempt_epoch=3,
+        RunAttempt(run_id=accepted_after_original_deadline.run_id, epoch=3),
         result=_answer_result(),
         research_handoff=_CANDIDATE_HANDOFF,
     )
@@ -266,16 +265,14 @@ async def test_complete_run_uses_answer_recovery_deadline(
         notices=notices,
         now=_RECOVERY_DEADLINE - timedelta(microseconds=1),
     ).complete(
-        accepted_before_recovery_deadline.run_id,
-        attempt_epoch=3,
+        RunAttempt(run_id=accepted_before_recovery_deadline.run_id, epoch=3),
         result=_answer_result(),
         research_handoff=_CANDIDATE_HANDOFF,
     )
     rejected_outcome = await state_service(
         session_factory, notices=notices, now=_RECOVERY_DEADLINE
     ).complete(
-        rejected.run_id,
-        attempt_epoch=3,
+        RunAttempt(run_id=rejected.run_id, epoch=3),
         result=_answer_result(),
         research_handoff=_CANDIDATE_HANDOFF,
     )
@@ -291,20 +288,21 @@ async def test_complete_run_uses_answer_recovery_deadline(
         DeadlineExceeded(),
         [
             ClosedRunningRun(
-                run_id=accepted_after_original_deadline.run_id,
-                attempt_epoch=3,
+                attempt=RunAttempt(
+                    run_id=accepted_after_original_deadline.run_id, epoch=3
+                ),
                 status=AgentRunStatus.COMPLETED,
                 error_code=None,
             ),
             ClosedRunningRun(
-                run_id=accepted_before_recovery_deadline.run_id,
-                attempt_epoch=3,
+                attempt=RunAttempt(
+                    run_id=accepted_before_recovery_deadline.run_id, epoch=3
+                ),
                 status=AgentRunStatus.COMPLETED,
                 error_code=None,
             ),
             ClosedRunningRun(
-                run_id=rejected.run_id,
-                attempt_epoch=3,
+                attempt=RunAttempt(run_id=rejected.run_id, epoch=3),
                 status=AgentRunStatus.DEADLINE_EXCEEDED,
                 error_code=None,
             ),
@@ -375,8 +373,7 @@ async def test_complete_run_requires_answer_start_without_changing_run(
 
     with pytest.raises(RunPhaseMismatchError):
         await service.complete(
-            seeded.run_id,
-            attempt_epoch=3,
+            RunAttempt(run_id=seeded.run_id, epoch=3),
             result=_answer_result(),
             research_handoff=_CANDIDATE_HANDOFF,
         )
@@ -418,8 +415,7 @@ async def test_complete_run_does_not_change_persisted_result_for_old_epoch(
     service = state_service(session_factory, now=_CREATED_AT + timedelta(seconds=67))
 
     outcome = await service.complete(
-        seeded.run_id,
-        attempt_epoch=3,
+        RunAttempt(run_id=seeded.run_id, epoch=3),
         result=_answer_result(),
         research_handoff=_CANDIDATE_HANDOFF,
     )
@@ -468,8 +464,7 @@ async def test_complete_run_uses_database_time_after_waiting_for_run_lock(
 
             save_task = asyncio.create_task(
                 service.complete(
-                    seeded.run_id,
-                    attempt_epoch=3,
+                    RunAttempt(run_id=seeded.run_id, epoch=3),
                     result=_answer_result(),
                     research_handoff=_CANDIDATE_HANDOFF,
                 )
@@ -499,8 +494,7 @@ async def test_complete_run_uses_database_time_after_waiting_for_run_lock(
         DeadlineExceeded(),
         [
             ClosedRunningRun(
-                run_id=seeded.run_id,
-                attempt_epoch=3,
+                attempt=RunAttempt(run_id=seeded.run_id, epoch=3),
                 status=AgentRunStatus.DEADLINE_EXCEEDED,
                 error_code=None,
             )

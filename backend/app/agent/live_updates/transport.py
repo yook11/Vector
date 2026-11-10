@@ -12,6 +12,7 @@ from app.agent.live_updates.stream import (
     AgentRunLiveStreamReader,
     agent_run_live_stream_key,
 )
+from app.agent.running.types import RunAttempt
 
 
 class AgentLiveTransport:
@@ -21,10 +22,8 @@ class AgentLiveTransport:
     def reader(self) -> AgentRunLiveStreamReader:
         return AgentRunLiveStreamReader(self._redis)
 
-    def publisher(
-        self, run_id: UUID, attempt_epoch: int
-    ) -> AgentRunLiveStreamPublisher:
-        return AgentRunLiveStreamPublisher(self._redis, run_id, attempt_epoch)
+    def publisher(self, attempt: RunAttempt) -> AgentRunLiveStreamPublisher:
+        return AgentRunLiveStreamPublisher(self._redis, attempt)
 
     async def exists(self, run_id: UUID) -> bool:
         return bool(await self._redis.exists(agent_run_live_stream_key(run_id)))

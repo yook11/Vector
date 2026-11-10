@@ -17,7 +17,7 @@ from app.agent.running.state import (
     DeadlineExceeded,
     RunPhaseMismatchError,
 )
-from app.agent.running.types import AgentRunStatus
+from app.agent.running.types import AgentRunStatus, RunAttempt
 from app.models.agent_run import AgentRun
 from app.models.agent_user_daily_quota import AgentUserDailyQuota
 from tests.agent.running._seed import create_thread_message_run
@@ -70,7 +70,7 @@ async def _decide(
     notices = ClosedRunNotices()
     result = await state_service(
         session_factory, notices=notices, now=now
-    ).authorize_stage_entry(run_id, attempt_epoch=attempt_epoch)
+    ).authorize_stage_entry(RunAttempt(run_id=run_id, epoch=attempt_epoch))
     return result, notices.closed_runs
 
 
@@ -125,8 +125,7 @@ async def test_current_attempt_at_or_after_deadline_stops_and_expires(
         DeadlineExceeded(),
         [
             ClosedRunningRun(
-                run_id=run_id,
-                attempt_epoch=1,
+                attempt=RunAttempt(run_id=run_id, epoch=1),
                 status=AgentRunStatus.DEADLINE_EXCEEDED,
                 error_code=None,
             )

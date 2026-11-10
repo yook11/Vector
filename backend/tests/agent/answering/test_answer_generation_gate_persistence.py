@@ -31,7 +31,7 @@ from app.agent.running.state import (
     RunPhaseMismatchError,
 )
 from app.agent.running.state_service import AgentRunStateService
-from app.agent.running.types import AgentRunStatus
+from app.agent.running.types import AgentRunStatus, RunAttempt
 from app.models.agent_run import AgentRun
 from tests.agent.running._seed import create_thread_message_run
 from tests.agent.running._state_service import (
@@ -54,8 +54,8 @@ class _RecordingPublisher:
     def __init__(self) -> None:
         self.events: list[tuple[uuid.UUID, int, AgentRunLiveStreamEvent]] = []
 
-    def publisher_for(self, run_id: uuid.UUID, attempt_epoch: int) -> _EpochPublisher:
-        return _EpochPublisher(self, run_id, attempt_epoch)
+    def publisher_for(self, attempt: RunAttempt) -> _EpochPublisher:
+        return _EpochPublisher(self, attempt.run_id, attempt.epoch)
 
 
 class _EpochPublisher:
@@ -83,18 +83,18 @@ class _ObservedGate:
     ) -> None:
         self.publisher = _RecordingPublisher()
         self.reservations: list[tuple[uuid.UUID, datetime]] = []
+        attempt = RunAttempt(run_id=run_id, epoch=attempt_epoch)
         self.gate = AgentRunAnswerGenerationGate(
             AgentRunStateService(
                 session_factory=session_factory,
                 publisher_for=self.publisher.publisher_for,  # type: ignore[arg-type]
             ),
-            run_id,
-            attempt_epoch,
+            attempt,
             schedule_deadline_check=lambda target_run_id, at: self.reservations.append(
                 (target_run_id, at)
             ),
             stage_reporter=AgentRunLiveStageReporter(
-                self.publisher.publisher_for(run_id, attempt_epoch)  # type: ignore[arg-type]
+                self.publisher.publisher_for(attempt)  # type: ignore[arg-type]
             ),
         )
 
@@ -115,7 +115,7 @@ async def _start_at(
     notices = ClosedRunNotices()
     result = await state_service(
         session_factory, notices=notices, now=now
-    ).start_answer_generation(run_id, attempt_epoch=attempt_epoch)
+    ).start_answer_generation(RunAttempt(run_id=run_id, epoch=attempt_epoch))
     return result, notices.closed_runs
 
 
@@ -129,7 +129,7 @@ async def _authorize_at(
     notices = ClosedRunNotices()
     result = await state_service(
         session_factory, notices=notices, now=now
-    ).authorize_answer_regeneration(run_id, attempt_epoch=attempt_epoch)
+    ).authorize_answer_regeneration(RunAttempt(run_id=run_id, epoch=attempt_epoch))
     return result, notices.closed_runs
 
 
@@ -143,8 +143,7 @@ async def _database_time(session_factory: async_sessionmaker[AsyncSession]) -> d
 def _closed_by_deadline(run_id: uuid.UUID) -> list[ClosedRun]:
     return [
         ClosedRunningRun(
-            run_id=run_id,
-            attempt_epoch=_ATTEMPT_EPOCH,
+            attempt=RunAttempt(run_id=run_id, epoch=_ATTEMPT_EPOCH),
             status=AgentRunStatus.DEADLINE_EXCEEDED,
             error_code=None,
         )
@@ -301,7 +300,9 @@ async def test_rolled_back_start_does_not_persist_generation_right(
         now=_BEFORE_DEADLINE,
     )
 
-    result = await service.start_answer_generation(run_id, attempt_epoch=_ATTEMPT_EPOCH)
+    result = await service.start_answer_generation(
+        RunAttempt(run_id=run_id, epoch=_ATTEMPT_EPOCH)
+    )
 
     run = await _load_run(session_factory, run_id)
     assert result == AnswerGenerationStarted(run_id, _BEFORE_DEADLINE)
@@ -432,8 +433,7 @@ async def test_lock_wait_uses_database_time_after_acquiring_run_lock(
 
             start_task = asyncio.create_task(
                 service.start_answer_generation(
-                    run_id,
-                    attempt_epoch=_ATTEMPT_EPOCH,
+                    RunAttempt(run_id=run_id, epoch=_ATTEMPT_EPOCH),
                 )
             )
             await wait_until_lock_waiting(observer)
@@ -576,16 +576,16 @@ async def test_gate_start_reservation_recovers_after_original_deadline(
     source = RecordingSource()
     scheduler = AgentDeadlineScheduler(source)
     publisher = _RecordingPublisher()
+    attempt = RunAttempt(run_id=run_id, epoch=_ATTEMPT_EPOCH)
     gate = AgentRunAnswerGenerationGate(
         AgentRunStateService(
             session_factory=session_factory,
             publisher_for=publisher.publisher_for,  # type: ignore[arg-type]
         ),
-        run_id,
-        _ATTEMPT_EPOCH,
+        attempt,
         schedule_deadline_check=scheduler.reserve_in_background,
         stage_reporter=AgentRunLiveStageReporter(
-            publisher.publisher_for(run_id, _ATTEMPT_EPOCH)  # type: ignore[arg-type]
+            publisher.publisher_for(attempt)  # type: ignore[arg-type]
         ),
     )
 

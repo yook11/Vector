@@ -26,6 +26,7 @@ from app.agent.running.state import (
     DeadlineExceeded,
 )
 from app.agent.running.state_service import AgentRunStateService
+from app.agent.running.types import RunAttempt
 from app.db.errors import DatabaseConnectionError, DatabaseConnectionErrorReason
 from app.models.agent_run import AgentRun
 from tests.agent.running._seed import create_thread_message_run
@@ -41,8 +42,8 @@ class RecordingPublisher:
     def __init__(self) -> None:
         self.events: list[tuple[UUID, int, AgentRunLiveStreamEvent]] = []
 
-    def publisher_for(self, run_id: UUID, attempt_epoch: int) -> _EpochPublisher:
-        return _EpochPublisher(self, run_id, attempt_epoch)
+    def publisher_for(self, attempt: RunAttempt) -> _EpochPublisher:
+        return _EpochPublisher(self, attempt.run_id, attempt.epoch)
 
     def published(self) -> list[tuple[UUID, int, dict[str, Any]]]:
         return [
@@ -71,15 +72,15 @@ def _new_gate(
     run_id: UUID = RUN_ID,
     attempt_epoch: int = ATTEMPT_EPOCH,
 ) -> AgentRunStageGate:
+    attempt = RunAttempt(run_id=run_id, epoch=attempt_epoch)
     return AgentRunStageGate(
         AgentRunStateService(
             session_factory=session_factory,  # type: ignore[arg-type]
             publisher_for=publisher.publisher_for,  # type: ignore[arg-type]
         ),
-        run_id,
-        attempt_epoch,
+        attempt,
         stage_reporter=AgentRunLiveStageReporter(
-            publisher.publisher_for(run_id, attempt_epoch)  # type: ignore[arg-type]
+            publisher.publisher_for(attempt)  # type: ignore[arg-type]
         ),
     )
 

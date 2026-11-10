@@ -24,6 +24,7 @@ from app.agent.live_updates.stream import (
     AgentRunLiveStreamPublisher,
     AgentRunLiveStreamStageEvent,
 )
+from app.agent.running.types import RunAttempt
 
 RUN_ID = UUID("00000000-0000-4000-a000-000000000012")
 ATTEMPT_EPOCH = 7
@@ -121,8 +122,7 @@ async def test_stage_reporter_uses_stream_publishers_attempt_epoch() -> None:
     redis = RecordingRedis()
     stream_publisher = AgentRunLiveStreamPublisher(
         redis,  # type: ignore[arg-type]
-        RUN_ID,
-        ATTEMPT_EPOCH,
+        RunAttempt(run_id=RUN_ID, epoch=ATTEMPT_EPOCH),
     )
     reporter = reporters.AgentRunLiveStageReporter(stream_publisher)
 

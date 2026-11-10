@@ -42,7 +42,7 @@ from app.agent.running.state import (
     RunNotFound,
 )
 from app.agent.running.state_service import AgentRunStateService
-from app.agent.running.types import AgentRunErrorCode
+from app.agent.running.types import AgentRunErrorCode, RunAttempt
 from app.agent.threads.contracts import ThreadMessageSnapshot
 from app.agent.threads.history import HISTORY_MESSAGE_LIMIT, normalize_run_history
 from app.agent.threads.repository import AgentThreadRepository
@@ -60,24 +60,19 @@ async def execute_run_attempt(
     schedule_deadline_check: Callable[[UUID, datetime], None],
 ) -> None:
     research_handoff: ResearchHandoff | None = None
-    publishers: dict[tuple[UUID, int], AgentRunLiveStreamPublisher] = {}
+    publishers: dict[RunAttempt, AgentRunLiveStreamPublisher] = {}
 
     # 自分の世代の終了は、開始の印を送り済みの同じpublisherで通知する。
-    def publisher_for(
-        target_run_id: UUID, attempt_epoch: int
-    ) -> AgentRunLiveStreamPublisher:
-        key = (target_run_id, attempt_epoch)
-        if key not in publishers:
-            publishers[key] = AgentRunLiveStreamPublisher(
-                live_redis, target_run_id, attempt_epoch
-            )
-        return publishers[key]
+    def publisher_for(target: RunAttempt) -> AgentRunLiveStreamPublisher:
+        if target not in publishers:
+            publishers[target] = AgentRunLiveStreamPublisher(live_redis, target)
+        return publishers[target]
 
     state_service = AgentRunStateService(
         session_factory=session_factory, publisher_for=publisher_for
     )
     match await state_service.start_attempt(run_id):
-        case AttemptStarted(attempt_epoch=attempt_epoch):
+        case AttemptStarted(attempt=attempt):
             pass
         case DeadlineExceeded():
             logger.info("agent_run_start_deadline_exceeded")
@@ -85,7 +80,7 @@ async def execute_run_attempt(
         case CannotContinue() as stopped:
             logger.info("agent_run_not_started", reason=_stop_reason(stopped))
             return
-    stream_events = publisher_for(run_id, attempt_epoch)
+    stream_events = publisher_for(attempt)
 
     question_row = None
     try:
@@ -97,20 +92,11 @@ async def execute_run_attempt(
             exc_info=exc,
         )
     if question_row is None:
-        await _mark_failed(
-            state_service,
-            run_id,
-            attempt_epoch,
-            AgentRunErrorCode.INTERNAL_ERROR,
-        )
+        await _mark_failed(state_service, attempt, AgentRunErrorCode.INTERNAL_ERROR)
         return
     user_id, thread_id, question = question_row
 
-    delta_reporter = AgentRunLiveAnswerDeltaReporter(
-        stream_events,
-        run_id=run_id,
-        attempt_epoch=attempt_epoch,
-    )
+    delta_reporter = AgentRunLiveAnswerDeltaReporter(stream_events, attempt=attempt)
     try:
         await stream_events.begin_attempt()
     except Exception:
@@ -137,15 +123,11 @@ async def execute_run_attempt(
         answering_runner = build_answering_runner(
             session_factory=session_factory,
             stage_gate=AgentRunStageGate(
-                state_service,
-                run_id,
-                attempt_epoch,
-                stage_reporter=stage_reporter,
+                state_service, attempt, stage_reporter=stage_reporter
             ),
             answer_generation_gate=AgentRunAnswerGenerationGate(
                 state_service,
-                run_id,
-                attempt_epoch,
+                attempt,
                 schedule_deadline_check=schedule_deadline_check,
                 stage_reporter=stage_reporter,
             ),
@@ -172,10 +154,7 @@ async def execute_run_attempt(
             exc_info=exc,
         )
         await _mark_failed(
-            state_service,
-            run_id,
-            attempt_epoch,
-            AgentRunErrorCode.GENERATION_UNAVAILABLE,
+            state_service, attempt, AgentRunErrorCode.GENERATION_UNAVAILABLE
         )
         return
     except Exception as exc:
@@ -184,12 +163,7 @@ async def execute_run_attempt(
             run_id=str(run_id),
             exc_info=exc,
         )
-        await _mark_failed(
-            state_service,
-            run_id,
-            attempt_epoch,
-            AgentRunErrorCode.INTERNAL_ERROR,
-        )
+        await _mark_failed(state_service, attempt, AgentRunErrorCode.INTERNAL_ERROR)
         return
 
     match run_outcome:
@@ -209,8 +183,7 @@ async def execute_run_attempt(
     )
     try:
         completion = await state_service.complete(
-            run_id,
-            attempt_epoch=attempt_epoch,
+            attempt,
             result=result,
             research_handoff=serialized_research_handoff,
         )
@@ -219,12 +192,7 @@ async def execute_run_attempt(
             "agent_run_completion_failed",
             run_id=str(run_id),
         )
-        await _mark_failed(
-            state_service,
-            run_id,
-            attempt_epoch,
-            AgentRunErrorCode.INTERNAL_ERROR,
-        )
+        await _mark_failed(state_service, attempt, AgentRunErrorCode.INTERNAL_ERROR)
         return
     match completion:
         case RunCompleted():
@@ -327,13 +295,8 @@ async def _read_research_handoff(
 
 async def _mark_failed(
     state_service: AgentRunStateService,
-    run_id: UUID,
-    attempt_epoch: int,
+    attempt: RunAttempt,
     error_code: AgentRunErrorCode,
 ) -> None:
     # 既に止まっていたRunには書かず、閉じたときの通知は操作が送る。
-    await state_service.record_failure(
-        run_id,
-        attempt_epoch=attempt_epoch,
-        error_code=error_code,
-    )
+    await state_service.record_failure(attempt, error_code=error_code)

@@ -2,7 +2,25 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from enum import StrEnum
+from uuid import UUID
+
+
+@dataclass(frozen=True, slots=True)
+class RunAttempt:
+    """Runのどの試行かを、Runのidと1以上の実行世代で表す。"""
+
+    run_id: UUID
+    epoch: int
+
+    def __post_init__(self) -> None:
+        if (
+            not isinstance(self.epoch, int)
+            or isinstance(self.epoch, bool)
+            or self.epoch < 1
+        ):
+            raise ValueError("run attempt requires a positive epoch")
 
 
 class AgentRunStatus(StrEnum):

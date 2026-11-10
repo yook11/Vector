@@ -33,7 +33,7 @@ from app.agent.live_updates.transport import (
     AgentLiveTransport,
     get_agent_live_transport,
 )
-from app.agent.running.types import AgentRunStatus
+from app.agent.running.types import AgentRunStatus, RunAttempt
 from app.config import settings
 from app.main import app
 
@@ -514,7 +514,9 @@ async def test_real_redis_events_flow_through_fastapi_sse_with_cursor(
         redis
     )
     try:
-        publisher = AgentRunLiveStreamPublisher(redis, run_id, 2)
+        publisher = AgentRunLiveStreamPublisher(
+            redis, RunAttempt(run_id=run_id, epoch=2)
+        )
         marker_id = await publisher.begin_attempt()
         delta_id = await publisher.publish(
             AgentRunLiveStreamAnswerDeltaEvent(generation=1, text="safe draft")
