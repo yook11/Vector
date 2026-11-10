@@ -34,14 +34,7 @@ from app.agent.recording.evidence_answer import (
     logfire_evidence_answer_recorder,
 )
 from app.agent.retry_prospect import is_resolvable_by_retry
-from app.agent.running.state import (
-    AttemptSuperseded,
-    CancelledByUser,
-    CanContinue,
-    CannotContinue,
-    DeadlineExceeded,
-    RunNotFound,
-)
+from app.agent.running.state import CanContinue, CannotContinue
 from app.ai_providers.errors import AIProviderError
 
 __all__ = ["EvidenceAnswerService"]
@@ -79,12 +72,7 @@ class EvidenceAnswerService:
         match await self._gate.start():
             case CanContinue():
                 pass
-            case (
-                CancelledByUser()
-                | DeadlineExceeded()
-                | AttemptSuperseded()
-                | RunNotFound()
-            ) as stopped:
+            case CannotContinue() as stopped:
                 return stopped
 
         timeout = asyncio.timeout(answer_timing.ANSWER_GENERATION_TIMEOUT_SECONDS)
@@ -101,12 +89,7 @@ class EvidenceAnswerService:
                                             await self._delta.reset(
                                                 generation=attempt_number
                                             )
-                                        case (
-                                            CancelledByUser()
-                                            | DeadlineExceeded()
-                                            | AttemptSuperseded()
-                                            | RunNotFound()
-                                        ) as stopped:
+                                        case CannotContinue() as stopped:
                                             recording.report_outcome(
                                                 EvidenceAnswerStopped()
                                             )

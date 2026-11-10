@@ -10,12 +10,8 @@ from app.agent.answering import timing as answer_timing
 from app.agent.live_updates.reporters import AgentRunLiveStageReporter
 from app.agent.running.state import (
     AnswerGenerationStarted,
-    AttemptSuperseded,
-    CancelledByUser,
     CanContinue,
     CannotContinue,
-    DeadlineExceeded,
-    RunNotFound,
 )
 from app.agent.running.state_service import AgentRunStateService
 
@@ -52,12 +48,7 @@ class AgentRunAnswerGenerationGate:
                 )
                 await self._stage_reporter.stage_changed("answering")
                 return CanContinue()
-            case (
-                CancelledByUser()
-                | DeadlineExceeded()
-                | AttemptSuperseded()
-                | RunNotFound()
-            ) as stopped:
+            case CannotContinue() as stopped:
                 return stopped
 
     async def regenerate(self) -> CanContinue | CannotContinue:

@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Awaitable, Callable
 from contextlib import suppress
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
 from uuid import UUID
@@ -33,7 +33,6 @@ from app.agent.running.state import (
     AnswerGenerationStarted,
     AttemptAlreadyStarted,
     AttemptStarted,
-    AttemptSuperseded,
     CancelledByUser,
     CanContinue,
     CannotContinue,
@@ -45,7 +44,7 @@ from app.agent.running.state import (
     RunNotFound,
     RunPhase,
 )
-from app.agent.running.state_repository import AgentRunStateRepository, LockedRun
+from app.agent.running.state_repository import AgentRunStateRepository, CurrentRun
 from app.agent.running.types import AgentRunErrorCode, AgentRunStatus
 from app.agent.threads.citation_integrity import warn_on_citation_source_mismatch
 from app.db.retry_prospect import is_resolvable_by_retry
@@ -72,79 +71,71 @@ class AgentRunStateService:
         self._now = now
 
     async def start_attempt(self, run_id: UUID) -> AttemptStarted | CannotContinue:
-        async def operate(transaction: _Transaction, locked: LockedRun):
-            decision = locked.state.check_start(now=locked.now)
-            await transaction.close_if_expired(locked, decision)
+        async def on_locked_run(operation: _RunOperation, current_run: CurrentRun):
+            decision = current_run.state.check_start(now=current_run.now)
+            await operation.close_if_expired(current_run, decision)
             match decision:
                 case CanContinue():
-                    attempt_epoch = locked.state.attempt_epoch + 1
-                    await transaction.repository.mark_attempt_started(
-                        run_id, attempt_epoch=attempt_epoch
+                    attempt_epoch = current_run.state.attempt_epoch + 1
+                    await operation.repository.mark_attempt_started(
+                        attempt_epoch=attempt_epoch
                     )
                     return AttemptStarted(attempt_epoch=attempt_epoch)
-                case (
-                    CancelledByUser()
-                    | DeadlineExceeded()
-                    | AttemptSuperseded() as stopped
-                ):
+                case CannotContinue() as stopped:
                     return stopped
 
-        return await self._operate(run_id, operate)
+        return await self._with_locked_run(run_id, on_locked_run)
 
     async def authorize_stage_entry(
         self, run_id: UUID, *, attempt_epoch: int
     ) -> CanContinue | CannotContinue:
-        async def operate(transaction: _Transaction, locked: LockedRun):
-            decision = locked.state.check_progress(
+        async def on_locked_run(operation: _RunOperation, current_run: CurrentRun):
+            decision = current_run.state.check_progress(
                 attempt_epoch=attempt_epoch,
                 phases={RunPhase.PREPARING},
-                now=locked.now,
+                now=current_run.now,
             )
-            await transaction.close_if_expired(locked, decision)
+            await operation.close_if_expired(current_run, decision)
             return decision
 
-        return await self._operate(run_id, operate)
+        return await self._with_locked_run(run_id, on_locked_run)
 
     async def start_answer_generation(
         self, run_id: UUID, *, attempt_epoch: int
     ) -> AnswerGenerationStarted | CannotContinue:
-        async def operate(transaction: _Transaction, locked: LockedRun):
-            decision = locked.state.check_progress(
+        async def on_locked_run(operation: _RunOperation, current_run: CurrentRun):
+            decision = current_run.state.check_progress(
                 attempt_epoch=attempt_epoch,
                 phases={RunPhase.PREPARING},
-                now=locked.now,
+                now=current_run.now,
             )
-            await transaction.close_if_expired(locked, decision)
+            await operation.close_if_expired(current_run, decision)
             match decision:
                 case CanContinue():
-                    await transaction.repository.mark_answer_started(
-                        run_id, answer_started_at=locked.now
+                    await operation.repository.mark_answer_started(
+                        answer_started_at=current_run.now
                     )
                     return AnswerGenerationStarted(
-                        run_id=run_id, answer_started_at=locked.now
+                        run_id=run_id, answer_started_at=current_run.now
                     )
-                case (
-                    CancelledByUser()
-                    | DeadlineExceeded()
-                    | AttemptSuperseded() as stopped
-                ):
+                case CannotContinue() as stopped:
                     return stopped
 
-        return await self._operate(run_id, operate)
+        return await self._with_locked_run(run_id, on_locked_run)
 
     async def authorize_answer_regeneration(
         self, run_id: UUID, *, attempt_epoch: int
     ) -> CanContinue | CannotContinue:
-        async def operate(transaction: _Transaction, locked: LockedRun):
-            decision = locked.state.check_progress(
+        async def on_locked_run(operation: _RunOperation, current_run: CurrentRun):
+            decision = current_run.state.check_progress(
                 attempt_epoch=attempt_epoch,
                 phases={RunPhase.ANSWERING},
-                now=locked.now,
+                now=current_run.now,
             )
-            await transaction.close_if_expired(locked, decision)
+            await operation.close_if_expired(current_run, decision)
             return decision
 
-        return await self._operate(run_id, operate)
+        return await self._with_locked_run(run_id, on_locked_run)
 
     async def complete(
         self,
@@ -154,44 +145,38 @@ class AgentRunStateService:
         result: AnswerQuestionResult,
         research_handoff: dict[str, Any] | None,
     ) -> RunCompleted | CannotContinue:
-        async def operate(transaction: _Transaction, locked: LockedRun):
-            decision = locked.state.check_attempt_finish(
+        async def on_locked_run(operation: _RunOperation, current_run: CurrentRun):
+            decision = current_run.state.check_attempt_finish(
                 attempt_epoch=attempt_epoch,
                 phases={RunPhase.ANSWERING},
-                now=locked.now,
+                now=current_run.now,
             )
-            await transaction.close_if_expired(locked, decision)
+            await operation.close_if_expired(current_run, decision)
             match decision:
                 case CanContinue():
                     pass
-                case (
-                    CancelledByUser()
-                    | DeadlineExceeded()
-                    | AttemptSuperseded() as stopped
-                ):
+                case CannotContinue() as stopped:
                     return stopped
 
-            repository = transaction.repository
+            repository = operation.repository
             warn_on_citation_source_mismatch(
                 run_id=run_id,
                 answer=result.answer,
                 source_refs=[source.source_ref for source in result.sources],
             )
-            assistant_message_id = await repository.add_assistant_message(
-                locked.thread.id, result=result
-            )
-            await transaction.close(
-                locked,
+            assistant_message_id = await repository.add_assistant_message(result=result)
+            await operation.close(
+                current_run,
                 status=AgentRunStatus.COMPLETED,
                 assistant_message_id=assistant_message_id,
             )
-            repository.touch_thread(locked.thread, updated_at=locked.now)
+            repository.touch_thread(updated_at=current_run.now)
             # Noneは「記録を追加しなかったRun」であり、既存handoffを消さない。
             if research_handoff is not None:
-                repository.replace_research_handoff(locked.thread, research_handoff)
+                repository.replace_research_handoff(research_handoff)
             return RunCompleted()
 
-        return await self._operate(run_id, operate, lock_thread=True)
+        return await self._with_locked_run(run_id, on_locked_run, lock_thread=True)
 
     async def record_failure(
         self,
@@ -200,27 +185,23 @@ class AgentRunStateService:
         attempt_epoch: int,
         error_code: AgentRunErrorCode,
     ) -> FailureRecorded | CannotContinue:
-        async def operate(transaction: _Transaction, locked: LockedRun):
-            decision = locked.state.check_attempt_finish(
+        async def on_locked_run(operation: _RunOperation, current_run: CurrentRun):
+            decision = current_run.state.check_attempt_finish(
                 attempt_epoch=attempt_epoch,
                 phases={RunPhase.PREPARING, RunPhase.ANSWERING},
-                now=locked.now,
+                now=current_run.now,
             )
-            await transaction.close_if_expired(locked, decision)
+            await operation.close_if_expired(current_run, decision)
             match decision:
                 case CanContinue():
-                    await transaction.close(
-                        locked, status=AgentRunStatus.FAILED, error_code=error_code
+                    await operation.close(
+                        current_run, status=AgentRunStatus.FAILED, error_code=error_code
                     )
                     return FailureRecorded()
-                case (
-                    CancelledByUser()
-                    | DeadlineExceeded()
-                    | AttemptSuperseded() as stopped
-                ):
+                case CannotContinue() as stopped:
                     return stopped
 
-        return await self._operate(run_id, operate)
+        return await self._with_locked_run(run_id, on_locked_run)
 
     async def cancel_for_user(
         self, run_id: UUID, *, user_id: UUID
@@ -231,13 +212,13 @@ class AgentRunStateService:
         | RunAlreadyFailed
         | RunNotFound
     ):
-        async def operate(transaction: _Transaction, locked: LockedRun):
-            decision = locked.state.check_cancel(now=locked.now)
-            await transaction.close_if_expired(locked, decision)
+        async def on_locked_run(operation: _RunOperation, current_run: CurrentRun):
+            decision = current_run.state.check_cancel(now=current_run.now)
+            await operation.close_if_expired(current_run, decision)
             match decision:
                 case CanContinue():
-                    await transaction.close(
-                        locked,
+                    await operation.close(
+                        current_run,
                         status=AgentRunStatus.FAILED,
                         error_code=AgentRunErrorCode.CANCELLED,
                     )
@@ -250,7 +231,7 @@ class AgentRunStateService:
                 ) as ended:
                     return ended
 
-        return await self._operate(run_id, operate, owner_id=user_id)
+        return await self._with_locked_run(run_id, on_locked_run, owner_id=user_id)
 
     async def record_enqueue_failure(
         self, run_id: UUID
@@ -263,13 +244,13 @@ class AgentRunStateService:
         | RunAlreadyFailed
         | RunNotFound
     ):
-        async def operate(transaction: _Transaction, locked: LockedRun):
-            decision = locked.state.check_enqueue_failure(now=locked.now)
-            await transaction.close_if_expired(locked, decision)
+        async def on_locked_run(operation: _RunOperation, current_run: CurrentRun):
+            decision = current_run.state.check_enqueue_failure(now=current_run.now)
+            await operation.close_if_expired(current_run, decision)
             match decision:
                 case CanContinue():
-                    await transaction.close(
-                        locked,
+                    await operation.close(
+                        current_run,
                         status=AgentRunStatus.FAILED,
                         error_code=AgentRunErrorCode.ENQUEUE_FAILED,
                     )
@@ -283,7 +264,7 @@ class AgentRunStateService:
                 ) as skipped:
                     return skipped
 
-        return await self._operate(run_id, operate)
+        return await self._with_locked_run(run_id, on_locked_run)
 
     async def sweep_deadline_exceeded_runs(self) -> DeadlineRunSweepResult:
         result = await self._in_transaction(sweep_deadline_exceeded_runs)
@@ -308,32 +289,37 @@ class AgentRunStateService:
         await self._notify_swept(result)
         return result
 
-    async def _operate[Result](
+    async def _with_locked_run[Result](
         self,
         run_id: UUID,
-        operate: Callable[[_Transaction, LockedRun], Awaitable[Result]],
+        on_locked_run: Callable[[_RunOperation, CurrentRun], Awaitable[Result]],
         *,
         owner_id: UUID | None = None,
         lock_thread: bool = False,
     ) -> Result | RunNotFound:
+        """on_locked_runは一時的なDBの失敗で最初から呼び直すので、閉じたRunの通知はcommitの後にここで行う。"""
+
         async def work(
             session: AsyncSession,
-        ) -> tuple[Result | RunNotFound, tuple[ClosedRun, ...]]:
-            transaction = _Transaction(AgentRunStateRepository(session, now=self._now))
-            match await transaction.repository.lock(
+        ) -> tuple[Result | RunNotFound, ClosedRun | None]:
+            operation = _RunOperation(
+                run_id=run_id,
+                repository=AgentRunStateRepository(session, now=self._now),
+            )
+            match await operation.repository.lock(
                 run_id, owner_id=owner_id, lock_thread=lock_thread
             ):
                 case RunNotFound() as missing:
-                    return missing, ()
-                case LockedRun() as locked:
+                    return missing, None
+                case CurrentRun() as current_run:
                     return (
-                        await operate(transaction, locked),
-                        tuple(transaction.closed_runs),
+                        await on_locked_run(operation, current_run),
+                        operation.closed_run,
                     )
 
-        result, closed_runs = await self._in_transaction(work)
-        for closed in closed_runs:
-            await notify_closed_run(closed, publisher_for=self._publisher_for)
+        result, closed_run = await self._in_transaction(work)
+        if closed_run is not None:
+            await notify_closed_run(closed_run, publisher_for=self._publisher_for)
         return result
 
     async def _notify_swept(self, result: DeadlineRunSweepResult) -> None:
@@ -392,49 +378,43 @@ class AgentRunStateService:
 
 
 @dataclass(slots=True)
-class _Transaction:
-    """1回のトランザクションのrepositoryと、commit後に通知する閉じたRun。"""
+class _RunOperation:
+    """1回の操作の間だけ使う、書き込みの口と、commit後に通知する閉じたRun。"""
 
+    run_id: UUID
     repository: AgentRunStateRepository
-    closed_runs: list[ClosedRun] = field(default_factory=list)
+    closed_run: ClosedRun | None = None
 
-    async def close_if_expired(self, locked: LockedRun, decision: object) -> None:
+    async def close_if_expired(self, current_run: CurrentRun, decision: object) -> None:
         """期限切れの判定は既に閉じたRunにも返るので、まだ終わっていないRunだけを閉じる。"""
         match decision:
-            case DeadlineExceeded() if locked.state.phase is not RunPhase.FINISHED:
-                await self.close(locked, status=AgentRunStatus.DEADLINE_EXCEEDED)
+            case DeadlineExceeded() if current_run.state.phase is not RunPhase.FINISHED:
+                await self.close(current_run, status=AgentRunStatus.DEADLINE_EXCEEDED)
 
     async def close(
         self,
-        locked: LockedRun,
+        current_run: CurrentRun,
         *,
         status: AgentRunStatus,
         error_code: AgentRunErrorCode | None = None,
         assistant_message_id: UUID | None = None,
     ) -> None:
+        was_queued = current_run.state.phase is RunPhase.QUEUED
         await self.repository.close(
-            locked.run.id,
             status=status,
             error_code=error_code,
             assistant_message_id=assistant_message_id,
         )
         # 待機中のまま閉じたRunは、受付で予約した利用枠を返す。
-        if locked.state.phase is RunPhase.QUEUED:
-            self.closed_runs.append(
-                ClosedQueuedRun(
-                    run_id=locked.run.id,
-                    quota_release_outcome=await self.repository.release_daily_quota(
-                        user_id=locked.thread.user_id,
-                        usage_date=locked.run.quota_usage_date,
-                    ),
-                )
+        if was_queued:
+            self.closed_run = ClosedQueuedRun(
+                run_id=self.run_id,
+                quota_release_outcome=await self.repository.release_daily_quota(),
             )
             return
-        self.closed_runs.append(
-            ClosedRunningRun(
-                run_id=locked.run.id,
-                attempt_epoch=locked.state.attempt_epoch,
-                status=status,
-                error_code=error_code,
-            )
+        self.closed_run = ClosedRunningRun(
+            run_id=self.run_id,
+            attempt_epoch=current_run.state.attempt_epoch,
+            status=status,
+            error_code=error_code,
         )

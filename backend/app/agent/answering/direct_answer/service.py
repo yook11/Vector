@@ -32,14 +32,7 @@ from app.agent.recording.direct_answer import (
     logfire_direct_answer_recorder,
 )
 from app.agent.retry_prospect import is_resolvable_by_retry
-from app.agent.running.state import (
-    AttemptSuperseded,
-    CancelledByUser,
-    CanContinue,
-    CannotContinue,
-    DeadlineExceeded,
-    RunNotFound,
-)
+from app.agent.running.state import CanContinue, CannotContinue
 from app.ai_providers.errors import AIProviderError
 
 __all__ = ["DirectAnswerService"]
@@ -77,12 +70,7 @@ class DirectAnswerService:
         match await self._gate.start():
             case CanContinue():
                 pass
-            case (
-                CancelledByUser()
-                | DeadlineExceeded()
-                | AttemptSuperseded()
-                | RunNotFound()
-            ) as stopped:
+            case CannotContinue() as stopped:
                 return stopped
 
         timeout = asyncio.timeout(answer_timing.ANSWER_GENERATION_TIMEOUT_SECONDS)
@@ -97,12 +85,7 @@ class DirectAnswerService:
                                     match await self._gate.regenerate():
                                         case CanContinue():
                                             pass
-                                        case (
-                                            CancelledByUser()
-                                            | DeadlineExceeded()
-                                            | AttemptSuperseded()
-                                            | RunNotFound()
-                                        ) as stopped:
+                                        case CannotContinue() as stopped:
                                             recording.report_outcome(
                                                 DirectAnswerStopped()
                                             )
