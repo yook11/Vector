@@ -82,7 +82,7 @@ async def execute_run_attempt(
         case DeadlineExceeded():
             logger.info("agent_run_start_deadline_exceeded")
             return
-        case CancelledByUser() | AttemptSuperseded() | RunNotFound() as stopped:
+        case CannotContinue() as stopped:
             logger.info("agent_run_not_started", reason=_stop_reason(stopped))
             return
     stream_events = publisher_for(run_id, attempt_epoch)
@@ -195,9 +195,7 @@ async def execute_run_attempt(
     match run_outcome:
         case RunResult(final_output=result, research_handoff=research_handoff):
             pass
-        case (
-            CancelledByUser() | DeadlineExceeded() | AttemptSuperseded() | RunNotFound()
-        ) as stopped:
+        case CannotContinue() as stopped:
             logger.info(
                 "agent_run_generation_stopped",
                 run_id=str(run_id),
@@ -231,9 +229,7 @@ async def execute_run_attempt(
     match completion:
         case RunCompleted():
             return
-        case (
-            CancelledByUser() | DeadlineExceeded() | AttemptSuperseded() | RunNotFound()
-        ) as stopped:
+        case CannotContinue() as stopped:
             logger.info(
                 "agent_run_completion_rejected",
                 run_id=str(run_id),
@@ -251,6 +247,11 @@ def _stop_reason(stopped: CannotContinue) -> str:
             return "attempt_superseded"
         case RunNotFound():
             return "run_not_found"
+        # 基底の子は閉じられないので、名前を決めていない理由は誤りとして止める。
+        case _:
+            raise AssertionError(
+                f"unreachable: stop reason {type(stopped).__name__} has no log name"
+            )
 
 
 def _serialize_research_handoff(

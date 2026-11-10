@@ -62,28 +62,28 @@ class CanContinue:
 
 
 @dataclass(frozen=True, slots=True)
-class CancelledByUser:
+class CannotContinue:
+    """現在の試行が続けられないことを、理由ごとの子の型で表す。"""
+
+
+@dataclass(frozen=True, slots=True)
+class CancelledByUser(CannotContinue):
     """利用者がRunを止めた。"""
 
 
 @dataclass(frozen=True, slots=True)
-class DeadlineExceeded:
+class DeadlineExceeded(CannotContinue):
     """Runが期限を過ぎた。"""
 
 
 @dataclass(frozen=True, slots=True)
-class AttemptSuperseded:
+class AttemptSuperseded(CannotContinue):
     """別の試行がRunを担当している、または既に終えている。"""
 
 
 @dataclass(frozen=True, slots=True)
-class RunNotFound:
+class RunNotFound(CannotContinue):
     """Runの行が無い。"""
-
-
-type CannotContinue = (
-    CancelledByUser | DeadlineExceeded | AttemptSuperseded | RunNotFound
-)
 
 
 @dataclass(frozen=True, slots=True)

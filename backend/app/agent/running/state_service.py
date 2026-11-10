@@ -33,7 +33,6 @@ from app.agent.running.state import (
     AnswerGenerationStarted,
     AttemptAlreadyStarted,
     AttemptStarted,
-    AttemptSuperseded,
     CancelledByUser,
     CanContinue,
     CannotContinue,
@@ -82,11 +81,7 @@ class AgentRunStateService:
                         attempt_epoch=attempt_epoch
                     )
                     return AttemptStarted(attempt_epoch=attempt_epoch)
-                case (
-                    CancelledByUser()
-                    | DeadlineExceeded()
-                    | AttemptSuperseded() as stopped
-                ):
+                case CannotContinue() as stopped:
                     return stopped
 
         return await self._with_locked_run(run_id, on_locked_run)
@@ -123,11 +118,7 @@ class AgentRunStateService:
                     return AnswerGenerationStarted(
                         run_id=run_id, answer_started_at=current_run.now
                     )
-                case (
-                    CancelledByUser()
-                    | DeadlineExceeded()
-                    | AttemptSuperseded() as stopped
-                ):
+                case CannotContinue() as stopped:
                     return stopped
 
         return await self._with_locked_run(run_id, on_locked_run)
@@ -164,11 +155,7 @@ class AgentRunStateService:
             match decision:
                 case CanContinue():
                     pass
-                case (
-                    CancelledByUser()
-                    | DeadlineExceeded()
-                    | AttemptSuperseded() as stopped
-                ):
+                case CannotContinue() as stopped:
                     return stopped
 
             repository = operation.repository
@@ -211,11 +198,7 @@ class AgentRunStateService:
                         current_run, status=AgentRunStatus.FAILED, error_code=error_code
                     )
                     return FailureRecorded()
-                case (
-                    CancelledByUser()
-                    | DeadlineExceeded()
-                    | AttemptSuperseded() as stopped
-                ):
+                case CannotContinue() as stopped:
                     return stopped
 
         return await self._with_locked_run(run_id, on_locked_run)

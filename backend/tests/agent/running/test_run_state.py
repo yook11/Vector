@@ -12,9 +12,11 @@ from app.agent.running.state import (
     AttemptSuperseded,
     CancelledByUser,
     CanContinue,
+    CannotContinue,
     DeadlineExceeded,
     RunAlreadyCompleted,
     RunAlreadyFailed,
+    RunNotFound,
     RunPhase,
     RunPhaseMismatchError,
     RunState,
@@ -335,3 +337,26 @@ def test_attempt_started_only_after_first_epoch(
 ) -> None:
     """実行世代が0のRunはworkerがまだ開始しておらず、1以上なら開始済みと読む。"""
     assert has_attempt_started(attempt_epoch) is expected
+
+
+@pytest.mark.parametrize(
+    "stopped",
+    [CancelledByUser(), DeadlineExceeded(), AttemptSuperseded(), RunNotFound()],
+)
+def test_every_stop_reason_is_received_as_cannot_continue(stopped: object) -> None:
+    """止まった理由の4つの型は、どれも「続けられない」として受けられる。"""
+    assert isinstance(stopped, CannotContinue)
+
+
+@pytest.mark.parametrize(
+    "outcome",
+    [
+        CanContinue(),
+        RunAlreadyCompleted(),
+        RunAlreadyFailed(),
+        AttemptAlreadyStarted(),
+    ],
+)
+def test_other_outcomes_are_not_received_as_cannot_continue(outcome: object) -> None:
+    """続けてよい・完了済み・失敗済み・試行開始済みは、「続けられない」としては受けられない。"""
+    assert not isinstance(outcome, CannotContinue)

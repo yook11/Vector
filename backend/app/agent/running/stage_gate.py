@@ -6,14 +6,7 @@ from uuid import UUID
 
 from app.agent.contract import AnsweringStage
 from app.agent.live_updates.reporters import AgentRunLiveStageReporter
-from app.agent.running.state import (
-    AttemptSuperseded,
-    CancelledByUser,
-    CanContinue,
-    CannotContinue,
-    DeadlineExceeded,
-    RunNotFound,
-)
+from app.agent.running.state import CanContinue, CannotContinue
 from app.agent.running.state_service import AgentRunStateService
 
 __all__ = ["AgentRunStageGate"]
@@ -40,10 +33,5 @@ class AgentRunStageGate:
             case CanContinue() as can_continue:
                 await self._stage_reporter.stage_changed(stage)
                 return can_continue
-            case (
-                CancelledByUser()
-                | DeadlineExceeded()
-                | AttemptSuperseded()
-                | RunNotFound()
-            ) as stopped:
+            case CannotContinue() as stopped:
                 return stopped

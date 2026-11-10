@@ -55,14 +55,7 @@ from app.agent.planning.failure import PlanningError
 from app.agent.research_handoff.handoff import ResearchHandoff
 from app.agent.research_handoff.handoff_input import ResearchHandoffInput
 from app.agent.research_handoff.service import ResearchHandoffOrganizer
-from app.agent.running.state import (
-    AttemptSuperseded,
-    CancelledByUser,
-    CanContinue,
-    CannotContinue,
-    DeadlineExceeded,
-    RunNotFound,
-)
+from app.agent.running.state import CanContinue, CannotContinue
 from app.agent.threads.contracts import ThreadMessageSnapshot
 from app.ai_providers.errors import AIProviderError
 from app.shared.errors import ApplicationError
@@ -162,12 +155,7 @@ class AnsweringRunner:
                 match await self._stage_gate.enter("planning"):
                     case CanContinue():
                         pass
-                    case (
-                        CancelledByUser()
-                        | DeadlineExceeded()
-                        | AttemptSuperseded()
-                        | RunNotFound()
-                    ) as stopped:
+                    case CannotContinue() as stopped:
                         return stopped
                 planning_input = PlanningInput(
                     question=input.question,
@@ -192,12 +180,7 @@ class AnsweringRunner:
                         match await self._stage_gate.enter("evidence_collection"):
                             case CanContinue():
                                 pass
-                            case (
-                                CancelledByUser()
-                                | DeadlineExceeded()
-                                | AttemptSuperseded()
-                                | RunNotFound()
-                            ) as stopped:
+                            case CannotContinue() as stopped:
                                 return stopped
                         collected_news = await phases.collector.collect(
                             plan=plan,
@@ -212,12 +195,7 @@ class AnsweringRunner:
                                 EvidenceRunCompleted() | EvidenceRunFailed()
                             ) as evidence_run:
                                 pass
-                            case (
-                                CancelledByUser()
-                                | DeadlineExceeded()
-                                | AttemptSuperseded()
-                                | RunNotFound()
-                            ) as stopped:
+                            case CannotContinue() as stopped:
                                 return stopped
                         _record_evidence_run_span_attributes(
                             run_span,
@@ -278,12 +256,7 @@ class AnsweringRunner:
             ):
                 case AnswerQuestionResult() as answer:
                     return RunResult(final_output=answer, research_handoff=None)
-                case (
-                    CancelledByUser()
-                    | DeadlineExceeded()
-                    | AttemptSuperseded()
-                    | RunNotFound()
-                ) as stopped:
+                case CannotContinue() as stopped:
                     return stopped
 
         organizing = asyncio.ensure_future(phases.organizer.organize(handoff_input))
@@ -303,12 +276,7 @@ class AnsweringRunner:
         match answered:
             case AnswerQuestionResult() as answer:
                 pass
-            case (
-                CancelledByUser()
-                | DeadlineExceeded()
-                | AttemptSuperseded()
-                | RunNotFound()
-            ) as stopped:
+            case CannotContinue() as stopped:
                 await _cancel_and_join(organizing)
                 return stopped
 
@@ -345,12 +313,7 @@ class AnsweringRunner:
                     ),
                     research_handoff=None,
                 )
-            case (
-                CancelledByUser()
-                | DeadlineExceeded()
-                | AttemptSuperseded()
-                | RunNotFound()
-            ) as stopped:
+            case CannotContinue() as stopped:
                 return stopped
 
     async def _review_evidence(
@@ -370,12 +333,7 @@ class AnsweringRunner:
         match await self._stage_gate.enter("evidence_review"):
             case CanContinue():
                 pass
-            case (
-                CancelledByUser()
-                | DeadlineExceeded()
-                | AttemptSuperseded()
-                | RunNotFound()
-            ) as stopped:
+            case CannotContinue() as stopped:
                 return stopped
         evidence_run = await phases.reviewer.review(
             tasks=collected_news.tasks,
@@ -413,12 +371,7 @@ class AnsweringRunner:
         ):
             case EvidenceAnswerDraft() as answer_outcome:
                 pass
-            case (
-                CancelledByUser()
-                | DeadlineExceeded()
-                | AttemptSuperseded()
-                | RunNotFound()
-            ) as stopped:
+            case CannotContinue() as stopped:
                 return stopped
         result = assemble_evidence_result(
             plan=plan,
