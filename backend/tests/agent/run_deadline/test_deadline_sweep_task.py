@@ -19,6 +19,7 @@ import app.queue.tasks.agent_run as agent_run_tasks
 from app.agent.live_updates.stream import AgentRunLiveStreamTerminalEvent
 from app.agent.run_enqueuer import AgentRunTrigger
 from app.agent.running.daily_quota import observability as daily_quota_observability
+from app.agent.running.types import RunAttempt
 from app.models.agent_run import AgentRun
 from app.models.agent_user_daily_quota import AgentUserDailyQuota
 from tests.agent._sensitive_db_failure import (
@@ -38,10 +39,10 @@ class FakeLiveStreamPublisher:
     raise_on_publish = False
     publish_outcomes: list[str | None | BaseException] = []
 
-    def __init__(self, redis: object, run_id: UUID, attempt_epoch: int) -> None:
+    def __init__(self, redis: object, attempt: RunAttempt) -> None:
         self.redis = redis
-        self.run_id = run_id
-        self.attempt_epoch = attempt_epoch
+        self.run_id = attempt.run_id
+        self.attempt_epoch = attempt.epoch
         self.begin_attempt_calls = 0
         self.published: list[object] = []
         FakeLiveStreamPublisher.instances.append(self)
@@ -802,7 +803,9 @@ async def test_single_run_task_notifies_current_epoch_after_commit(
     await agent_run_tasks.check_agent_run_deadline(
         AgentRunTrigger(run_id=run.id), ctx=ctx
     )
-    factory.assert_called_once_with(ctx.state.agent_live_redis, run.id, 7)
+    factory.assert_called_once_with(
+        ctx.state.agent_live_redis, RunAttempt(run_id=run.id, epoch=7)
+    )
     assert observed == [
         (
             "deadline_exceeded",

@@ -10,7 +10,7 @@ from typing import assert_never
 from uuid import UUID
 
 from app.agent.answering import timing as answer_timing
-from app.agent.running.types import AgentRunErrorCode, AgentRunStatus
+from app.agent.running.types import AgentRunErrorCode, AgentRunStatus, RunAttempt
 
 __all__ = [
     "ACTIVE_STATUSES",
@@ -103,11 +103,7 @@ class AttemptAlreadyStarted:
 
 @dataclass(frozen=True, slots=True)
 class AttemptStarted:
-    attempt_epoch: int
-
-    def __post_init__(self) -> None:
-        if not _is_positive_epoch(self.attempt_epoch):
-            raise ValueError("started attempt requires a positive attempt epoch")
+    attempt: RunAttempt
 
 
 @dataclass(frozen=True, slots=True)
@@ -175,35 +171,26 @@ class RunState:
             return AttemptSuperseded()
         return _within(self.deadline_at, now=now)
 
-    def check_progress(
+    def check_attempt(
         self,
         *,
         attempt_epoch: int,
         phases: Collection[RunPhase],
         now: datetime,
     ) -> _AttemptCheck:
-        """現在の試行が作業を始める・続けるのは、受理期限までに限る。"""
-        return self._check_attempt(
-            attempt_epoch=attempt_epoch,
-            phases=phases,
-            deadline=self.deadline_at,
-            now=now,
-        )
-
-    def check_attempt_finish(
-        self,
-        *,
-        attempt_epoch: int,
-        phases: Collection[RunPhase],
-        now: datetime,
-    ) -> _AttemptCheck:
-        """現在の試行がRunを終えるのは、段階で決まる回収期限までに限る。"""
-        return self._check_attempt(
-            attempt_epoch=attempt_epoch,
-            phases=phases,
-            deadline=self._recovery_deadline(),
-            now=now,
-        )
+        """現在の試行の操作は、回答前は受理期限まで、回答中は回収期限までに限る。"""
+        phase = self.phase
+        if phase is RunPhase.FINISHED:
+            return self._ended_for_attempt()
+        if not (
+            self.status is AgentRunStatus.RUNNING
+            and self.attempt_epoch == attempt_epoch
+        ):
+            return AttemptSuperseded()
+        # 呼び出し順の誤りを期限切れとして隠さないよう、段階を期限より先に見る。
+        if phase not in phases:
+            raise RunPhaseMismatchError(phase=phase, allowed=phases)
+        return _within(self._recovery_deadline(), now=now)
 
     def check_cancel(self, *, now: datetime) -> _FinishCheck:
         """利用者がRunを止めるのは、どの段階でも回収期限までに限る。"""
@@ -224,27 +211,6 @@ class RunState:
 
     def is_due_for_deadline_recovery(self, *, now: datetime) -> bool:
         return self.phase is not RunPhase.FINISHED and now >= self._recovery_deadline()
-
-    def _check_attempt(
-        self,
-        *,
-        attempt_epoch: int,
-        phases: Collection[RunPhase],
-        deadline: datetime,
-        now: datetime,
-    ) -> _AttemptCheck:
-        phase = self.phase
-        if phase is RunPhase.FINISHED:
-            return self._ended_for_attempt()
-        if not (
-            self.status is AgentRunStatus.RUNNING
-            and self.attempt_epoch == attempt_epoch
-        ):
-            return AttemptSuperseded()
-        # 回答中のRunを受理期限で期限切れにしないよう、段階を期限より先に見る。
-        if phase not in phases:
-            raise RunPhaseMismatchError(phase=phase, allowed=phases)
-        return _within(deadline, now=now)
 
     def _ended_for_attempt(
         self,
@@ -299,7 +265,3 @@ def _within(deadline: datetime, *, now: datetime) -> CanContinue | DeadlineExcee
     if now >= deadline:
         return DeadlineExceeded()
     return CanContinue()
-
-
-def _is_positive_epoch(value: object) -> bool:
-    return isinstance(value, int) and not isinstance(value, bool) and value >= 1

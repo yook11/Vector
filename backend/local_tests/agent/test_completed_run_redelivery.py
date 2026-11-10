@@ -13,6 +13,7 @@ from app.agent.contract import (
 from app.agent.run_enqueuer import AgentRunTrigger
 from app.agent.running.creation import AgentRunCreationRepository
 from app.agent.running.state import AttemptSuperseded
+from app.agent.running.types import RunAttempt
 from app.queue.tasks.agent_run import run_agent_answer
 from local_tests.agent.support import fetch_saved_run_result, state_service_for
 
@@ -96,8 +97,9 @@ async def test_reexecution_of_completed_run_preserves_saved_result(
 
     # 入口の再実行防止で止まらず、保存側の拒否を確認するため直接渡す。
     completion = await state_service_for(agent_context.state.session_factory).complete(
-        run_id,
-        attempt_epoch=result_after_initial_execution.run["attempt_epoch"],
+        RunAttempt(
+            run_id=run_id, epoch=result_after_initial_execution.run["attempt_epoch"]
+        ),
         result=reexecution_result,
         research_handoff=None,
     )

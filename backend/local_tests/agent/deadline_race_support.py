@@ -8,6 +8,7 @@ from sqlalchemy import func, literal, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.agent.running.deadline.deadline_exceeded import _recover_deadline_exceeded_runs
+from app.agent.running.types import RunAttempt
 from app.db.session import SessionFactory
 from app.models.agent_message import AgentMessage, AgentMessageSource
 from app.models.agent_run import AgentRun
@@ -187,8 +188,7 @@ async def pending_answer_completion(session_factory, *, run, answer, at):
     commit_gate = _CommitGate(session_factory)
     task = asyncio.create_task(
         state_service_for(commit_gate, now=at).complete(
-            run.run_id,
-            attempt_epoch=run.attempt_epoch,
+            RunAttempt(run_id=run.run_id, epoch=run.attempt_epoch),
             result=answer,
             research_handoff=None,
         )

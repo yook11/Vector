@@ -45,9 +45,7 @@ def _state_service(
 ) -> AgentRunStateService:
     return AgentRunStateService(
         session_factory=session_factory,
-        publisher_for=lambda run_id, attempt_epoch: AgentRunLiveStreamPublisher(
-            live_redis, run_id, attempt_epoch
-        ),
+        publisher_for=lambda attempt: AgentRunLiveStreamPublisher(live_redis, attempt),
     )
 
 

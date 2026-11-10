@@ -9,6 +9,7 @@ from app.agent.contract import (
 )
 from app.agent.running.creation import AgentRunCreationRepository
 from app.agent.running.state import AttemptSuperseded, RunCompleted
+from app.agent.running.types import RunAttempt
 from local_tests.agent.support import (
     fetch_saved_run_result,
     start_run_attempt,
@@ -38,7 +39,7 @@ async def test_only_latest_attempt_can_complete_run(
     latest_attempt_epoch = await start_run_attempt(session_factory, run_id)
 
     await state_service_for(session_factory).start_answer_generation(
-        run_id, attempt_epoch=latest_attempt_epoch
+        RunAttempt(run_id=run_id, epoch=latest_attempt_epoch)
     )
 
     older_attempt_result = AnswerQuestionResult(
@@ -74,15 +75,13 @@ async def test_only_latest_attempt_can_complete_run(
 
     # 完了済みの拒否ではなく世代の不一致を検証するため、古い世代から保存を試みる。
     older_attempt_completion = await state_service_for(session_factory).complete(
-        run_id,
-        attempt_epoch=older_attempt_epoch,
+        RunAttempt(run_id=run_id, epoch=older_attempt_epoch),
         result=older_attempt_result,
         research_handoff=None,
     )
 
     latest_attempt_completion = await state_service_for(session_factory).complete(
-        run_id,
-        attempt_epoch=latest_attempt_epoch,
+        RunAttempt(run_id=run_id, epoch=latest_attempt_epoch),
         result=latest_attempt_result,
         research_handoff=None,
     )

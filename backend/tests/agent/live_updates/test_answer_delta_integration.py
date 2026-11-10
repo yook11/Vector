@@ -45,6 +45,7 @@ from app.agent.live_updates.stream import (
     is_stream_id_before,
 )
 from app.agent.planning.contract import TargetTimeWindow
+from app.agent.running.types import RunAttempt
 from app.config import settings
 from tests.agent.answering._fakes import ScriptedAnswerGenerationGate
 
@@ -208,12 +209,13 @@ async def test_evidence_json_shaped_fragment_flows_unchanged_into_answer_delta()
     ]
     request = _answering_request("JSON形状の本文がそのまま扱われるか確認する")
     try:
-        stream_publisher = AgentRunLiveStreamPublisher(redis, run_id, attempt_epoch)
+        stream_publisher = AgentRunLiveStreamPublisher(
+            redis, RunAttempt(run_id=run_id, epoch=attempt_epoch)
+        )
         assert await stream_publisher.begin_attempt() is not None
         reporter = AgentRunLiveAnswerDeltaReporter(
             stream_publisher,
-            run_id=run_id,
-            attempt_epoch=attempt_epoch,
+            attempt=RunAttempt(run_id=run_id, epoch=attempt_epoch),
         )
 
         draft = await _evidence_answer(
@@ -249,15 +251,13 @@ async def test_direct_flow_round_trip_matches_final_answer_and_envelope() -> Non
     try:
         stream_publisher = AgentRunLiveStreamPublisher(
             redis,
-            run_id,
-            attempt_epoch,
+            RunAttempt(run_id=run_id, epoch=attempt_epoch),
         )
         marker_id = await stream_publisher.begin_attempt()
         assert marker_id is not None
         reporter = AgentRunLiveAnswerDeltaReporter(
             stream_publisher,
-            run_id=run_id,
-            attempt_epoch=attempt_epoch,
+            attempt=RunAttempt(run_id=run_id, epoch=attempt_epoch),
         )
         draft = await _answer(
             FakeStreamingGenerator([[" \n本文 [[", "1]] 続き\t "]]),
@@ -317,14 +317,12 @@ async def test_blank_generation_retries_without_reset_and_splits_generation_two(
     try:
         stream_publisher = AgentRunLiveStreamPublisher(
             redis,
-            run_id,
-            attempt_epoch,
+            RunAttempt(run_id=run_id, epoch=attempt_epoch),
         )
         assert await stream_publisher.begin_attempt() is not None
         reporter = AgentRunLiveAnswerDeltaReporter(
             stream_publisher,
-            run_id=run_id,
-            attempt_epoch=attempt_epoch,
+            attempt=RunAttempt(run_id=run_id, epoch=attempt_epoch),
         )
 
         draft = await _answer(
@@ -371,15 +369,13 @@ async def test_evidence_retry_round_trip_preserves_reset_delta_and_envelope() ->
     try:
         stream_publisher = AgentRunLiveStreamPublisher(
             redis,
-            run_id,
-            attempt_epoch,
+            RunAttempt(run_id=run_id, epoch=attempt_epoch),
         )
         marker_id = await stream_publisher.begin_attempt()
         assert marker_id is not None
         reporter = AgentRunLiveAnswerDeltaReporter(
             stream_publisher,
-            run_id=run_id,
-            attempt_epoch=attempt_epoch,
+            attempt=RunAttempt(run_id=run_id, epoch=attempt_epoch),
         )
         generator = FakeStreamingGenerator(
             [
@@ -460,15 +456,13 @@ async def test_evidence_higher_generation_delta_survives_reset_loss() -> None:
     try:
         stream_publisher = AgentRunLiveStreamPublisher(
             redis,
-            run_id,
-            attempt_epoch,
+            RunAttempt(run_id=run_id, epoch=attempt_epoch),
         )
         assert await stream_publisher.begin_attempt() is not None
         reset_dropping_publisher = ResetDroppingPublisher(stream_publisher)
         reporter = AgentRunLiveAnswerDeltaReporter(
             reset_dropping_publisher,
-            run_id=run_id,
-            attempt_epoch=attempt_epoch,
+            attempt=RunAttempt(run_id=run_id, epoch=attempt_epoch),
         )
         generator = FakeStreamingGenerator(
             [
@@ -535,15 +529,13 @@ async def test_delta_breaker_does_not_damage_other_stream_producers() -> None:
     try:
         stream_publisher = AgentRunLiveStreamPublisher(
             redis,
-            run_id,
-            attempt_epoch,
+            RunAttempt(run_id=run_id, epoch=attempt_epoch),
         )
         assert await stream_publisher.begin_attempt() is not None
         failing_delta_publisher = FailingDeltaPublisher(stream_publisher)
         reporter = AgentRunLiveAnswerDeltaReporter(
             failing_delta_publisher,
-            run_id=run_id,
-            attempt_epoch=attempt_epoch,
+            attempt=RunAttempt(run_id=run_id, epoch=attempt_epoch),
         )
 
         for marker in "ABCD":

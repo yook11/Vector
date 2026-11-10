@@ -5,13 +5,13 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Awaitable, Callable
 from typing import Protocol
-from uuid import UUID
 
 from app.agent.live_updates.metrics import record_answer_delta_breaker_open
 from app.agent.live_updates.stream import (
     AgentRunLiveStreamAnswerDeltaEvent,
     AgentRunLiveStreamAnswerResetEvent,
 )
+from app.agent.running.types import RunAttempt
 from app.log_policy.policies.research import RESEARCH_LOG_RULES
 from app.log_policy.runtime import create_policy_json_logger
 
@@ -36,13 +36,11 @@ class AgentRunLiveAnswerDeltaReporter:
         self,
         publisher: _AnswerDeltaPublisher,
         *,
-        run_id: UUID,
-        attempt_epoch: int,
+        attempt: RunAttempt,
         sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
     ) -> None:
         self._publisher = publisher
-        self._run_id = run_id
-        self._attempt_epoch = attempt_epoch
+        self._attempt = attempt
         self._sleep = sleep
         self._lock = asyncio.Lock()
         self._buffer = ""
@@ -214,8 +212,8 @@ class AgentRunLiveAnswerDeltaReporter:
         self._buffer = ""
         logger.warning(
             "agent_run_answer_delta_breaker_open",
-            run_id=str(self._run_id),
-            attempt_epoch=self._attempt_epoch,
+            run_id=str(self._attempt.run_id),
+            attempt_epoch=self._attempt.epoch,
             generation=generation,
         )
         record_answer_delta_breaker_open()

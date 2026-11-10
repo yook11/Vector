@@ -18,7 +18,7 @@ from app.agent.running.daily_quota.release import (
     release_daily_quotas,
 )
 from app.agent.running.state import RunState
-from app.agent.running.types import AgentRunStatus
+from app.agent.running.types import AgentRunStatus, RunAttempt
 from app.models.agent_run import AgentRun
 from app.models.agent_thread import AgentThread
 
@@ -32,28 +32,12 @@ class _DeadlineRecoveryCandidate:
 
 
 @dataclass(frozen=True, slots=True)
-class DeadlineExceededRunningRun:
-    run_id: UUID
-    attempt_epoch: int
-
-    def __post_init__(self) -> None:
-        if (
-            not isinstance(self.attempt_epoch, int)
-            or isinstance(self.attempt_epoch, bool)
-            or self.attempt_epoch < 1
-        ):
-            raise ValueError(
-                "deadline-exceeded running run requires a positive attempt epoch"
-            )
-
-
-@dataclass(frozen=True, slots=True)
 class DeadlineRunSweepResult:
     queued_terminal_count: int
     queued_quota_released_count: int
     queued_quota_not_eligible_count: int
     queued_quota_inconsistent_count: int
-    running_terminal_runs: tuple[DeadlineExceededRunningRun, ...]
+    running_terminal_runs: tuple[RunAttempt, ...]
     running_quota_reservation_count: int
 
     def __post_init__(self) -> None:
@@ -76,13 +60,8 @@ class DeadlineRunSweepResult:
             != self.queued_terminal_count
         ):
             raise ValueError("queued quota outcomes must equal terminal count")
-        if not all(
-            isinstance(run, DeadlineExceededRunningRun)
-            for run in self.running_terminal_runs
-        ):
-            raise ValueError(
-                "running terminal runs must be deadline-exceeded running runs"
-            )
+        if not all(isinstance(run, RunAttempt) for run in self.running_terminal_runs):
+            raise ValueError("running terminal runs must be run attempts")
 
     @classmethod
     def empty(cls) -> DeadlineRunSweepResult:
@@ -293,9 +272,9 @@ def _build_deadline_sweep_result(
         queued_quota_not_eligible_count=quota_result.not_eligible_count,
         queued_quota_inconsistent_count=quota_result.inconsistent_count,
         running_terminal_runs=tuple(
-            DeadlineExceededRunningRun(
+            RunAttempt(
                 run_id=candidate.run_id,
-                attempt_epoch=candidate.state.attempt_epoch,
+                epoch=candidate.state.attempt_epoch,
             )
             for candidate in running
             if candidate.state.attempt_epoch > 0

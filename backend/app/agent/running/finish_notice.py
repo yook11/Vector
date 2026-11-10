@@ -13,7 +13,7 @@ from app.agent.live_updates.stream import (
 )
 from app.agent.running.daily_quota import observability as daily_quota_observability
 from app.agent.running.daily_quota.release import DailyQuotaReleaseOutcome
-from app.agent.running.types import AgentRunErrorCode, AgentRunStatus
+from app.agent.running.types import AgentRunErrorCode, AgentRunStatus, RunAttempt
 from app.log_policy.policies.research import RESEARCH_LOG_RULES
 from app.log_policy.runtime import create_policy_json_logger
 
@@ -27,7 +27,7 @@ __all__ = [
 
 logger = create_policy_json_logger(__name__, RESEARCH_LOG_RULES)
 
-type LivePublisherFor = Callable[[UUID, int], AgentRunLiveStreamPublisher]
+type LivePublisherFor = Callable[[RunAttempt], AgentRunLiveStreamPublisher]
 
 
 @dataclass(frozen=True, slots=True)
@@ -42,19 +42,12 @@ class ClosedQueuedRun:
 class ClosedRunningRun:
     """実行中の試行から閉じたRun。その世代の画面へ終了を知らせる。"""
 
-    run_id: UUID
-    attempt_epoch: int
+    attempt: RunAttempt
     status: AgentRunStatus
     error_code: AgentRunErrorCode | None
 
     def __post_init__(self) -> None:
         # commit前に作るので、通知できない組み合わせはここで止めてロールバックさせる。
-        if (
-            not isinstance(self.attempt_epoch, int)
-            or isinstance(self.attempt_epoch, bool)
-            or self.attempt_epoch < 1
-        ):
-            raise ValueError("closed running run requires a positive attempt epoch")
         if self.status in (AgentRunStatus.QUEUED, AgentRunStatus.RUNNING):
             raise ValueError("closed running run requires a terminal status")
         if (self.status is AgentRunStatus.FAILED) != (self.error_code is not None):
@@ -74,20 +67,15 @@ async def notify_closed_run(
                 daily_quota_observability.observe_release(
                     run_id=run_id, outcome=outcome
                 )
-        case ClosedRunningRun(
-            run_id=run_id,
-            attempt_epoch=attempt_epoch,
-            status=status,
-            error_code=error_code,
-        ):
+        case ClosedRunningRun(attempt=attempt, status=status, error_code=error_code):
             event = AgentRunLiveStreamTerminalEvent.model_validate(
                 {"status": status.value, "errorCode": error_code}
             )
             try:
-                await publisher_for(run_id, attempt_epoch).publish(event)
+                await publisher_for(attempt).publish(event)
             except Exception:
                 logger.warning(
                     "agent_run_live_stream_terminal_publish_failed",
-                    run_id=str(run_id),
+                    run_id=str(attempt.run_id),
                     terminal_status=event.status,
                 )

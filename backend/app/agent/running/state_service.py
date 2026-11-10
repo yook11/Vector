@@ -45,7 +45,7 @@ from app.agent.running.state import (
     RunPhase,
 )
 from app.agent.running.state_repository import AgentRunStateRepository, CurrentRun
-from app.agent.running.types import AgentRunErrorCode, AgentRunStatus
+from app.agent.running.types import AgentRunErrorCode, AgentRunStatus, RunAttempt
 from app.agent.threads.citation_integrity import warn_on_citation_source_mismatch
 from app.db.retry_prospect import is_resolvable_by_retry
 from app.db.translate import translate_database_error
@@ -76,36 +76,38 @@ class AgentRunStateService:
             await operation.close_if_expired(current_run, decision)
             match decision:
                 case CanContinue():
-                    attempt_epoch = current_run.state.attempt_epoch + 1
-                    await operation.repository.mark_attempt_started(
-                        attempt_epoch=attempt_epoch
+                    attempt = RunAttempt(
+                        run_id=run_id, epoch=current_run.state.attempt_epoch + 1
                     )
-                    return AttemptStarted(attempt_epoch=attempt_epoch)
+                    await operation.repository.mark_attempt_started(
+                        attempt_epoch=attempt.epoch
+                    )
+                    return AttemptStarted(attempt=attempt)
                 case CannotContinue() as stopped:
                     return stopped
 
         return await self._with_locked_run(run_id, on_locked_run)
 
     async def authorize_stage_entry(
-        self, run_id: UUID, *, attempt_epoch: int
+        self, attempt: RunAttempt
     ) -> CanContinue | CannotContinue:
         async def on_locked_run(operation: _RunOperation, current_run: CurrentRun):
-            decision = current_run.state.check_progress(
-                attempt_epoch=attempt_epoch,
+            decision = current_run.state.check_attempt(
+                attempt_epoch=attempt.epoch,
                 phases={RunPhase.PREPARING},
                 now=current_run.now,
             )
             await operation.close_if_expired(current_run, decision)
             return decision
 
-        return await self._with_locked_run(run_id, on_locked_run)
+        return await self._with_locked_run(attempt.run_id, on_locked_run)
 
     async def start_answer_generation(
-        self, run_id: UUID, *, attempt_epoch: int
+        self, attempt: RunAttempt
     ) -> AnswerGenerationStarted | CannotContinue:
         async def on_locked_run(operation: _RunOperation, current_run: CurrentRun):
-            decision = current_run.state.check_progress(
-                attempt_epoch=attempt_epoch,
+            decision = current_run.state.check_attempt(
+                attempt_epoch=attempt.epoch,
                 phases={RunPhase.PREPARING},
                 now=current_run.now,
             )
@@ -116,38 +118,37 @@ class AgentRunStateService:
                         answer_started_at=current_run.now
                     )
                     return AnswerGenerationStarted(
-                        run_id=run_id, answer_started_at=current_run.now
+                        run_id=attempt.run_id, answer_started_at=current_run.now
                     )
                 case CannotContinue() as stopped:
                     return stopped
 
-        return await self._with_locked_run(run_id, on_locked_run)
+        return await self._with_locked_run(attempt.run_id, on_locked_run)
 
     async def authorize_answer_regeneration(
-        self, run_id: UUID, *, attempt_epoch: int
+        self, attempt: RunAttempt
     ) -> CanContinue | CannotContinue:
         async def on_locked_run(operation: _RunOperation, current_run: CurrentRun):
-            decision = current_run.state.check_progress(
-                attempt_epoch=attempt_epoch,
+            decision = current_run.state.check_attempt(
+                attempt_epoch=attempt.epoch,
                 phases={RunPhase.ANSWERING},
                 now=current_run.now,
             )
             await operation.close_if_expired(current_run, decision)
             return decision
 
-        return await self._with_locked_run(run_id, on_locked_run)
+        return await self._with_locked_run(attempt.run_id, on_locked_run)
 
     async def complete(
         self,
-        run_id: UUID,
+        attempt: RunAttempt,
         *,
-        attempt_epoch: int,
         result: AnswerQuestionResult,
         research_handoff: dict[str, Any] | None,
     ) -> RunCompleted | CannotContinue:
         async def on_locked_run(operation: _RunOperation, current_run: CurrentRun):
-            decision = current_run.state.check_attempt_finish(
-                attempt_epoch=attempt_epoch,
+            decision = current_run.state.check_attempt(
+                attempt_epoch=attempt.epoch,
                 phases={RunPhase.ANSWERING},
                 now=current_run.now,
             )
@@ -160,7 +161,7 @@ class AgentRunStateService:
 
             repository = operation.repository
             warn_on_citation_source_mismatch(
-                run_id=run_id,
+                run_id=attempt.run_id,
                 answer=result.answer,
                 source_refs=[source.source_ref for source in result.sources],
             )
@@ -176,18 +177,16 @@ class AgentRunStateService:
                 repository.replace_research_handoff(research_handoff)
             return RunCompleted()
 
-        return await self._with_locked_run(run_id, on_locked_run, lock_thread=True)
+        return await self._with_locked_run(
+            attempt.run_id, on_locked_run, lock_thread=True
+        )
 
     async def record_failure(
-        self,
-        run_id: UUID,
-        *,
-        attempt_epoch: int,
-        error_code: AgentRunErrorCode,
+        self, attempt: RunAttempt, *, error_code: AgentRunErrorCode
     ) -> FailureRecorded | CannotContinue:
         async def on_locked_run(operation: _RunOperation, current_run: CurrentRun):
-            decision = current_run.state.check_attempt_finish(
-                attempt_epoch=attempt_epoch,
+            decision = current_run.state.check_attempt(
+                attempt_epoch=attempt.epoch,
                 phases={RunPhase.PREPARING, RunPhase.ANSWERING},
                 now=current_run.now,
             )
@@ -201,7 +200,7 @@ class AgentRunStateService:
                 case CannotContinue() as stopped:
                     return stopped
 
-        return await self._with_locked_run(run_id, on_locked_run)
+        return await self._with_locked_run(attempt.run_id, on_locked_run)
 
     async def cancel_for_user(
         self, run_id: UUID, *, user_id: UUID
@@ -340,11 +339,10 @@ class AgentRunStateService:
                 queued_count=result.queued_quota_inconsistent_count,
                 running_count=result.running_quota_reservation_count,
             )
-        for running_run in result.running_terminal_runs:
+        for attempt in result.running_terminal_runs:
             await notify_closed_run(
                 ClosedRunningRun(
-                    run_id=running_run.run_id,
-                    attempt_epoch=running_run.attempt_epoch,
+                    attempt=attempt,
                     status=AgentRunStatus.DEADLINE_EXCEEDED,
                     error_code=None,
                 ),
@@ -354,17 +352,15 @@ class AgentRunStateService:
     async def _in_transaction[Result](
         self, work: Callable[[AsyncSession], Awaitable[Result]]
     ) -> Result:
-        attempt_number = 1
-        while True:
+        for attempt_number in range(1, _MAX_TRANSACTION_ATTEMPTS + 1):
             async with self._session_factory() as session:
                 await session.begin()
                 try:
                     result = await work(session)
                 except SQLAlchemyError as exc:
                     error = translate_database_error(exc)
-                    if attempt_number >= _MAX_TRANSACTION_ATTEMPTS or not (
-                        is_resolvable_by_retry(error)
-                    ):
+                    is_last_attempt = attempt_number == _MAX_TRANSACTION_ATTEMPTS
+                    if is_last_attempt or not is_resolvable_by_retry(error):
                         raise error from exc
                 else:
                     try:
@@ -373,8 +369,8 @@ class AgentRunStateService:
                         # commit中の失敗は書けたか分からないので、やり直さない。
                         raise translate_database_error(exc) from exc
                     return result
+            # sessionを閉じて接続を返してから待つ。
             await asyncio.sleep(_RETRY_DELAY_SECONDS * attempt_number)
-            attempt_number += 1
 
 
 @dataclass(slots=True)
@@ -413,8 +409,9 @@ class _RunOperation:
             )
             return
         self.closed_run = ClosedRunningRun(
-            run_id=self.run_id,
-            attempt_epoch=current_run.state.attempt_epoch,
+            attempt=RunAttempt(
+                run_id=self.run_id, epoch=current_run.state.attempt_epoch
+            ),
             status=status,
             error_code=error_code,
         )

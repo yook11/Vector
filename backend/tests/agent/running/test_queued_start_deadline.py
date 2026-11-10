@@ -31,6 +31,7 @@ from app.agent.running.state import (
     CannotContinue,
     DeadlineExceeded,
 )
+from app.agent.running.types import RunAttempt
 from app.models.agent_message import AgentMessage
 from app.models.agent_run import AgentRun
 from app.models.agent_thread import AgentThread
@@ -246,7 +247,9 @@ async def test_queued_start_deadline_starts_just_before_and_expires_at_boundary(
     before_result = await service.start_attempt(just_before.run_id)
     exact_result = await service.start_attempt(exact.run_id)
 
-    assert before_result == AttemptStarted(attempt_epoch=1)
+    assert before_result == AttemptStarted(
+        attempt=RunAttempt(run_id=just_before.run_id, epoch=1)
+    )
     assert (exact_result, notices.closed_runs) == (
         DeadlineExceeded(),
         [
@@ -463,8 +466,10 @@ async def test_timely_start_and_running_redelivery_never_release_quota(
         session_factory, now=_DB_NOW + timedelta(seconds=1)
     ).start_attempt(seeded.run_id)
 
-    assert started == AttemptStarted(attempt_epoch=1)
-    assert redelivered == AttemptStarted(attempt_epoch=2)
+    assert started == AttemptStarted(attempt=RunAttempt(run_id=seeded.run_id, epoch=1))
+    assert redelivered == AttemptStarted(
+        attempt=RunAttempt(run_id=seeded.run_id, epoch=2)
+    )
     run = await _read_run(session_factory, seeded.run_id)
     assert (run.status, run.attempt_epoch, run.error_code) == ("running", 2, None)
     assert await _read_counter(session_factory, usage_date=_USAGE_DATE) == 1

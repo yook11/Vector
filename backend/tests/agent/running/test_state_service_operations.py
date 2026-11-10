@@ -35,7 +35,7 @@ from app.agent.running.state import (
     RunNotFound,
     RunPhaseMismatchError,
 )
-from app.agent.running.types import AgentRunErrorCode, AgentRunStatus
+from app.agent.running.types import AgentRunErrorCode, AgentRunStatus, RunAttempt
 from app.db.errors import (
     DatabaseConnectionError,
     DatabaseTimeoutError,
@@ -199,8 +199,7 @@ async def test_complete_run_warns_on_citation_source_mismatch_without_failing_ru
     service = state_service(session_factory, notices=notices)
 
     completed = await service.complete(
-        run.id,
-        attempt_epoch=run.attempt_epoch,
+        RunAttempt(run_id=run.id, epoch=run.attempt_epoch),
         result=result,
         research_handoff=None,
     )
@@ -210,8 +209,7 @@ async def test_complete_run_warns_on_citation_source_mismatch_without_failing_ru
         RunCompleted(),
         [
             ClosedRunningRun(
-                run_id=run.id,
-                attempt_epoch=1,
+                attempt=RunAttempt(run_id=run.id, epoch=1),
                 status=AgentRunStatus.COMPLETED,
                 error_code=None,
             )
@@ -262,8 +260,7 @@ async def test_complete_run_persists_the_handoff_on_the_thread_and_round_trips(
     service = state_service(session_factory, notices=notices)
 
     completed = await service.complete(
-        run.id,
-        attempt_epoch=run.attempt_epoch,
+        RunAttempt(run_id=run.id, epoch=run.attempt_epoch),
         result=_direct_result(),
         research_handoff=handoff_json,
     )
@@ -272,8 +269,7 @@ async def test_complete_run_persists_the_handoff_on_the_thread_and_round_trips(
         RunCompleted(),
         [
             ClosedRunningRun(
-                run_id=run.id,
-                attempt_epoch=1,
+                attempt=RunAttempt(run_id=run.id, epoch=1),
                 status=AgentRunStatus.COMPLETED,
                 error_code=None,
             )
@@ -313,8 +309,7 @@ async def test_complete_run_keeps_the_existing_handoff_when_none_is_passed(
     service = state_service(session_factory, notices=notices)
 
     completed = await service.complete(
-        run.id,
-        attempt_epoch=run.attempt_epoch,
+        RunAttempt(run_id=run.id, epoch=run.attempt_epoch),
         result=_direct_result(),
         research_handoff=None,
     )
@@ -323,8 +318,7 @@ async def test_complete_run_keeps_the_existing_handoff_when_none_is_passed(
         RunCompleted(),
         [
             ClosedRunningRun(
-                run_id=run.id,
-                attempt_epoch=1,
+                attempt=RunAttempt(run_id=run.id, epoch=1),
                 status=AgentRunStatus.COMPLETED,
                 error_code=None,
             )
@@ -354,10 +348,11 @@ async def test_stale_complete_run_with_a_handoff_does_not_persist_it(
 
     attempt_epoch = started_attempt_epoch(await service.start_attempt(run.id))
     assert attempt_epoch == 2
-    await service.start_answer_generation(run.id, attempt_epoch=attempt_epoch)
+    await service.start_answer_generation(
+        RunAttempt(run_id=run.id, epoch=attempt_epoch)
+    )
     outcome = await service.complete(
-        run.id,
-        attempt_epoch=stale_attempt_epoch,
+        RunAttempt(run_id=run.id, epoch=stale_attempt_epoch),
         result=_direct_result(),
         research_handoff=handoff_json,
     )
@@ -398,13 +393,11 @@ async def test_complete_run_lost_race_leaves_no_assistant_message(
         await service.cancel_for_user(run.id, user_id=UUID(TEST_USER_ID))
     else:
         await service.record_failure(
-            run.id,
-            attempt_epoch=run.attempt_epoch,
+            RunAttempt(run_id=run.id, epoch=run.attempt_epoch),
             error_code=AgentRunErrorCode.STALE,
         )
     outcome = await service.complete(
-        run.id,
-        attempt_epoch=run.attempt_epoch,
+        RunAttempt(run_id=run.id, epoch=run.attempt_epoch),
         result=_direct_result(),
         research_handoff=None,
     )
@@ -447,10 +440,11 @@ async def test_stale_complete_run_loses_epoch_fence_and_leaves_no_artifacts(
 
     attempt_epoch = started_attempt_epoch(await service.start_attempt(run.id))
     assert attempt_epoch == 2
-    await service.start_answer_generation(run.id, attempt_epoch=attempt_epoch)
+    await service.start_answer_generation(
+        RunAttempt(run_id=run.id, epoch=attempt_epoch)
+    )
     outcome = await service.complete(
-        run.id,
-        attempt_epoch=stale_attempt_epoch,
+        RunAttempt(run_id=run.id, epoch=stale_attempt_epoch),
         result=_external_result(),
         research_handoff=None,
     )
@@ -514,8 +508,7 @@ async def test_stale_record_failure_does_not_alter_newer_attempt(
 
     attempt_epoch = started_attempt_epoch(await service.start_attempt(run.id))
     recorded = await service.record_failure(
-        run.id,
-        attempt_epoch=1,
+        RunAttempt(run_id=run.id, epoch=1),
         error_code=AgentRunErrorCode.STALE,
     )
 
@@ -631,7 +624,7 @@ async def test_start_run_allocates_first_attempt_epoch(
     async with session_factory() as session:
         started_run = await session.get(AgentRun, run.id)
         assert started_run is not None
-        assert started == AttemptStarted(attempt_epoch=1)
+        assert started == AttemptStarted(attempt=RunAttempt(run_id=run.id, epoch=1))
         assert started_run.attempt_epoch == 1
 
 
@@ -788,6 +781,7 @@ async def test_answer_save_lock_timeout_rolls_back_without_artifacts(
         thread, _, run = await _create_thread_message_run(
             session,
             status="running",
+            attempt_epoch=1,
             answer_started_at=datetime.now(UTC),
         )
     locked_id = run.id if locked_model is AgentRun else thread.id
@@ -810,8 +804,7 @@ async def test_answer_save_lock_timeout_rolls_back_without_artifacts(
             with pytest.raises(DatabaseTimeoutError) as raised:
                 await asyncio.wait_for(
                     service.complete(
-                        run.id,
-                        attempt_epoch=run.attempt_epoch,
+                        RunAttempt(run_id=run.id, epoch=run.attempt_epoch),
                         result=_external_result(),
                         research_handoff=_handoff().model_dump(mode="json"),
                     ),
@@ -864,8 +857,7 @@ async def test_answer_save_lock_timeout_is_transaction_local_after_commit(
             at_commit,  # type: ignore[arg-type]
             notices=notices,
         ).complete(
-            run_id,
-            attempt_epoch=epoch,
+            RunAttempt(run_id=run_id, epoch=epoch),
             result=_direct_result(),
             research_handoff=None,
         )
@@ -875,8 +867,7 @@ async def test_answer_save_lock_timeout_is_transaction_local_after_commit(
         RunCompleted(),
         [
             ClosedRunningRun(
-                run_id=run_id,
-                attempt_epoch=1,
+                attempt=RunAttempt(run_id=run_id, epoch=1),
                 status=AgentRunStatus.COMPLETED,
                 error_code=None,
             )
@@ -913,8 +904,7 @@ async def test_completion_failure_reason_precedence_preserves_existing_data(
         run_id, thread_id = run.id, thread.id
         original_updated_at = thread.updated_at
     completion = await state_service(session_factory).complete(
-        run_id,
-        attempt_epoch=1,
+        RunAttempt(run_id=run_id, epoch=1),
         result=_external_result(),
         research_handoff=_handoff().model_dump(mode="json"),
     )
@@ -959,8 +949,7 @@ async def test_completion_before_answer_start_is_a_phase_mismatch_without_writes
 
     with pytest.raises(RunPhaseMismatchError):
         await state_service(session_factory).complete(
-            run_id,
-            attempt_epoch=1,
+            RunAttempt(run_id=run_id, epoch=1),
             result=_external_result(),
             research_handoff=_handoff().model_dump(mode="json"),
         )

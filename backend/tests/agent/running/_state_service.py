@@ -20,7 +20,7 @@ from app.agent.running.finish_notice import (
     ClosedRunningRun,
 )
 from app.agent.running.state_service import AgentRunStateService
-from app.agent.running.types import AgentRunStatus
+from app.agent.running.types import AgentRunStatus, RunAttempt
 
 __all__ = [
     "ClosedRunNotices",
@@ -37,8 +37,8 @@ class ClosedRunNotices:
 
     closed_runs: list[ClosedRun] = field(default_factory=list)
 
-    def publisher_for(self, run_id: UUID, attempt_epoch: int) -> _RecordingPublisher:
-        return _RecordingPublisher(self, run_id, attempt_epoch)
+    def publisher_for(self, attempt: RunAttempt) -> _RecordingPublisher:
+        return _RecordingPublisher(self, attempt)
 
     def observe_release(
         self, *, run_id: UUID, outcome: DailyQuotaReleaseOutcome
@@ -51,15 +51,13 @@ class ClosedRunNotices:
 @dataclass
 class _RecordingPublisher:
     notices: ClosedRunNotices
-    run_id: UUID
-    attempt_epoch: int
+    attempt: RunAttempt
 
     async def publish(self, event: object) -> None:
         assert isinstance(event, AgentRunLiveStreamTerminalEvent)
         self.notices.closed_runs.append(
             ClosedRunningRun(
-                run_id=self.run_id,
-                attempt_epoch=self.attempt_epoch,
+                attempt=self.attempt,
                 status=AgentRunStatus(event.status),
                 error_code=event.error_code,
             )

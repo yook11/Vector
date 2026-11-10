@@ -14,6 +14,7 @@ from app.agent.running.state import (
     CannotContinue,
 )
 from app.agent.running.state_service import AgentRunStateService
+from app.agent.running.types import RunAttempt
 
 __all__ = ["AgentRunAnswerGenerationGate"]
 
@@ -22,23 +23,19 @@ class AgentRunAnswerGenerationGate:
     def __init__(
         self,
         state_service: AgentRunStateService,
-        run_id: UUID,
-        attempt_epoch: int,
+        attempt: RunAttempt,
         *,
         schedule_deadline_check: Callable[[UUID, datetime], None],
         stage_reporter: AgentRunLiveStageReporter,
     ) -> None:
         self._state_service = state_service
-        self._run_id = run_id
-        self._attempt_epoch = attempt_epoch
+        self._attempt = attempt
         self._schedule_deadline_check = schedule_deadline_check
         self._stage_reporter = stage_reporter
 
     async def start(self) -> CanContinue | CannotContinue:
         """開始を記録できたら、回収期限の確認を予約して「回答中」を通知する。"""
-        match await self._state_service.start_answer_generation(
-            self._run_id, attempt_epoch=self._attempt_epoch
-        ):
+        match await self._state_service.start_answer_generation(self._attempt):
             case AnswerGenerationStarted(
                 run_id=run_id, answer_started_at=answer_started_at
             ):
@@ -52,6 +49,4 @@ class AgentRunAnswerGenerationGate:
                 return stopped
 
     async def regenerate(self) -> CanContinue | CannotContinue:
-        return await self._state_service.authorize_answer_regeneration(
-            self._run_id, attempt_epoch=self._attempt_epoch
-        )
+        return await self._state_service.authorize_answer_regeneration(self._attempt)

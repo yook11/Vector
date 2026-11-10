@@ -31,7 +31,7 @@ from app.agent.running.state import (
     RunPhaseMismatchError,
 )
 from app.agent.running.state_service import AgentRunStateService
-from app.agent.running.types import AgentRunStatus
+from app.agent.running.types import AgentRunStatus, RunAttempt
 from app.models.agent_run import AgentRun
 from tests.agent.running._seed import create_thread_message_run
 from tests.agent.running._state_service import (
@@ -46,14 +46,16 @@ _ATTEMPT_EPOCH = 3
 _DEADLINE_AT = datetime(2026, 9, 5, 12, 1, tzinfo=UTC)
 _BEFORE_DEADLINE = _DEADLINE_AT - timedelta(microseconds=1)
 _ANSWER_STARTED_AT = _DEADLINE_AT - timedelta(seconds=5)
+# 回答開始から45秒(回答生成15秒 + 猶予30秒)が回収期限なので、受理期限より40秒後になる。
+_RECOVERY_DEADLINE_AT = _DEADLINE_AT + timedelta(seconds=40)
 
 
 class _RecordingPublisher:
     def __init__(self) -> None:
         self.events: list[tuple[uuid.UUID, int, AgentRunLiveStreamEvent]] = []
 
-    def publisher_for(self, run_id: uuid.UUID, attempt_epoch: int) -> _EpochPublisher:
-        return _EpochPublisher(self, run_id, attempt_epoch)
+    def publisher_for(self, attempt: RunAttempt) -> _EpochPublisher:
+        return _EpochPublisher(self, attempt.run_id, attempt.epoch)
 
 
 class _EpochPublisher:
@@ -81,18 +83,18 @@ class _ObservedGate:
     ) -> None:
         self.publisher = _RecordingPublisher()
         self.reservations: list[tuple[uuid.UUID, datetime]] = []
+        attempt = RunAttempt(run_id=run_id, epoch=attempt_epoch)
         self.gate = AgentRunAnswerGenerationGate(
             AgentRunStateService(
                 session_factory=session_factory,
                 publisher_for=self.publisher.publisher_for,  # type: ignore[arg-type]
             ),
-            run_id,
-            attempt_epoch,
+            attempt,
             schedule_deadline_check=lambda target_run_id, at: self.reservations.append(
                 (target_run_id, at)
             ),
             stage_reporter=AgentRunLiveStageReporter(
-                self.publisher.publisher_for(run_id, attempt_epoch)  # type: ignore[arg-type]
+                self.publisher.publisher_for(attempt)  # type: ignore[arg-type]
             ),
         )
 
@@ -113,7 +115,7 @@ async def _start_at(
     notices = ClosedRunNotices()
     result = await state_service(
         session_factory, notices=notices, now=now
-    ).start_answer_generation(run_id, attempt_epoch=attempt_epoch)
+    ).start_answer_generation(RunAttempt(run_id=run_id, epoch=attempt_epoch))
     return result, notices.closed_runs
 
 
@@ -127,7 +129,7 @@ async def _authorize_at(
     notices = ClosedRunNotices()
     result = await state_service(
         session_factory, notices=notices, now=now
-    ).authorize_answer_regeneration(run_id, attempt_epoch=attempt_epoch)
+    ).authorize_answer_regeneration(RunAttempt(run_id=run_id, epoch=attempt_epoch))
     return result, notices.closed_runs
 
 
@@ -141,8 +143,7 @@ async def _database_time(session_factory: async_sessionmaker[AsyncSession]) -> d
 def _closed_by_deadline(run_id: uuid.UUID) -> list[ClosedRun]:
     return [
         ClosedRunningRun(
-            run_id=run_id,
-            attempt_epoch=_ATTEMPT_EPOCH,
+            attempt=RunAttempt(run_id=run_id, epoch=_ATTEMPT_EPOCH),
             status=AgentRunStatus.DEADLINE_EXCEEDED,
             error_code=None,
         )
@@ -299,7 +300,9 @@ async def test_rolled_back_start_does_not_persist_generation_right(
         now=_BEFORE_DEADLINE,
     )
 
-    result = await service.start_answer_generation(run_id, attempt_epoch=_ATTEMPT_EPOCH)
+    result = await service.start_answer_generation(
+        RunAttempt(run_id=run_id, epoch=_ATTEMPT_EPOCH)
+    )
 
     run = await _load_run(session_factory, run_id)
     assert result == AnswerGenerationStarted(run_id, _BEFORE_DEADLINE)
@@ -430,8 +433,7 @@ async def test_lock_wait_uses_database_time_after_acquiring_run_lock(
 
             start_task = asyncio.create_task(
                 service.start_answer_generation(
-                    run_id,
-                    attempt_epoch=_ATTEMPT_EPOCH,
+                    RunAttempt(run_id=run_id, epoch=_ATTEMPT_EPOCH),
                 )
             )
             await wait_until_lock_waiting(observer)
@@ -461,16 +463,20 @@ async def test_lock_wait_uses_database_time_after_acquiring_run_lock(
 
 
 @pytest.mark.asyncio
-async def test_authorize_before_deadline_keeps_start_time(
+async def test_authorize_before_recovery_deadline_keeps_start_time(
     session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
-    """受理期限前の再生成は続けてよいと返し、開始時刻を変えない。"""
+    """受理期限を過ぎていても、回収期限の直前の再生成は続けてよいと返し、開始時刻を変えない。"""
     run_id = await _seed_running(
         session_factory,
         answer_started_at=_ANSWER_STARTED_AT,
     )
 
-    result = await _authorize_at(session_factory, run_id, now=_BEFORE_DEADLINE)
+    result = await _authorize_at(
+        session_factory,
+        run_id,
+        now=_RECOVERY_DEADLINE_AT - timedelta(microseconds=1),
+    )
 
     run = await _load_run(session_factory, run_id)
     assert result == (CanContinue(), [])
@@ -479,16 +485,16 @@ async def test_authorize_before_deadline_keeps_start_time(
 
 
 @pytest.mark.asyncio
-async def test_authorize_at_deadline_expires_without_changing_start_time(
+async def test_authorize_at_recovery_deadline_expires_without_changing_start_time(
     session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
-    """受理期限ちょうどの再生成はRunを期限切れで終えてその世代へ知らせ、開始時刻を変えない。"""
+    """回収期限ちょうどの再生成はRunを期限切れで終えてその世代へ知らせ、開始時刻を変えない。"""
     run_id = await _seed_running(
         session_factory,
         answer_started_at=_ANSWER_STARTED_AT,
     )
 
-    result = await _authorize_at(session_factory, run_id, now=_DEADLINE_AT)
+    result = await _authorize_at(session_factory, run_id, now=_RECOVERY_DEADLINE_AT)
 
     run = await _load_run(session_factory, run_id)
     assert result == (DeadlineExceeded(), _closed_by_deadline(run_id))
@@ -570,16 +576,16 @@ async def test_gate_start_reservation_recovers_after_original_deadline(
     source = RecordingSource()
     scheduler = AgentDeadlineScheduler(source)
     publisher = _RecordingPublisher()
+    attempt = RunAttempt(run_id=run_id, epoch=_ATTEMPT_EPOCH)
     gate = AgentRunAnswerGenerationGate(
         AgentRunStateService(
             session_factory=session_factory,
             publisher_for=publisher.publisher_for,  # type: ignore[arg-type]
         ),
-        run_id,
-        _ATTEMPT_EPOCH,
+        attempt,
         schedule_deadline_check=scheduler.reserve_in_background,
         stage_reporter=AgentRunLiveStageReporter(
-            publisher.publisher_for(run_id, _ATTEMPT_EPOCH)  # type: ignore[arg-type]
+            publisher.publisher_for(attempt)  # type: ignore[arg-type]
         ),
     )
 

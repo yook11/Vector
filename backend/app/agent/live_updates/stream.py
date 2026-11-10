@@ -22,7 +22,7 @@ from pydantic import (
 )
 
 from app.agent.contract import AnsweringStage, AnswerProgressEvent
-from app.agent.running.types import AgentRunErrorCode
+from app.agent.running.types import AgentRunErrorCode, RunAttempt
 from app.log_policy.policies.research import RESEARCH_LOG_RULES
 from app.log_policy.runtime import create_policy_json_logger
 
@@ -169,16 +169,14 @@ class AgentRunLiveStreamPublisher:
     def __init__(
         self,
         redis: aioredis.Redis,
-        run_id: UUID,
-        attempt_epoch: int,
+        attempt: RunAttempt,
         *,
         timeout_seconds: float = AGENT_RUN_LIVE_STREAM_TIMEOUT_SECONDS,
     ) -> None:
-        _validate_attempt_epoch(attempt_epoch)
         self._redis = redis
-        self._run_id = run_id
-        self._attempt_epoch = attempt_epoch
-        self._key = agent_run_live_stream_key(run_id)
+        self._run_id = attempt.run_id
+        self._attempt_epoch = attempt.epoch
+        self._key = agent_run_live_stream_key(attempt.run_id)
         self._timeout_seconds = timeout_seconds
         self._attempt_started_confirmed = False
 

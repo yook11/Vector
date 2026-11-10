@@ -79,16 +79,8 @@ def _start(state: RunState, now: datetime) -> object:
     return state.check_start(now=now)
 
 
-def _progress(state: RunState, now: datetime) -> object:
-    return state.check_progress(
-        attempt_epoch=_EPOCH,
-        phases={RunPhase.PREPARING, RunPhase.ANSWERING},
-        now=now,
-    )
-
-
-def _attempt_finish(state: RunState, now: datetime) -> object:
-    return state.check_attempt_finish(
+def _attempt(state: RunState, now: datetime) -> object:
+    return state.check_attempt(
         attempt_epoch=_EPOCH,
         phases={RunPhase.PREPARING, RunPhase.ANSWERING},
         now=now,
@@ -131,7 +123,7 @@ def test_phase_follows_status_and_answer_start(
     assert state.phase is expected
 
 
-@pytest.mark.parametrize("check", [_start, _progress, _attempt_finish])
+@pytest.mark.parametrize("check", [_start, _attempt])
 @pytest.mark.parametrize(
     ("state", "expected"),
     [
@@ -169,11 +161,10 @@ def test_caller_without_attempt_sees_how_finished_run_ended(
     assert check(state, _RECOVERY_DEADLINE_AT + timedelta(seconds=1)) == expected
 
 
-@pytest.mark.parametrize("check", [_progress, _attempt_finish])
-def test_stale_attempt_is_superseded_without_expiring_run(check: Check) -> None:
+def test_stale_attempt_is_superseded_without_expiring_run() -> None:
     """古い世代の試行の判定は、期限を過ぎていても期限切れにせず別の試行が担当していると返る。"""
     assert (
-        check(
+        _attempt(
             _answering(attempt_epoch=_EPOCH + 1),
             _RECOVERY_DEADLINE_AT + timedelta(seconds=1),
         )
@@ -207,46 +198,36 @@ def test_start_yields_to_answering_attempt_without_expiring_it_after_deadline() 
     )
 
 
-def test_progress_while_answering_is_limited_by_acceptance_deadline() -> None:
-    """回答中でも、受理期限を過ぎてから作業を進めようとすると期限切れになる。"""
-    assert (
-        _answering().check_progress(
-            attempt_epoch=_EPOCH, phases={RunPhase.ANSWERING}, now=_DEADLINE_AT
-        )
-        == DeadlineExceeded()
-    )
-
-
-@pytest.mark.parametrize("check", [_attempt_finish, _cancel])
-def test_finishing_answering_run_is_allowed_until_recovery_deadline(
+@pytest.mark.parametrize("check", [_attempt, _cancel])
+def test_answering_run_is_allowed_until_recovery_deadline(
     check: Check,
 ) -> None:
-    """回答中のRunを終える判定は、受理期限を過ぎても回収期限の1秒前まで許される。"""
+    """回答中のRunへの操作の判定は、受理期限を過ぎても回収期限の1秒前まで許される。"""
     assert check(_answering(), _RECOVERY_DEADLINE_AT - timedelta(seconds=1)) == (
         CanContinue()
     )
 
 
-@pytest.mark.parametrize("check", [_attempt_finish, _cancel])
-def test_finishing_answering_run_expires_at_exact_recovery_deadline(
+@pytest.mark.parametrize("check", [_attempt, _cancel])
+def test_answering_run_expires_at_exact_recovery_deadline(
     check: Check,
 ) -> None:
-    """回答中のRunを終える判定は、回収期限ちょうどで期限切れになる。"""
+    """回答中のRunへの操作の判定は、回収期限ちょうどで期限切れになる。"""
     assert check(_answering(), _RECOVERY_DEADLINE_AT) == DeadlineExceeded()
 
 
 @pytest.mark.parametrize(
     ("state", "check"),
     [
-        pytest.param(_preparing(), _attempt_finish, id="attempt_finish"),
+        pytest.param(_preparing(), _attempt, id="attempt"),
         pytest.param(_queued(), _cancel, id="cancel"),
         pytest.param(_queued(), _enqueue_failure, id="enqueue_failure"),
     ],
 )
-def test_finishing_run_before_answer_expires_at_exact_deadline(
+def test_run_before_answer_expires_at_exact_deadline(
     state: RunState, check: Check
 ) -> None:
-    """回答を始めていないRunを終える判定は、受理期限ちょうどで期限切れになる。"""
+    """回答を始めていないRunへの操作の判定は、受理期限ちょうどで期限切れになる。"""
     assert check(state, _DEADLINE_AT) == DeadlineExceeded()
 
 
@@ -255,24 +236,17 @@ def test_finishing_run_before_answer_expires_at_exact_deadline(
     [
         pytest.param(
             _answering(),
-            lambda state, now: state.check_progress(
+            lambda state, now: state.check_attempt(
                 attempt_epoch=_EPOCH, phases={RunPhase.PREPARING}, now=now
             ),
             id="answering-where-preparing-required",
         ),
         pytest.param(
             _preparing(),
-            lambda state, now: state.check_progress(
+            lambda state, now: state.check_attempt(
                 attempt_epoch=_EPOCH, phases={RunPhase.ANSWERING}, now=now
             ),
-            id="preparing-where-answering-required-to-progress",
-        ),
-        pytest.param(
-            _preparing(),
-            lambda state, now: state.check_attempt_finish(
-                attempt_epoch=_EPOCH, phases={RunPhase.ANSWERING}, now=now
-            ),
-            id="preparing-where-answering-required-to-finish",
+            id="preparing-where-answering-required",
         ),
     ],
 )

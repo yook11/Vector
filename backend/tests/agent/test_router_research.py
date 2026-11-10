@@ -44,6 +44,7 @@ from app.agent.running.state import (
 )
 from app.agent.running.state_repository import AgentRunStateRepository
 from app.agent.running.state_service import AgentRunStateService
+from app.agent.running.types import RunAttempt
 from app.config import settings
 from app.db.fastapi import get_caller_managed_session
 from app.main import app
@@ -113,10 +114,10 @@ class FakeCancelStreamPublisher:
     instances: list[FakeCancelStreamPublisher] = []
     raise_on_publish = False
 
-    def __init__(self, redis: object, run_id: UUID, attempt_epoch: int) -> None:
+    def __init__(self, redis: object, attempt: RunAttempt) -> None:
         self.redis = redis
-        self.run_id = run_id
-        self.attempt_epoch = attempt_epoch
+        self.run_id = attempt.run_id
+        self.attempt_epoch = attempt.epoch
         self.published: list[object] = []
         self.instances.append(self)
 
@@ -2168,8 +2169,7 @@ class TestDeleteResearchThread:
             await db_session.commit()
         db_session.expire_all()
         completed = await state_service(session_factory).complete(
-            run_id,
-            attempt_epoch=expected_attempt_epoch,
+            RunAttempt(run_id=run_id, epoch=expected_attempt_epoch),
             result=_direct_result(),
             research_handoff=None,
         )
@@ -2501,8 +2501,7 @@ class TestCancelResearchRun:
             await db_session.commit()
         db_session.expire_all()
         completed = await state_service(session_factory).complete(
-            run_id,
-            attempt_epoch=expected_attempt_epoch,
+            RunAttempt(run_id=run_id, epoch=expected_attempt_epoch),
             result=_direct_result(),
             research_handoff=None,
         )

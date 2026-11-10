@@ -13,7 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from app.agent.live_updates.stream import AgentRunLiveStreamTerminalEvent
 from app.agent.running.state import CancelledByUser
 from app.agent.running.state_service import AgentRunStateService
-from app.agent.running.types import AgentRunErrorCode
+from app.agent.running.types import AgentRunErrorCode, RunAttempt
 from app.db.errors import (
     DatabaseConnectionError,
     DatabaseSyntaxOrAccessError,
@@ -90,8 +90,8 @@ class _RecordingPublishers:
     session_factory: async_sessionmaker[AsyncSession]
     publications: list[_Publication] = field(default_factory=list)
 
-    def __call__(self, run_id: uuid.UUID, attempt_epoch: int) -> _RecordingPublisher:
-        return _RecordingPublisher(self, run_id, attempt_epoch)
+    def __call__(self, attempt: RunAttempt) -> _RecordingPublisher:
+        return _RecordingPublisher(self, attempt.run_id, attempt.epoch)
 
 
 @dataclass
