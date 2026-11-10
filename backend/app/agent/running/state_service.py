@@ -352,17 +352,15 @@ class AgentRunStateService:
     async def _in_transaction[Result](
         self, work: Callable[[AsyncSession], Awaitable[Result]]
     ) -> Result:
-        attempt_number = 1
-        while True:
+        for attempt_number in range(1, _MAX_TRANSACTION_ATTEMPTS + 1):
             async with self._session_factory() as session:
                 await session.begin()
                 try:
                     result = await work(session)
                 except SQLAlchemyError as exc:
                     error = translate_database_error(exc)
-                    if attempt_number >= _MAX_TRANSACTION_ATTEMPTS or not (
-                        is_resolvable_by_retry(error)
-                    ):
+                    is_last_attempt = attempt_number == _MAX_TRANSACTION_ATTEMPTS
+                    if is_last_attempt or not is_resolvable_by_retry(error):
                         raise error from exc
                 else:
                     try:
@@ -371,8 +369,8 @@ class AgentRunStateService:
                         # commit中の失敗は書けたか分からないので、やり直さない。
                         raise translate_database_error(exc) from exc
                     return result
+            # sessionを閉じて接続を返してから待つ。
             await asyncio.sleep(_RETRY_DELAY_SECONDS * attempt_number)
-            attempt_number += 1
 
 
 @dataclass(slots=True)
