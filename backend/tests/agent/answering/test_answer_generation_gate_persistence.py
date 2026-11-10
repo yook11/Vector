@@ -46,6 +46,8 @@ _ATTEMPT_EPOCH = 3
 _DEADLINE_AT = datetime(2026, 9, 5, 12, 1, tzinfo=UTC)
 _BEFORE_DEADLINE = _DEADLINE_AT - timedelta(microseconds=1)
 _ANSWER_STARTED_AT = _DEADLINE_AT - timedelta(seconds=5)
+# 回答開始から45秒(回答生成15秒 + 猶予30秒)が回収期限なので、受理期限より40秒後になる。
+_RECOVERY_DEADLINE_AT = _DEADLINE_AT + timedelta(seconds=40)
 
 
 class _RecordingPublisher:
@@ -461,16 +463,20 @@ async def test_lock_wait_uses_database_time_after_acquiring_run_lock(
 
 
 @pytest.mark.asyncio
-async def test_authorize_before_deadline_keeps_start_time(
+async def test_authorize_before_recovery_deadline_keeps_start_time(
     session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
-    """受理期限前の再生成は続けてよいと返し、開始時刻を変えない。"""
+    """受理期限を過ぎていても、回収期限の直前の再生成は続けてよいと返し、開始時刻を変えない。"""
     run_id = await _seed_running(
         session_factory,
         answer_started_at=_ANSWER_STARTED_AT,
     )
 
-    result = await _authorize_at(session_factory, run_id, now=_BEFORE_DEADLINE)
+    result = await _authorize_at(
+        session_factory,
+        run_id,
+        now=_RECOVERY_DEADLINE_AT - timedelta(microseconds=1),
+    )
 
     run = await _load_run(session_factory, run_id)
     assert result == (CanContinue(), [])
@@ -479,16 +485,16 @@ async def test_authorize_before_deadline_keeps_start_time(
 
 
 @pytest.mark.asyncio
-async def test_authorize_at_deadline_expires_without_changing_start_time(
+async def test_authorize_at_recovery_deadline_expires_without_changing_start_time(
     session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
-    """受理期限ちょうどの再生成はRunを期限切れで終えてその世代へ知らせ、開始時刻を変えない。"""
+    """回収期限ちょうどの再生成はRunを期限切れで終えてその世代へ知らせ、開始時刻を変えない。"""
     run_id = await _seed_running(
         session_factory,
         answer_started_at=_ANSWER_STARTED_AT,
     )
 
-    result = await _authorize_at(session_factory, run_id, now=_DEADLINE_AT)
+    result = await _authorize_at(session_factory, run_id, now=_RECOVERY_DEADLINE_AT)
 
     run = await _load_run(session_factory, run_id)
     assert result == (DeadlineExceeded(), _closed_by_deadline(run_id))

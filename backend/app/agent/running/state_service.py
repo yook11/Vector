@@ -90,7 +90,7 @@ class AgentRunStateService:
         self, run_id: UUID, *, attempt_epoch: int
     ) -> CanContinue | CannotContinue:
         async def on_locked_run(operation: _RunOperation, current_run: CurrentRun):
-            decision = current_run.state.check_progress(
+            decision = current_run.state.check_attempt(
                 attempt_epoch=attempt_epoch,
                 phases={RunPhase.PREPARING},
                 now=current_run.now,
@@ -104,7 +104,7 @@ class AgentRunStateService:
         self, run_id: UUID, *, attempt_epoch: int
     ) -> AnswerGenerationStarted | CannotContinue:
         async def on_locked_run(operation: _RunOperation, current_run: CurrentRun):
-            decision = current_run.state.check_progress(
+            decision = current_run.state.check_attempt(
                 attempt_epoch=attempt_epoch,
                 phases={RunPhase.PREPARING},
                 now=current_run.now,
@@ -127,7 +127,7 @@ class AgentRunStateService:
         self, run_id: UUID, *, attempt_epoch: int
     ) -> CanContinue | CannotContinue:
         async def on_locked_run(operation: _RunOperation, current_run: CurrentRun):
-            decision = current_run.state.check_progress(
+            decision = current_run.state.check_attempt(
                 attempt_epoch=attempt_epoch,
                 phases={RunPhase.ANSWERING},
                 now=current_run.now,
@@ -146,7 +146,7 @@ class AgentRunStateService:
         research_handoff: dict[str, Any] | None,
     ) -> RunCompleted | CannotContinue:
         async def on_locked_run(operation: _RunOperation, current_run: CurrentRun):
-            decision = current_run.state.check_attempt_finish(
+            decision = current_run.state.check_attempt(
                 attempt_epoch=attempt_epoch,
                 phases={RunPhase.ANSWERING},
                 now=current_run.now,
@@ -186,7 +186,7 @@ class AgentRunStateService:
         error_code: AgentRunErrorCode,
     ) -> FailureRecorded | CannotContinue:
         async def on_locked_run(operation: _RunOperation, current_run: CurrentRun):
-            decision = current_run.state.check_attempt_finish(
+            decision = current_run.state.check_attempt(
                 attempt_epoch=attempt_epoch,
                 phases={RunPhase.PREPARING, RunPhase.ANSWERING},
                 now=current_run.now,
