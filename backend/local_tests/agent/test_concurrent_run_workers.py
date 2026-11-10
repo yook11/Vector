@@ -27,7 +27,7 @@ async def test_duplicate_before_answer_generation_only_latest_execution_saves_an
 
     # 両世代とも回答生成前に止め、世代の交代によって古い処理が拒否されることを確認する。
     await older_execution.resume_planning()
-    older_execution_result = await older_execution.wait_for_answer_generation_stop()
+    older_execution_result = await older_execution.wait_for_attempt_stop()
     assert older_execution_result == {
         "stop_reason": "attempt_superseded",
         "completion_returned": False,

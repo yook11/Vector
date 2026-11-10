@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import ClassVar, Protocol
+from typing import TYPE_CHECKING, ClassVar, Protocol
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -12,6 +12,9 @@ from app.agent.answering.evidence_answer.evidence import AnswerInputEvidence
 from app.agent.contract import NonBlankText
 from app.agent.planning.contract import TargetTimeWindow
 from app.shared.errors import ApplicationError
+
+if TYPE_CHECKING:
+    from app.agent.running.state import CannotContinue
 
 __all__ = [
     "EvidenceAnswerDraft",
@@ -43,7 +46,9 @@ class EvidenceAnswerDraft(BaseModel):
 class EvidenceAnswerer(Protocol):
     """本文とcited refsが整合するdraftを返し、生成不能は例外で通知する。"""
 
-    async def answer(self, input: EvidenceAnswerInput) -> EvidenceAnswerDraft: ...
+    async def answer(
+        self, input: EvidenceAnswerInput
+    ) -> EvidenceAnswerDraft | CannotContinue: ...
 
 
 class EvidenceAnswerDraftInvalidError(ApplicationError):

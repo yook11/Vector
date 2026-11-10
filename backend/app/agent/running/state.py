@@ -144,7 +144,6 @@ type _FinishCheck = (
     | DeadlineExceeded
     | RunAlreadyCompleted
     | RunAlreadyFailed
-    | AttemptAlreadyStarted
 )
 
 
@@ -206,19 +205,20 @@ class RunState:
             now=now,
         )
 
-    def check_finish(
-        self,
-        *,
-        phases: Collection[RunPhase],
-        now: datetime,
-    ) -> _FinishCheck:
-        """世代を持たない利用者やrouterがRunを終えるのも、回収期限までに限る。"""
+    def check_cancel(self, *, now: datetime) -> _FinishCheck:
+        """利用者がRunを止めるのは、どの段階でも回収期限までに限る。"""
+        if self.phase is RunPhase.FINISHED:
+            return self._ended_for_caller_without_attempt()
+        return _within(self._recovery_deadline(), now=now)
+
+    def check_enqueue_failure(
+        self, *, now: datetime
+    ) -> _FinishCheck | AttemptAlreadyStarted:
+        """投入の失敗でRunを終えるのは、待機中のまま回収期限までに限る。"""
         phase = self.phase
         if phase is RunPhase.FINISHED:
             return self._ended_for_caller_without_attempt()
-        if phase not in phases:
-            if phase is RunPhase.QUEUED:
-                raise RunPhaseMismatchError(phase=phase, allowed=phases)
+        if phase is not RunPhase.QUEUED:
             return AttemptAlreadyStarted()
         return _within(self._recovery_deadline(), now=now)
 

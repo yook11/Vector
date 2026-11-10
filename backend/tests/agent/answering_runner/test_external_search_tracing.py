@@ -57,6 +57,7 @@ from app.logfire.redaction import install_exception_redaction
 from tests.agent.answering_runner._harness import (
     ExternalScopes,
     PassThroughOrganizer,
+    RecordingStageGate,
     fixed_scope,
     run_identity,
 )
@@ -261,6 +262,7 @@ def _runner(
     return (
         AnsweringRunner(
             phases_factory=lambda: phases,
+            stage_gate=RecordingStageGate(),
         ),
         tool,
     )
@@ -690,6 +692,7 @@ async def test_direct_path_run_span_has_no_evidence_count_attributes(
     )
     runner = AnsweringRunner(
         phases_factory=lambda: phases,
+        stage_gate=RecordingStageGate(),
     )
 
     await _run(runner)
@@ -773,6 +776,7 @@ async def test_evidence_run_span_reports_post_dedup_internal_total(
     )
     runner = AnsweringRunner(
         phases_factory=lambda: phases,
+        stage_gate=RecordingStageGate(),
     )
 
     await _run(runner)
@@ -822,6 +826,7 @@ async def test_evidence_run_span_reports_internal_collection_failed_task_count(
     )
     runner = AnsweringRunner(
         phases_factory=lambda: phases,
+        stage_gate=RecordingStageGate(),
     )
 
     await _run(runner)

@@ -1,4 +1,4 @@
-"""AgentRunStateRepository が記録系の操作で期限と利用枠を扱う規則(実DB)。"""
+"""記録系の操作と開始が期限と利用枠を扱う規則(実DB、利用枠の観測は記録)。"""
 
 from __future__ import annotations
 
@@ -12,11 +12,11 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from app.agent.running.daily_quota.release import DailyQuotaReleaseOutcome
 from app.agent.running.finish_notice import ClosedQueuedRun, ClosedRunningRun
 from app.agent.running.state import DeadlineExceeded, FailureRecorded
-from app.agent.running.state_repository import AgentRunStateRepository
 from app.agent.running.types import AgentRunErrorCode, AgentRunStatus
 from app.models.agent_run import AgentRun
 from app.models.agent_user_daily_quota import AgentUserDailyQuota
 from tests.agent.running._seed import create_thread_message_run
+from tests.agent.running._state_service import record_closed_runs, state_service
 from tests.conftest import TEST_USER_ID
 
 _USER_ID = uuid.UUID(TEST_USER_ID)
@@ -65,6 +65,7 @@ async def _read_run(
 @pytest.mark.asyncio
 async def test_enqueue_failure_releases_quota_reserved_at_admission(
     session_factory: async_sessionmaker[AsyncSession],
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """キュー投入に失敗したqueuedのRunはenqueue_failedで終わり、受付で予約した利用枠が戻る。"""
     await _seed_quota_counter(session_factory, used_count=1)
@@ -76,14 +77,14 @@ async def test_enqueue_failure_releases_quota_reserved_at_admission(
             quota_usage_date=_USAGE_DATE,
         )
 
-    async with session_factory() as session:
-        async with session.begin():
-            repository = AgentRunStateRepository(session)
-            result = await repository.record_enqueue_failure(run.id, now=_NOW)
+    notices = record_closed_runs(monkeypatch)
+    service = state_service(session_factory, notices=notices, now=_NOW)
+
+    result = await service.record_enqueue_failure(run.id)
 
     assert (
         result,
-        repository.closed_runs,
+        notices.closed_runs,
         await _read_counter(session_factory),
         await _read_run(session_factory, run.id),
     ) == (
@@ -102,6 +103,7 @@ async def test_enqueue_failure_releases_quota_reserved_at_admission(
 @pytest.mark.asyncio
 async def test_cancel_after_deadline_expires_queued_run_and_releases_quota(
     session_factory: async_sessionmaker[AsyncSession],
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """受理期限を過ぎたqueuedのRunをキャンセルすると、期限切れで終わり利用枠が戻る。"""
     await _seed_quota_counter(session_factory, used_count=1)
@@ -113,16 +115,14 @@ async def test_cancel_after_deadline_expires_queued_run_and_releases_quota(
             quota_usage_date=_USAGE_DATE,
         )
 
-    async with session_factory() as session:
-        async with session.begin():
-            repository = AgentRunStateRepository(session)
-            result = await repository.cancel_for_user(
-                run.id, user_id=_USER_ID, now=_NOW
-            )
+    notices = record_closed_runs(monkeypatch)
+    service = state_service(session_factory, notices=notices, now=_NOW)
+
+    result = await service.cancel_for_user(run.id, user_id=_USER_ID)
 
     assert (
         result,
-        repository.closed_runs,
+        notices.closed_runs,
         await _read_counter(session_factory),
         await _read_run(session_factory, run.id),
     ) == (
@@ -141,6 +141,7 @@ async def test_cancel_after_deadline_expires_queued_run_and_releases_quota(
 @pytest.mark.asyncio
 async def test_cancel_after_deadline_expires_running_run_for_its_attempt(
     session_factory: async_sessionmaker[AsyncSession],
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """回答前に受理期限を過ぎたrunningのRunをキャンセルすると、その世代のまま期限切れで終わる。"""
     async with session_factory() as session:
@@ -151,16 +152,14 @@ async def test_cancel_after_deadline_expires_running_run_for_its_attempt(
             deadline_at=_NOW - timedelta(seconds=1),
         )
 
-    async with session_factory() as session:
-        async with session.begin():
-            repository = AgentRunStateRepository(session)
-            result = await repository.cancel_for_user(
-                run.id, user_id=_USER_ID, now=_NOW
-            )
+    notices = record_closed_runs(monkeypatch)
+    service = state_service(session_factory, notices=notices, now=_NOW)
+
+    result = await service.cancel_for_user(run.id, user_id=_USER_ID)
 
     assert (
         result,
-        repository.closed_runs,
+        notices.closed_runs,
         await _read_run(session_factory, run.id),
     ) == (
         DeadlineExceeded(),
@@ -179,6 +178,7 @@ async def test_cancel_after_deadline_expires_running_run_for_its_attempt(
 @pytest.mark.asyncio
 async def test_failure_after_recovery_deadline_expires_answering_run(
     session_factory: async_sessionmaker[AsyncSession],
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """回答開始から45秒を過ぎた回答中のRunの失敗記録は、失敗ではなく期限切れで終わる。"""
     async with session_factory() as session:
@@ -190,19 +190,16 @@ async def test_failure_after_recovery_deadline_expires_answering_run(
             answer_started_at=_NOW - timedelta(seconds=45),
         )
 
-    async with session_factory() as session:
-        async with session.begin():
-            repository = AgentRunStateRepository(session)
-            result = await repository.record_failure(
-                run.id,
-                attempt_epoch=2,
-                error_code=AgentRunErrorCode.GENERATION_UNAVAILABLE,
-                now=_NOW,
-            )
+    notices = record_closed_runs(monkeypatch)
+    service = state_service(session_factory, notices=notices, now=_NOW)
+
+    result = await service.record_failure(
+        run.id, attempt_epoch=2, error_code=AgentRunErrorCode.GENERATION_UNAVAILABLE
+    )
 
     assert (
         result,
-        repository.closed_runs,
+        notices.closed_runs,
         await _read_run(session_factory, run.id),
     ) == (
         DeadlineExceeded(),
@@ -221,6 +218,7 @@ async def test_failure_after_recovery_deadline_expires_answering_run(
 @pytest.mark.asyncio
 async def test_start_after_deadline_reports_redelivered_running_attempt(
     session_factory: async_sessionmaker[AsyncSession],
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """受理期限後に再配信されたrunningのRunは期限切れで終わり、終了通知の送り先として元の世代を返す。"""
     async with session_factory() as session:
@@ -231,14 +229,14 @@ async def test_start_after_deadline_reports_redelivered_running_attempt(
             deadline_at=_NOW - timedelta(seconds=1),
         )
 
-    async with session_factory() as session:
-        async with session.begin():
-            repository = AgentRunStateRepository(session)
-            result = await repository.start_attempt(run.id, now=_NOW)
+    notices = record_closed_runs(monkeypatch)
+    service = state_service(session_factory, notices=notices, now=_NOW)
+
+    result = await service.start_attempt(run.id)
 
     assert (
         result,
-        repository.closed_runs,
+        notices.closed_runs,
         await _read_run(session_factory, run.id),
     ) == (
         DeadlineExceeded(),

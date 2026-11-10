@@ -61,7 +61,6 @@ async def test_answer_completion_wins_race_and_preserves_saved_result(
         answer=answer_result,
         at=recovery_deadline - timedelta(microseconds=1),
     ) as completing:
-        completion = await completing.wait_for_result()
         result_before_recovery = await completing.snapshot(
             run_id=run.run_id, thread_id=run.thread_id
         )
@@ -72,7 +71,7 @@ async def test_answer_completion_wins_race_and_preserves_saved_result(
             at=recovery_deadline,
         ) as recovering:
             await recovering.wait_until_blocked_by(completing)
-            await completing.finish()
+            completion = await completing.finish()
             recovery = await recovering.finish()
 
     result_after_recovery = await fetch_saved_run_result(

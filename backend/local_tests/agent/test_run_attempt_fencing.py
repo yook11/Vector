@@ -7,10 +7,8 @@ from app.agent.contract import (
     AnswerQuestionResult,
     ExternalUrlSource,
 )
-from app.agent.running.answer_generation import AgentAnswerGenerationRepository
 from app.agent.running.creation import AgentRunCreationRepository
 from app.agent.running.state import AttemptSuperseded, RunCompleted
-from app.agent.running.state_repository import AgentRunStateRepository
 from local_tests.agent.support import (
     fetch_saved_run_result,
     start_run_attempt,
@@ -39,9 +37,9 @@ async def test_only_latest_attempt_can_complete_run(
     older_attempt_epoch = await start_run_attempt(session_factory, run_id)
     latest_attempt_epoch = await start_run_attempt(session_factory, run_id)
 
-    await AgentAnswerGenerationRepository(
-        state_service_for(session_factory), run_id, latest_attempt_epoch
-    ).start_answer_generation()
+    await state_service_for(session_factory).start_answer_generation(
+        run_id, attempt_epoch=latest_attempt_epoch
+    )
 
     older_attempt_result = AnswerQuestionResult(
         status="answered",
@@ -75,21 +73,19 @@ async def test_only_latest_attempt_can_complete_run(
     )
 
     # 完了済みの拒否ではなく世代の不一致を検証するため、古い世代から保存を試みる。
-    async with session_factory() as session:
-        async with session.begin():
-            older_attempt_completion = await AgentRunStateRepository(session).complete(
-                run_id,
-                attempt_epoch=older_attempt_epoch,
-                result=older_attempt_result,
-            )
+    older_attempt_completion = await state_service_for(session_factory).complete(
+        run_id,
+        attempt_epoch=older_attempt_epoch,
+        result=older_attempt_result,
+        research_handoff=None,
+    )
 
-    async with session_factory() as session:
-        async with session.begin():
-            latest_attempt_completion = await AgentRunStateRepository(session).complete(
-                run_id,
-                attempt_epoch=latest_attempt_epoch,
-                result=latest_attempt_result,
-            )
+    latest_attempt_completion = await state_service_for(session_factory).complete(
+        run_id,
+        attempt_epoch=latest_attempt_epoch,
+        result=latest_attempt_result,
+        research_handoff=None,
+    )
 
     saved_result = await fetch_saved_run_result(
         system_database, run_id=run_id, thread_id=created.thread_id

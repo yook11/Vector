@@ -10,8 +10,8 @@ from uuid import UUID
 import pytest
 
 from app.agent.contract import (
+    AnsweringStage,
     AnswerProgressEvent,
-    AnswerProgressStage,
     EvidenceReviewSelectedEvent,
     ExternalSearchHitsFetchedEvent,
     ExternalSearchQueriesGeneratedEvent,
@@ -79,7 +79,7 @@ class RecordingRedis:
     ],
 )
 async def test_stage_reporter_publishes_each_stage_without_mutation(
-    stage: AnswerProgressStage,
+    stage: AnsweringStage,
 ) -> None:
     stream_publisher = AsyncMock()
     stream_publisher.publish.return_value = None
@@ -109,7 +109,7 @@ async def test_stage_reporter_does_not_raise_when_stream_publish_fails() -> None
 async def test_stage_reporter_does_not_raise_on_invalid_stage() -> None:
     stream_publisher = AsyncMock()
     reporter = reporters.AgentRunLiveStageReporter(stream_publisher)
-    invalid_stage = cast(AnswerProgressStage, "invalid")
+    invalid_stage = cast(AnsweringStage, "invalid")
 
     await reporter.stage_changed(invalid_stage)
 

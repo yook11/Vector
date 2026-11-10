@@ -51,6 +51,7 @@ from tests.agent.answering_runner._harness import (
     AS_OF,
     ExternalScopes,
     PassThroughOrganizer,
+    RecordingStageGate,
     fixed_scope,
     internal_hit,
 )
@@ -385,6 +386,7 @@ def _runner(
     return (
         AnsweringRunner(
             phases_factory=lambda: phases,
+            stage_gate=RecordingStageGate(),
             events=events,
         ),
         answerer,
@@ -1335,6 +1337,7 @@ async def test_external_scope_is_activated_fresh_per_run() -> None:
     )
     runner = AnsweringRunner(
         phases_factory=lambda: phases,
+        stage_gate=RecordingStageGate(),
     )
 
     await _run(runner)

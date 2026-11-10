@@ -22,8 +22,12 @@ from app.agent.answering.evidence_answer.contract import (
     EvidenceAnswerDraft,
     EvidenceAnswerInput,
 )
-from app.agent.answering_runner import AnsweringPhases, AnsweringRunner, RunInput
-from app.agent.contract import AnswerProgressStage
+from app.agent.answering_runner import (
+    AnsweringPhases,
+    AnsweringRunner,
+    RunInput,
+    RunResult,
+)
 from app.agent.evidence_collection import (
     CollectedNews,
     EvidenceCollectionService,
@@ -60,6 +64,7 @@ from app.analysis.assessment.domain.result import InScope, InScopeCategory
 from tests.agent.answering_runner._harness import (
     ExternalScopes,
     PassThroughOrganizer,
+    RecordingStageGate,
     fixed_scope,
     run_identity,
 )
@@ -450,24 +455,6 @@ class _EvidenceAnswerer:
         )
 
 
-class _Progress:
-    def __init__(
-        self,
-        timeline: list[str],
-        *,
-        error_stage: AnswerProgressStage | None = None,
-        error: BaseException | None = None,
-    ) -> None:
-        self._timeline = timeline
-        self._error_stage = error_stage
-        self._error = error
-
-    async def stage_changed(self, stage: AnswerProgressStage) -> None:
-        self._timeline.append(f"progress.{stage}")
-        if stage == self._error_stage and self._error is not None:
-            raise self._error
-
-
 class _Events:
     def __init__(self) -> None:
         self.events: list[Any] = []
@@ -514,7 +501,7 @@ def _runner(
     timeline: list[str],
     answer_error: BaseException | None = None,
     planner_error: BaseException | None = None,
-    progress: _Progress | None = None,
+    stage_gate: RecordingStageGate | None = None,
     events: object | None = None,
 ) -> AnsweringRunner:
     phases = AnsweringPhases(
@@ -534,7 +521,7 @@ def _runner(
     )
     return AnsweringRunner(
         phases_factory=lambda: phases,
-        progress=progress,
+        stage_gate=stage_gate or RecordingStageGate(),
         events=events,  # type: ignore[arg-type]
     )
 
@@ -833,6 +820,7 @@ async def test_runner_preserves_internal_hit_order_into_synthesis() -> None:
     )
     runner = AnsweringRunner(
         phases_factory=lambda: phases,
+        stage_gate=RecordingStageGate(),
         events=None,
     )
 
@@ -881,6 +869,7 @@ async def test_runner_forwards_review_missing_to_the_evidence_answerer() -> None
     )
     runner = AnsweringRunner(
         phases_factory=lambda: phases,
+        stage_gate=RecordingStageGate(),
         events=None,
     )
 
@@ -945,11 +934,12 @@ async def test_scope_exits_after_unclassified_task_sibling_joins() -> None:
 async def test_pre_dispatch_failure_does_not_activate_external_scope(
     failure_stage: str,
 ) -> None:
+    """計画の失敗や収集に入る問い合わせの失敗は、外部検索の資源を開かずに同じ例外で出る。"""
     error = RuntimeError(f"{failure_stage} failure")
     timeline: list[str] = []
     factory = _Factory([_caller(ScriptedLlmCaller([_query_draft()]))], timeline)
-    progress = (
-        _Progress(timeline, error_stage="evidence_collection", error=error)
+    stage_gate = (
+        RecordingStageGate(stop_at="evidence_collection", error=error)
         if failure_stage == "evidence_collection"
         else None
     )
@@ -959,7 +949,7 @@ async def test_pre_dispatch_failure_does_not_activate_external_scope(
         factory=factory,
         timeline=timeline,
         planner_error=error if failure_stage == "planning" else None,
-        progress=progress,
+        stage_gate=stage_gate,
     )
 
     with pytest.raises(RuntimeError) as raised:
@@ -1610,6 +1600,7 @@ async def test_internal_failure_still_reaches_reviewer_and_produces_evidence() -
     )
     runner = AnsweringRunner(
         phases_factory=lambda: phases,
+        stage_gate=RecordingStageGate(),
         events=events,
     )
 
@@ -1662,6 +1653,7 @@ async def test_external_provider_failure_keeps_internal_hits_in_final_evidence()
     )
     runner = AnsweringRunner(
         phases_factory=lambda: phases,
+        stage_gate=RecordingStageGate(),
     )
 
     await _run(runner)
@@ -1798,6 +1790,7 @@ async def test_runner_isolates_one_tasks_total_failure_from_sibling_evidence() -
     )
     runner = AnsweringRunner(
         phases_factory=lambda: phases,
+        stage_gate=RecordingStageGate(),
     )
 
     await _run(runner)
@@ -1922,6 +1915,7 @@ async def test_all_tasks_incomplete_adds_the_fixed_incomplete_phrase_once(
         identity=RUN_IDENTITY,
     )
 
+    assert isinstance(result, RunResult)
     assert result.final_output.status == "insufficient"
     assert (
         "内部記事検索を完了できませんでした" not in result.final_output.missing_aspects

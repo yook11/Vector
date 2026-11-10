@@ -37,15 +37,16 @@ async def main():
         ExternalSearchService,
     )
     from app.agent.evidence_collection.internal_search.ai import gemini
-    from app.agent.running.answer_generation import AgentAnswerGenerationRepository
+    from app.agent.running.answer_generation import AgentRunAnswerGenerationGate
+    from app.agent.running.stage_gate import AgentRunStageGate
     from app.agent.running.state import (
         AttemptSuperseded,
         CancelledByUser,
+        CanContinue,
         DeadlineExceeded,
         RunNotFound,
     )
-    from app.agent.running.state_repository import AgentRunStateRepository
-    from app.agent.running.stop import AnswerGenerationStopped
+    from app.agent.running.state_service import AgentRunStateService
     from app.models.agent_run import AgentRun
     from app.queue.brokers import broker_agent
     from local_tests.agent.support import AgentProviderResponses
@@ -57,7 +58,7 @@ async def main():
         control = WorkerControl(redis, sys.argv[1])
         delivery = None
         completion_returned = False
-        answer_generation_stop_reason = None
+        stop_reason = None
         answer_generation_calls = 0
         stream_message_id = None
         acknowledged = False
@@ -65,8 +66,9 @@ async def main():
         processed = asyncio.Event()
         finish = asyncio.Event()
         original_listen = broker_agent.listen
-        original_complete = AgentRunStateRepository.complete
-        original_answer_start = AgentAnswerGenerationRepository.start_answer_generation
+        original_complete = AgentRunStateService.complete
+        original_answer_start = AgentRunAnswerGenerationGate.start
+        original_stage_entry = AgentRunStageGate.enter
         original_ack_generator = broker_agent._ack_generator
 
         def observe_ack(id, queue_name):
@@ -105,7 +107,7 @@ async def main():
 
         async def receive_deliveries():
             nonlocal delivery, pause_before_ack, completion_returned
-            nonlocal answer_generation_calls, answer_generation_stop_reason
+            nonlocal answer_generation_calls, stop_reason
             nonlocal stream_message_id, acknowledged
             instruction = await control.receive("receive")
             pause_before_ack = instruction.get("pause_before_ack", False)
@@ -121,7 +123,7 @@ async def main():
                     delivery = broker_agent.formatter.loads(message=message.data)
                     completion_returned = False
                     answer_generation_calls = 0
-                    answer_generation_stop_reason = None
+                    stop_reason = None
                     stream_message_id = None
                     acknowledged = False
                     processed.clear()
@@ -132,28 +134,34 @@ async def main():
                         await finish.wait()
                         return
 
-        async def observe_completion(repository, *args, **kwargs):
+        async def observe_completion(service, *args, **kwargs):
             nonlocal completion_returned
-            result = await original_complete(repository, *args, **kwargs)
+            result = await original_complete(service, *args, **kwargs)
             completion_returned = True
             return result
 
-        async def observe_answer_start(repository, **kwargs):
-            nonlocal answer_generation_stop_reason, answer_generation_calls
+        def record_stop(result):
+            nonlocal stop_reason
+            match result:
+                case CanContinue():
+                    pass
+                case CancelledByUser():
+                    stop_reason = "cancelled_by_user"
+                case DeadlineExceeded():
+                    stop_reason = "deadline_exceeded"
+                case AttemptSuperseded():
+                    stop_reason = "attempt_superseded"
+                case RunNotFound():
+                    stop_reason = "run_not_found"
+            return result
+
+        async def observe_stage_entry(gate, stage):
+            return record_stop(await original_stage_entry(gate, stage))
+
+        async def observe_answer_start(gate):
+            nonlocal answer_generation_calls
             answer_generation_calls += 1
-            try:
-                return await original_answer_start(repository, **kwargs)
-            except AnswerGenerationStopped as stopped:
-                match stopped.stopped:
-                    case CancelledByUser():
-                        answer_generation_stop_reason = "cancelled_by_user"
-                    case DeadlineExceeded():
-                        answer_generation_stop_reason = "deadline_exceeded"
-                    case AttemptSuperseded():
-                        answer_generation_stop_reason = "attempt_superseded"
-                    case RunNotFound():
-                        answer_generation_stop_reason = "run_not_found"
-                raise
+            return record_stop(await original_answer_start(gate))
 
         class DeliveryObserver(TaskiqMiddleware):
             async def post_execute(self, message, result):
@@ -170,7 +178,7 @@ async def main():
                         "worker_pid": os.getpid(),
                         "is_err": result.is_err,
                         "completion_returned": completion_returned,
-                        "answer_generation_stop_reason": answer_generation_stop_reason,
+                        "stop_reason": stop_reason,
                         "answer_generation_calls": answer_generation_calls,
                         "stream_message_id": stream_message_id,
                         "consumer_name": broker_agent.consumer_name,
@@ -258,14 +266,17 @@ async def main():
                 patch.object(broker_agent, "listen", receive_deliveries)
             )
             patches.enter_context(
-                patch.object(AgentRunStateRepository, "complete", observe_completion)
+                patch.object(AgentRunStateService, "complete", observe_completion)
             )
             patches.enter_context(
                 patch.object(
-                    AgentAnswerGenerationRepository,
-                    "start_answer_generation",
+                    AgentRunAnswerGenerationGate,
+                    "start",
                     observe_answer_start,
                 )
+            )
+            patches.enter_context(
+                patch.object(AgentRunStageGate, "enter", observe_stage_entry)
             )
             broker_agent.is_worker_process = True
             broker_agent.add_middlewares(DeliveryObserver())

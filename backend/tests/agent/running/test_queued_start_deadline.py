@@ -1,4 +1,7 @@
-"""queued Run の受理期限による開始の禁止と利用枠の返却を実DBで確かめる。"""
+"""queued Run の受理期限による開始の禁止と利用枠の返却。
+
+実DBで AgentRunStateService の操作から確かめ、返却の観測は記録に差し替える。
+"""
 
 from __future__ import annotations
 
@@ -12,7 +15,7 @@ from typing import Any, cast
 import pytest
 from logfire.testing import CaptureLogfire
 from sqlalchemy import event as sa_event
-from sqlalchemy import select, text
+from sqlalchemy import select
 from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
@@ -28,12 +31,17 @@ from app.agent.running.state import (
     CannotContinue,
     DeadlineExceeded,
 )
-from app.agent.running.state_repository import AgentRunStateRepository
 from app.models.agent_message import AgentMessage
 from app.models.agent_run import AgentRun
 from app.models.agent_thread import AgentThread
 from app.models.agent_user_daily_quota import AgentUserDailyQuota
 from tests.agent._sensitive_db_failure import assert_no_sensitive_marker
+from tests.agent.running._state_service import (
+    CommitGate,
+    record_closed_runs,
+    state_service,
+    wait_until_lock_waiting,
+)
 from tests.conftest import TEST_USER_ID
 from tests.logfire._metric_helpers import collected_metrics
 
@@ -173,30 +181,11 @@ def _quota_release_metric_points(capfire: CaptureLogfire) -> list[dict[str, Any]
     return list(metric["data"]["data_points"])
 
 
-async def _wait_until_blocked(observer: AsyncSession, backend_pid: int) -> None:
-    async with asyncio.timeout(5):
-        while True:
-            await observer.execute(text("SELECT pg_stat_clear_snapshot()"))
-            is_waiting_for_lock = await observer.scalar(
-                text(
-                    """
-                    SELECT wait_event_type = 'Lock'
-                           AND cardinality(pg_blocking_pids(pid)) > 0
-                    FROM pg_stat_activity
-                    WHERE pid = :pid
-                    """
-                ),
-                {"pid": backend_pid},
-            )
-            if is_waiting_for_lock:
-                return
-            await asyncio.sleep(0.01)
-
-
 @pytest.mark.integration
 @pytest.mark.asyncio
 async def test_expired_queued_run_terminalizes_and_releases_original_quota_atomically(
     session_factory: async_sessionmaker[AsyncSession],
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """期限を過ぎたqueuedのRunの開始は、期限切れで終えると同時に予約した利用枠を返す。"""
     deadline_seconds = _run_deadline_seconds()
@@ -208,16 +197,13 @@ async def test_expired_queued_run_terminalizes_and_releases_original_quota_atomi
             microseconds=1,
         ),
     )
+    notices = record_closed_runs(monkeypatch)
 
-    async with session_factory() as session:
-        async with session.begin():
-            repository = AgentRunStateRepository(session)
-            result = await repository.start_attempt(
-                seeded.run_id,
-                now=_DB_NOW,
-            )
+    result = await state_service(
+        session_factory, notices=notices, now=_DB_NOW
+    ).start_attempt(seeded.run_id)
 
-    assert (result, repository.closed_runs) == (
+    assert (result, notices.closed_runs) == (
         DeadlineExceeded(),
         [
             ClosedQueuedRun(
@@ -239,6 +225,7 @@ async def test_expired_queued_run_terminalizes_and_releases_original_quota_atomi
 @pytest.mark.asyncio
 async def test_queued_start_deadline_starts_just_before_and_expires_at_boundary(
     session_factory: async_sessionmaker[AsyncSession],
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """期限の直前は開始し、期限ちょうどは期限切れで終える。"""
     deadline_seconds = _run_deadline_seconds()
@@ -253,21 +240,14 @@ async def test_queued_start_deadline_starts_just_before_and_expires_at_boundary(
         created_at=_DB_NOW - timedelta(seconds=deadline_seconds),
         quota_usage_date=date(2026, 7, 21),
     )
+    notices = record_closed_runs(monkeypatch)
+    service = state_service(session_factory, notices=notices, now=_DB_NOW)
 
-    async with session_factory() as session:
-        async with session.begin():
-            before_result = await AgentRunStateRepository(session).start_attempt(
-                just_before.run_id,
-                now=_DB_NOW,
-            )
-            exact_repository = AgentRunStateRepository(session)
-            exact_result = await exact_repository.start_attempt(
-                exact.run_id,
-                now=_DB_NOW,
-            )
+    before_result = await service.start_attempt(just_before.run_id)
+    exact_result = await service.start_attempt(exact.run_id)
 
     assert before_result == AttemptStarted(attempt_epoch=1)
-    assert (exact_result, exact_repository.closed_runs) == (
+    assert (exact_result, notices.closed_runs) == (
         DeadlineExceeded(),
         [
             ClosedQueuedRun(
@@ -288,6 +268,7 @@ async def test_queued_start_deadline_starts_just_before_and_expires_at_boundary(
 @pytest.mark.asyncio
 async def test_expired_legacy_queued_run_terminalizes_without_quota_release(
     session_factory: async_sessionmaker[AsyncSession],
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """利用枠を予約していない旧来のqueuedのRunは、期限切れで終えても利用枠を返さない。"""
     seeded = await _seed_queued_run(
@@ -296,16 +277,13 @@ async def test_expired_legacy_queued_run_terminalizes_without_quota_release(
         quota_usage_date=None,
         counter_count=None,
     )
+    notices = record_closed_runs(monkeypatch)
 
-    async with session_factory() as session:
-        async with session.begin():
-            repository = AgentRunStateRepository(session)
-            result = await repository.start_attempt(
-                seeded.run_id,
-                now=_DB_NOW,
-            )
+    result = await state_service(
+        session_factory, notices=notices, now=_DB_NOW
+    ).start_attempt(seeded.run_id)
 
-    assert (result, repository.closed_runs) == (
+    assert (result, notices.closed_runs) == (
         DeadlineExceeded(),
         [
             ClosedQueuedRun(
@@ -323,6 +301,7 @@ async def test_expired_legacy_queued_run_terminalizes_without_quota_release(
 @pytest.mark.parametrize("counter_count", [None, 0])
 async def test_expired_queued_run_with_missing_or_empty_counter_is_inconsistent(
     session_factory: async_sessionmaker[AsyncSession],
+    monkeypatch: pytest.MonkeyPatch,
     counter_count: int | None,
 ) -> None:
     """返す先の利用枠が無いか0なら、期限切れで終えて返却の不整合を返す。"""
@@ -331,16 +310,13 @@ async def test_expired_queued_run_with_missing_or_empty_counter_is_inconsistent(
         created_at=_DB_NOW - timedelta(seconds=RUN_DEADLINE_SECONDS + 1),
         counter_count=counter_count,
     )
+    notices = record_closed_runs(monkeypatch)
 
-    async with session_factory() as session:
-        async with session.begin():
-            repository = AgentRunStateRepository(session)
-            result = await repository.start_attempt(
-                seeded.run_id,
-                now=_DB_NOW,
-            )
+    result = await state_service(
+        session_factory, notices=notices, now=_DB_NOW
+    ).start_attempt(seeded.run_id)
 
-    assert (result, repository.closed_runs) == (
+    assert (result, notices.closed_runs) == (
         DeadlineExceeded(),
         [
             ClosedQueuedRun(
@@ -382,13 +358,16 @@ async def test_quota_query_failure_rolls_back_queued_expiry_without_a_committed_
         "before_cursor_execute",
         fail_quota_update,
     )
+
+    def failing_session_factory() -> AsyncSession:
+        return session
+
     try:
         with pytest.raises(RuntimeError, match="queued expiry quota query failed"):
-            async with session.begin():
-                await AgentRunStateRepository(session).start_attempt(
-                    seeded.run_id,
-                    now=_DB_NOW,
-                )
+            await state_service(
+                cast(async_sessionmaker[AsyncSession], failing_session_factory),
+                now=_DB_NOW,
+            ).start_attempt(seeded.run_id)
     finally:
         sa_event.remove(
             session.sync_session.bind,
@@ -406,6 +385,7 @@ async def test_quota_query_failure_rolls_back_queued_expiry_without_a_committed_
 @pytest.mark.asyncio
 async def test_cancel_winner_refunds_once_and_expired_start_reports_idempotent_skip(
     session_factory: async_sessionmaker[AsyncSession],
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """キャンセルが先に利用枠を返したRunを、期限後に届いた開始は停止済みと見て開始せず、二重に返さない。"""
     seeded = await _seed_queued_run(
@@ -414,47 +394,43 @@ async def test_cancel_winner_refunds_once_and_expired_start_reports_idempotent_s
     )
     # キャンセルも回収期限を見るため、期限より前に届いたキャンセルとして記録する。
     cancelled_at = _DB_NOW - timedelta(seconds=2)
+    notices = record_closed_runs(monkeypatch)
+    cancel_gate = CommitGate(session_factory)
 
-    async with (
-        session_factory() as cancel_session,
-        session_factory() as start_session,
-        session_factory() as observer,
-    ):
+    async with session_factory() as observer:
+        cancel_task: asyncio.Task[object] | None = None
         start_task: asyncio.Task[AttemptStarted | CannotContinue] | None = None
         try:
-            await cancel_session.begin()
-            cancel_repository = AgentRunStateRepository(cancel_session)
-            cancelled = await cancel_repository.cancel_for_user(
-                seeded.run_id,
-                user_id=seeded.user_id,
-                now=cancelled_at,
+            cancel_task = asyncio.create_task(
+                state_service(
+                    cancel_gate,  # type: ignore[arg-type]
+                    notices=notices,
+                    now=cancelled_at,
+                ).cancel_for_user(seeded.run_id, user_id=seeded.user_id)
             )
+            await asyncio.wait_for(cancel_gate.reached.wait(), timeout=5)
 
-            await start_session.begin()
-            start_pid = await start_session.scalar(text("SELECT pg_backend_pid()"))
-            assert isinstance(start_pid, int)
-            start_repository = AgentRunStateRepository(start_session)
             start_task = asyncio.create_task(
-                start_repository.start_attempt(
-                    seeded.run_id,
-                    now=_DB_NOW,
-                )
+                state_service(
+                    session_factory, notices=notices, now=_DB_NOW
+                ).start_attempt(seeded.run_id)
             )
-            await _wait_until_blocked(observer, start_pid)
+            await wait_until_lock_waiting(observer)
 
-            await cancel_session.commit()
+            cancel_gate.open()
+            cancelled = await asyncio.wait_for(cancel_task, timeout=5)
             result = await asyncio.wait_for(start_task, timeout=5)
-            await start_session.commit()
         finally:
-            if start_task is not None:
-                if not start_task.done():
-                    start_task.cancel()
-                await asyncio.gather(start_task, return_exceptions=True)
-            for session in (cancel_session, start_session, observer):
-                if session.in_transaction():
-                    await session.rollback()
+            cancel_gate.open()
+            for task in (cancel_task, start_task):
+                if task is not None:
+                    if not task.done():
+                        task.cancel()
+                    await asyncio.gather(task, return_exceptions=True)
+            if observer.in_transaction():
+                await observer.rollback()
 
-    assert (cancelled, cancel_repository.closed_runs) == (
+    assert (cancelled, notices.closed_runs) == (
         CancelledByUser(),
         [
             ClosedQueuedRun(
@@ -463,7 +439,7 @@ async def test_cancel_winner_refunds_once_and_expired_start_reports_idempotent_s
             )
         ],
     )
-    assert (result, start_repository.closed_runs) == (CancelledByUser(), [])
+    assert result == CancelledByUser()
     run = await _read_run(session_factory, seeded.run_id)
     assert (run.status, run.error_code) == ("failed", "cancelled")
     assert await _read_counter(session_factory, usage_date=_USAGE_DATE) == 0
@@ -480,16 +456,12 @@ async def test_timely_start_and_running_redelivery_never_release_quota(
         created_at=_DB_NOW - timedelta(seconds=RUN_DEADLINE_SECONDS - 2),
     )
 
-    async with session_factory() as session:
-        async with session.begin():
-            started = await AgentRunStateRepository(session).start_attempt(
-                seeded.run_id,
-                now=_DB_NOW,
-            )
-            redelivered = await AgentRunStateRepository(session).start_attempt(
-                seeded.run_id,
-                now=_DB_NOW + timedelta(seconds=1),
-            )
+    started = await state_service(session_factory, now=_DB_NOW).start_attempt(
+        seeded.run_id
+    )
+    redelivered = await state_service(
+        session_factory, now=_DB_NOW + timedelta(seconds=1)
+    ).start_attempt(seeded.run_id)
 
     assert started == AttemptStarted(attempt_epoch=1)
     assert redelivered == AttemptStarted(attempt_epoch=2)
@@ -531,8 +503,13 @@ async def test_expired_queued_task_skips_live_provider_and_emits_post_commit_tel
     )
     monkeypatch.setattr(
         run_execution,
-        "AgentRunExecutionProbe",
-        forbidden("execution probe"),
+        "AgentRunStageGate",
+        forbidden("stage gate"),
+    )
+    monkeypatch.setattr(
+        run_execution,
+        "AgentRunAnswerGenerationGate",
+        forbidden("answer generation gate"),
     )
     monkeypatch.setattr(
         run_execution,

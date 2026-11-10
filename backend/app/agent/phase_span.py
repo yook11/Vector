@@ -12,12 +12,11 @@ from opentelemetry.trace import StatusCode
 
 from app.agent.error_type import span_error_type
 from app.agent.output import AgentOutputInvalidError
-from app.agent.running.stop import AnswerGenerationStopped
 from app.ai_providers.errors import AIProviderError
 
 __all__ = ["AgentPhase", "agent_phase"]
 
-# 進捗stage語彙(AnswerProgressStage)を含み、ユーザーへ見せない工程も持つ。
+# 進捗stage語彙(AnsweringStage)を含み、ユーザーへ見せない工程も持つ。
 AgentPhase = Literal[
     "safety_check",
     "context_resolution",
@@ -30,8 +29,6 @@ AgentPhase = Literal[
 
 _PHASE_SPAN_NAME = "agent_phase"
 
-# 工程が自分で扱える終了。span を error にせず、同じ例外を span 終了後に再送出する。
-_PHASE_STOPS = (AnswerGenerationStopped,)
 _CLASSIFIED_FAILURES = (AIProviderError, AgentOutputInvalidError)
 
 
@@ -56,8 +53,6 @@ def agent_phase(
         # 未分類例外は貫通させ、logfire の自動例外記録に status と event を任せる。
         try:
             yield
-        except _PHASE_STOPS as stop:
-            deferred = stop
         except Exception as failure:
             # 工程errorは各パッケージ経由だと循環 importになる。
             from app.agent.answering.direct_answer.failure import DirectAnswerError

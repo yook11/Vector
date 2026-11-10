@@ -25,13 +25,13 @@ from app.ai_providers.errors import (
     AIProviderResultError,
     AIProviderResultReason,
 )
+from tests.agent.answering._fakes import ScriptedAnswerGenerationGate
 from tests.agent.answering.direct_answer.test_service import _input as direct_input
 from tests.agent.answering.evidence_answer.test_service import (
     RecordingDeltaReporter,
     _evidence,
     _request,
 )
-from tests.agent.answering_runner._harness import AllowAnswerGenerationStart
 from tests.agent.evidence_review.test_service import (
     _ANY_REVIEWER_DRAFT,
     AS_OF,
@@ -151,10 +151,9 @@ def _stage(stage: str, mode: str = "blocked") -> SimpleNamespace:
     elif stage == "direct":
         state.recorder = RecordingDirectAnswerRecorder()
         service = DirectAnswerService(
-            schedule_deadline_check=lambda *_: None,
             agent=DIRECT_ANSWER_AGENT,
             llm_text_streamer_scope_factory=scope,
-            repository=AllowAnswerGenerationStart(),
+            gate=ScriptedAnswerGenerationGate(),
             recorder=state.recorder,
             delta_reporter=state.delta,
         )
@@ -162,10 +161,9 @@ def _stage(stage: str, mode: str = "blocked") -> SimpleNamespace:
     else:
         state.recorder = RecordingEvidenceAnswerRecorder()
         service = EvidenceAnswerService(
-            schedule_deadline_check=lambda *_: None,
             agent=EVIDENCE_ANSWER_AGENT,
             llm_text_streamer_scope_factory=scope,
-            repository=AllowAnswerGenerationStart(),
+            gate=ScriptedAnswerGenerationGate(),
             recorder=state.recorder,
             delta_reporter=state.delta,
         )

@@ -27,10 +27,14 @@ from app.agent.planning.contract import TargetTimeWindow
 from app.agent.recording.evidence_answer import (
     EvidenceAnswerFailed,
     EvidenceAnswerRecordingOutcome,
+    EvidenceAnswerStopped,
     EvidenceAnswerSucceeded,
 )
-from app.agent.running.state import AttemptSuperseded, DeadlineExceeded
-from app.agent.running.stop import AnswerGenerationStopped
+from app.agent.running.state import (
+    AttemptSuperseded,
+    CannotContinue,
+    DeadlineExceeded,
+)
 from app.agent.threads.contracts import ThreadMessageSnapshot
 from app.ai_providers.errors import (
     AIProviderResultError,
@@ -43,10 +47,7 @@ from app.http.failure import (
     HttpTransportFailureReason,
     HttpTransportStage,
 )
-from tests.agent.answering_runner._harness import (
-    AllowAnswerGenerationStart,
-    ScriptedAnswerGenerationRepository,
-)
+from tests.agent.answering._fakes import ScriptedAnswerGenerationGate
 from tests.agent.recording._fakes import RecordingEvidenceAnswerRecorder
 from tests.logfire._metric_helpers import (
     collected_metrics,
@@ -247,28 +248,21 @@ async def _answer(
     generator: FakeGenerator,
     *,
     evidence: list[AnswerInputEvidence] | None = None,
-    answer_start: object | None = None,
+    gate: ScriptedAnswerGenerationGate | None = None,
     delta_reporter: RecordingDeltaReporter | None = None,
-    progress: object | None = None,
     request: AnsweringRequest | None = None,
     recorder: RecordingEvidenceAnswerRecorder | None = None,
-) -> EvidenceAnswerDraft:
+) -> EvidenceAnswerDraft | CannotContinue:
     service_kwargs: dict[str, Any] = {
         "agent": EVIDENCE_ANSWER_AGENT,
         "llm_text_streamer_scope_factory": generator.activate,
-        "repository": (
-            AllowAnswerGenerationStart() if answer_start is None else answer_start
-        ),
+        "gate": ScriptedAnswerGenerationGate() if gate is None else gate,
     }
     if delta_reporter is not None:
         service_kwargs["delta_reporter"] = delta_reporter
-    if progress is not None:
-        service_kwargs["progress"] = progress
     if recorder is not None:
         service_kwargs["recorder"] = recorder
-    return await EvidenceAnswerService(
-        schedule_deadline_check=lambda *_: None, **service_kwargs
-    ).answer(
+    return await EvidenceAnswerService(**service_kwargs).answer(
         EvidenceAnswerInput(
             request=_request() if request is None else request,
             evidence=tuple([_evidence()] if evidence is None else evidence),
@@ -342,9 +336,9 @@ async def test_fragments_flow_unchanged_and_concatenate_into_the_answer() -> Non
     """
     generator = FakeGenerator([["根拠から", "確認できます。", "[[1]]"]])
     reporter = RecordingDeltaReporter()
-    repository = AllowAnswerGenerationStart()
+    gate = ScriptedAnswerGenerationGate()
 
-    draft = await _answer(generator, delta_reporter=reporter, answer_start=repository)
+    draft = await _answer(generator, delta_reporter=reporter, gate=gate)
 
     assert draft == _expected_draft(
         answer="根拠から確認できます。[[1]]",
@@ -355,8 +349,8 @@ async def test_fragments_flow_unchanged_and_concatenate_into_the_answer() -> Non
     assert reporter.finished == [1]
     assert reporter.aborted == []
 
-    assert repository.start_calls == 1
-    assert repository.authorize_calls == 0
+    assert gate.start_calls == 1
+    assert gate.regenerate_calls == 0
 
 
 @pytest.mark.asyncio
@@ -367,8 +361,7 @@ async def test_json_shaped_body_is_treated_as_literal_answer_text() -> None:
 
     draft = await _answer(generator)
 
-    assert draft.answer == json_like_answer
-    assert draft.cited_refs == ["1"]
+    assert draft == _expected_draft(answer=json_like_answer, cited_refs=["1"])
 
 
 @pytest.mark.asyncio
@@ -382,7 +375,10 @@ async def test_derives_cited_refs_from_answer_markers_in_first_use_order() -> No
 
     draft = await _answer(generator, evidence=[_evidence("1"), _evidence("2")])
 
-    assert draft.cited_refs == ["2", "1"]
+    assert draft == _expected_draft(
+        answer="根拠 2 と根拠 1 を確認できます。[[2]][[1]] 再度 [[2]]。",
+        cited_refs=["2", "1"],
+    )
 
 
 @pytest.mark.asyncio
@@ -600,10 +596,9 @@ async def test_streamer_scope_activation_failure_is_not_attempt_fallback(
         yield object()
 
     service = EvidenceAnswerService(
-        schedule_deadline_check=lambda *_: None,
         agent=EVIDENCE_ANSWER_AGENT,
         llm_text_streamer_scope_factory=failing_scope,
-        repository=AllowAnswerGenerationStart(),
+        gate=ScriptedAnswerGenerationGate(),
         delta_reporter=reporter,
     )
 
@@ -668,10 +663,9 @@ async def test_streamer_scope_exit_failure_discards_selected_outcome(
             raise close_error
 
     service = EvidenceAnswerService(
-        schedule_deadline_check=lambda *_: None,
         agent=EVIDENCE_ANSWER_AGENT,
         llm_text_streamer_scope_factory=broken_scope,
-        repository=AllowAnswerGenerationStart(),
+        gate=ScriptedAnswerGenerationGate(),
     )
 
     with pytest.raises(RuntimeError) as exc_info:
@@ -899,9 +893,7 @@ async def test_provider_error_closes_stream_without_retry(
         await _answer(
             generator,
             delta_reporter=reporter,
-            answer_start=ScriptedAnswerGenerationRepository(
-                authorizes=[AnswerGenerationStopped(AttemptSuperseded())]
-            ),
+            gate=ScriptedAnswerGenerationGate(regenerations=(AttemptSuperseded(),)),
         )
 
     assert generator.streams[0].closed is True
@@ -1065,22 +1057,20 @@ async def test_retry_exhaustion_records_second_attempt_failure() -> None:
 
 
 @pytest.mark.asyncio
-async def test_generation_stop_records_stopped_without_outcome() -> None:
-    """AnswerGenerationStopped は stopped とし、既存結論を渡さない。"""
+async def test_regeneration_stop_returns_reason_and_records_stopped_outcome() -> None:
+    """書き直す前にRunが止まると、止まった理由を返し、記録係へ止まった結論を渡す。"""
 
     recorder = RecordingEvidenceAnswerRecorder()
     generator = FakeGenerator([" "])
 
-    with pytest.raises(AnswerGenerationStopped) as exc_info:
-        await _answer(
-            generator,
-            answer_start=ScriptedAnswerGenerationRepository(
-                authorizes=[AnswerGenerationStopped(AttemptSuperseded())]
-            ),
-            recorder=recorder,
-        )
+    result = await _answer(
+        generator,
+        gate=ScriptedAnswerGenerationGate(regenerations=(AttemptSuperseded(),)),
+        recorder=recorder,
+    )
 
-    _assert_recorded(recorder, outcome=None, error=exc_info.value)
+    assert result == AttemptSuperseded()
+    _assert_recorded(recorder, outcome=EvidenceAnswerStopped())
 
 
 @pytest.mark.asyncio
@@ -1104,9 +1094,7 @@ async def test_provider_error_records_failure_without_fallback() -> None:
     with pytest.raises(EvidenceAnswerError) as exc_info:
         await _answer(
             generator,
-            answer_start=ScriptedAnswerGenerationRepository(
-                authorizes=[AnswerGenerationStopped(AttemptSuperseded())]
-            ),
+            gate=ScriptedAnswerGenerationGate(regenerations=(AttemptSuperseded(),)),
             recorder=recorder,
         )
 
@@ -1143,19 +1131,9 @@ async def test_unclassified_failure_and_stops_record_without_outcome(
     _assert_recorded(recorder, outcome=None, error=error)
 
 
-class _RecordingProgress:
-    def __init__(self, timeline: list[str] | None = None) -> None:
-        self.stages: list[str] = []
-        self._timeline = timeline
-
-    async def stage_changed(self, stage: str) -> None:
-        self.stages.append(stage)
-        if self._timeline is not None:
-            self._timeline.append(f"progress:{stage}")
-
-
 @pytest.mark.asyncio
-async def test_start_continue_reports_answering_before_generation() -> None:
+async def test_generation_starts_only_after_the_gate_allows_the_start() -> None:
+    """回答の生成の口が開始を許してから、最初の生成を始める。"""
     timeline: list[str] = []
     generator = FakeGenerator(["根拠から確認できます。[[1]]"])
     original_stream = generator.stream_text
@@ -1165,66 +1143,71 @@ async def test_start_continue_reports_answering_before_generation() -> None:
         return original_stream(*args, **kwargs)
 
     generator.stream_text = tracked_stream  # type: ignore[method-assign]
-    start = ScriptedAnswerGenerationRepository(timeline=timeline)
-    progress = _RecordingProgress(timeline)
 
     draft = await _answer(
         generator,
-        answer_start=start,
-        progress=progress,
+        gate=ScriptedAnswerGenerationGate(timeline=timeline),
     )
 
-    assert draft.answer == "根拠から確認できます。[[1]]"
-    assert timeline == ["answer_start", "progress:answering", "generate"]
+    assert draft == _expected_draft(
+        answer="根拠から確認できます。[[1]]", cited_refs=["1"]
+    )
+    assert timeline == ["answer_start", "generate"]
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "outcome",
-    [
-        AnswerGenerationStopped(DeadlineExceeded()),
-        AnswerGenerationStopped(AttemptSuperseded()),
-        RuntimeError("answer start transaction failed"),
-    ],
-)
-async def test_start_rejection_does_not_generate_or_report_answering(
-    outcome: BaseException,
+@pytest.mark.parametrize("stopped", [DeadlineExceeded(), AttemptSuperseded()])
+async def test_start_stop_returns_reason_without_generating_or_recording(
+    stopped: CannotContinue,
 ) -> None:
+    """開始の前にRunが止まると、止まった理由を返し、生成も記録係も開かない。"""
     generator = FakeGenerator(["呼ばれない"])
-    start = ScriptedAnswerGenerationRepository(start=outcome)
-    progress = _RecordingProgress()
+    gate = ScriptedAnswerGenerationGate(start=stopped)
     recorder = RecordingEvidenceAnswerRecorder()
 
-    with pytest.raises(type(outcome)) as raised:
-        await _answer(
-            generator,
-            answer_start=start,
-            progress=progress,
-            recorder=recorder,
-        )
+    result = await _answer(generator, gate=gate, recorder=recorder)
 
-    assert raised.value is outcome
-    assert start.calls == 1
-    assert generator.scope_enters == 0
-    assert generator.calls == []
-    assert progress.stages == []
-    assert recorder.records == []
+    assert (
+        result,
+        gate.start_calls,
+        generator.scope_enters,
+        generator.calls,
+        recorder.records,
+    ) == (stopped, 1, 0, [], [])
+
+
+@pytest.mark.asyncio
+async def test_start_failure_propagates_without_generating_or_recording() -> None:
+    """開始の問い合わせが失敗すると、同じ例外を送出し、生成も記録係も開かない。"""
+    failure = RuntimeError("answer start transaction failed")
+    generator = FakeGenerator(["呼ばれない"])
+    gate = ScriptedAnswerGenerationGate(start=failure)
+    recorder = RecordingEvidenceAnswerRecorder()
+
+    with pytest.raises(RuntimeError) as raised:
+        await _answer(generator, gate=gate, recorder=recorder)
+
+    assert raised.value is failure
+    assert (
+        gate.start_calls,
+        generator.scope_enters,
+        generator.calls,
+        recorder.records,
+    ) == (1, 0, [], [])
 
 
 @pytest.mark.asyncio
 async def test_regeneration_stop_does_not_start_second_generation() -> None:
+    """書き直す前にRunが止まると、止まった理由を返し、下書きを消さず2回目の生成を始めない。"""
     generator = FakeGenerator(["引用がありません。", "呼ばれない[[1]]"])
-    repository = ScriptedAnswerGenerationRepository(
-        authorizes=[AnswerGenerationStopped(DeadlineExceeded())]
-    )
+    gate = ScriptedAnswerGenerationGate(regenerations=(DeadlineExceeded(),))
     reporter = RecordingDeltaReporter()
 
-    with pytest.raises(AnswerGenerationStopped) as raised:
-        await _answer(generator, answer_start=repository, delta_reporter=reporter)
+    result = await _answer(generator, gate=gate, delta_reporter=reporter)
 
-    assert raised.value.stopped == DeadlineExceeded()
+    assert result == DeadlineExceeded()
     assert [call["attempt_number"] for call in generator.calls] == [1]
-    assert repository.authorize_calls == 1
+    assert gate.regenerate_calls == 1
     assert reporter.reset_generations == []
 
 
@@ -1245,6 +1228,8 @@ async def test_regeneration_keeps_single_answer_timeout(
 
     draft = await _answer(generator)
 
-    assert draft.answer == "修正後は引用します。[[1]]"
+    assert draft == _expected_draft(
+        answer="修正後は引用します。[[1]]", cited_refs=["1"]
+    )
     assert created == 1
     assert [call["attempt_number"] for call in generator.calls] == [1, 2]

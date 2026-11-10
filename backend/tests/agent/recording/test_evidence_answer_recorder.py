@@ -8,15 +8,15 @@ from types import TracebackType
 
 import pytest
 from logfire.testing import CaptureLogfire
+from opentelemetry.trace import StatusCode
 
 from app.agent.recording.evidence_answer import (
     EvidenceAnswerFailed,
     EvidenceAnswerRecordingOutcome,
+    EvidenceAnswerStopped,
     EvidenceAnswerSucceeded,
     LogfireEvidenceAnswerRecorder,
 )
-from app.agent.running.state import AttemptSuperseded
-from app.agent.running.stop import AnswerGenerationStopped
 from tests.logfire._metric_helpers import attributes_of, collected_metrics
 
 _OUTCOME_METRIC = "vector.agent.evidence_answer.outcome"
@@ -73,10 +73,6 @@ async def test_classified_failure_emits_failed_duration_and_failed_outcome(
     [
         pytest.param(asyncio.CancelledError(), id="cancellation"),
         pytest.param(GeneratorExit(), id="generator-exit"),
-        pytest.param(
-            AnswerGenerationStopped(AttemptSuperseded()),
-            id="generation-stopped",
-        ),
     ],
 )
 async def test_stop_emits_stopped_duration_without_outcome(
@@ -96,12 +92,36 @@ async def test_stop_emits_stopped_duration_without_outcome(
     assert all(item["name"] != _OUTCOME_METRIC for item in metrics)
 
 
+async def test_stopped_outcome_emits_stopped_duration_without_error_span(
+    capfire: CaptureLogfire,
+) -> None:
+    """止まった結論を渡すと、停止のdurationだけを残し、工程spanを失敗にしない。"""
+    async with LogfireEvidenceAnswerRecorder().record(
+        agent_name="evidence_answer"
+    ) as recording:
+        recording.report_outcome(EvidenceAnswerStopped())
+
+    metrics = collected_metrics(capfire)
+    phase_statuses = [
+        span.status.status_code
+        for span in capfire.exporter.exported_spans
+        if span.name == "agent_phase"
+        and (span.attributes or {}).get("logfire.span_type") == "span"
+    ]
+    assert attributes_of(metrics, _DURATION_METRIC) == {
+        "status": "stopped",
+        "outcome": "none",
+    }
+    assert all(item["name"] != _OUTCOME_METRIC for item in metrics)
+    assert phase_statuses == [StatusCode.UNSET]
+
+
 async def test_stop_after_outcome_discards_outcome(
     capfire: CaptureLogfire,
 ) -> None:
-    error = AnswerGenerationStopped(AttemptSuperseded())
+    error = asyncio.CancelledError()
 
-    with pytest.raises(AnswerGenerationStopped) as raised:
+    with pytest.raises(asyncio.CancelledError) as raised:
         async with LogfireEvidenceAnswerRecorder().record(
             agent_name="evidence_answer"
         ) as recording:

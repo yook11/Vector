@@ -1,10 +1,8 @@
-"""``agent_phase()`` ヘルパーのspan生成契約と終了分類4値のunit test。
+"""``agent_phase()`` ヘルパーのspan生成契約と終了分類のunit test。
 
-正本仕様: ``specs/agent-phase-span-vocabulary-slice.md`` の Invariants
-「spanの生成は``agent_phase()``に集約する」「終了分類はヘルパーが持ち、
-``agent_provider_call``と同型にする」と Test contract「span の生成」
-「終了分類」。工程spanの終了分類の正本テストであり、各工程での``phase``値と
-span新設は各サービスのtracing testが持つ。
+spanの生成は``agent_phase()``に集約し、終了分類はヘルパーが
+``agent_provider_call``と同型で持つ。工程spanの終了分類の正本テストであり、
+各工程での``phase``値とspan新設は各サービスのtracing testが持つ。
 """
 
 from __future__ import annotations
@@ -26,8 +24,6 @@ from app.agent.answering.evidence_answer.failure import EvidenceAnswerError
 from app.agent.output import AgentOutputDefect, AgentOutputInvalidError
 from app.agent.phase_span import agent_phase
 from app.agent.planning.failure import PlanningError
-from app.agent.running.state import AttemptSuperseded
-from app.agent.running.stop import AnswerGenerationStopped
 from app.ai_providers.errors import (
     AIProviderTransportError,
 )
@@ -126,7 +122,7 @@ def test_negative_task_index_raises_value_error_without_creating_span(
     assert spans_named(capfire, _PHASE_SPAN_NAME) == []
 
 
-# --- 終了分類 (4値) -----------------------------------------------------
+# --- 終了分類 -----------------------------------------------------------
 
 
 def test_normal_exit_keeps_span_status_unset_without_error_type(
@@ -140,23 +136,6 @@ def test_normal_exit_keeps_span_status_unset_without_error_type(
     assert raw.status.status_code is StatusCode.UNSET
     assert ERROR_TYPE not in span["attributes"]
     assert exception_event(span) is None
-
-
-def test_stopped_exception_keeps_span_unset_and_reraises_same_instance(
-    capfire: CaptureLogfire,
-) -> None:
-    stopped = AnswerGenerationStopped(AttemptSuperseded())
-
-    with pytest.raises(AnswerGenerationStopped) as raised:
-        with agent_phase(phase="answering", agent_name="evidence_answer"):
-            raise stopped
-
-    assert raised.value is stopped
-    span = one_span_named(capfire, _PHASE_SPAN_NAME)
-    raw = _one_raw_phase_span(capfire)
-    assert raw.status.status_code is StatusCode.UNSET
-    assert exception_event(span) is None
-    assert ERROR_TYPE not in span["attributes"]
 
 
 def test_cancellation_is_unclassified_and_passes_through(

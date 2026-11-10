@@ -1,4 +1,4 @@
-"""AgentRunStateRepository の開始・完了が期限で止まる契約を実DBで確かめる。"""
+"""AgentRunStateService の開始・完了が期限で止まる契約を実DBで確かめる。"""
 
 from __future__ import annotations
 
@@ -9,7 +9,7 @@ from datetime import UTC, date, datetime, timedelta
 from typing import Any
 
 import pytest
-from sqlalchemy import func, select, text
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.agent.contract import (
@@ -25,13 +25,17 @@ from app.agent.running.state import (
     RunCompleted,
     RunPhaseMismatchError,
 )
-from app.agent.running.state_repository import AgentRunStateRepository
 from app.agent.running.types import AgentRunStatus
 from app.models.agent_message import AgentMessage, AgentMessageSource
 from app.models.agent_run import AgentRun
 from app.models.agent_thread import AgentThread
 from app.models.agent_user_daily_quota import AgentUserDailyQuota
 from app.shared.web_url import WebUrl
+from tests.agent.running._state_service import (
+    record_closed_runs,
+    state_service,
+    wait_until_lock_waiting,
+)
 from tests.conftest import TEST_USER_ID
 
 pytestmark = pytest.mark.integration
@@ -188,26 +192,6 @@ async def _load_complete_persisted(
         )
 
 
-async def _wait_until_blocked(observer: AsyncSession, backend_pid: int) -> None:
-    async with asyncio.timeout(5):
-        while True:
-            await observer.execute(text("SELECT pg_stat_clear_snapshot()"))
-            blocked = await observer.scalar(
-                text(
-                    """
-                    SELECT wait_event_type = 'Lock'
-                           AND cardinality(pg_blocking_pids(pid)) > 0
-                    FROM pg_stat_activity
-                    WHERE pid = :pid
-                    """
-                ),
-                {"pid": backend_pid},
-            )
-            if blocked:
-                return
-            await asyncio.sleep(0.01)
-
-
 @pytest.mark.asyncio
 async def test_start_run_starts_only_before_fixed_deadline(
     session_factory: async_sessionmaker[AsyncSession],
@@ -219,16 +203,12 @@ async def test_start_run_starts_only_before_fixed_deadline(
     before = await _seed_run(session_factory, status="queued", attempt_epoch=0)
     at_deadline = await _seed_run(session_factory, status="queued", attempt_epoch=0)
 
-    async with session_factory() as session:
-        async with session.begin():
-            await AgentRunStateRepository(session).start_attempt(
-                before.run_id,
-                now=_BEFORE_DEADLINE,
-            )
-            await AgentRunStateRepository(session).start_attempt(
-                at_deadline.run_id,
-                now=_DEADLINE_AT,
-            )
+    await state_service(session_factory, now=_BEFORE_DEADLINE).start_attempt(
+        before.run_id
+    )
+    await state_service(session_factory, now=_DEADLINE_AT).start_attempt(
+        at_deadline.run_id
+    )
 
     assert (
         await _load_start_persisted(session_factory, before.run_id),
@@ -250,6 +230,7 @@ async def test_start_run_starts_only_before_fixed_deadline(
 @pytest.mark.asyncio
 async def test_complete_run_uses_answer_recovery_deadline(
     session_factory: async_sessionmaker[AsyncSession],
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """元の期限後も新期限前は保存し、新期限ちょうどでは回答を残さない。"""
     accepted_after_original_deadline = await _seed_run(
@@ -271,36 +252,39 @@ async def test_complete_run_uses_answer_recovery_deadline(
         answer_started_at=_ANSWER_STARTED_AT,
     )
 
-    async with session_factory() as session:
-        async with session.begin():
-            repository = AgentRunStateRepository(session)
-            accepted_after_original_outcome = await repository.complete(
-                accepted_after_original_deadline.run_id,
-                attempt_epoch=3,
-                result=_answer_result(),
-                research_handoff=_CANDIDATE_HANDOFF,
-                now=_CREATED_AT + timedelta(seconds=67),
-            )
-            accepted_before_recovery_outcome = await repository.complete(
-                accepted_before_recovery_deadline.run_id,
-                attempt_epoch=3,
-                result=_answer_result(),
-                research_handoff=_CANDIDATE_HANDOFF,
-                now=_RECOVERY_DEADLINE - timedelta(microseconds=1),
-            )
-            rejected_outcome = await repository.complete(
-                rejected.run_id,
-                attempt_epoch=3,
-                result=_answer_result(),
-                research_handoff=_CANDIDATE_HANDOFF,
-                now=_RECOVERY_DEADLINE,
-            )
+    notices = record_closed_runs(monkeypatch)
+    accepted_after_original_outcome = await state_service(
+        session_factory, notices=notices, now=_CREATED_AT + timedelta(seconds=67)
+    ).complete(
+        accepted_after_original_deadline.run_id,
+        attempt_epoch=3,
+        result=_answer_result(),
+        research_handoff=_CANDIDATE_HANDOFF,
+    )
+    accepted_before_recovery_outcome = await state_service(
+        session_factory,
+        notices=notices,
+        now=_RECOVERY_DEADLINE - timedelta(microseconds=1),
+    ).complete(
+        accepted_before_recovery_deadline.run_id,
+        attempt_epoch=3,
+        result=_answer_result(),
+        research_handoff=_CANDIDATE_HANDOFF,
+    )
+    rejected_outcome = await state_service(
+        session_factory, notices=notices, now=_RECOVERY_DEADLINE
+    ).complete(
+        rejected.run_id,
+        attempt_epoch=3,
+        result=_answer_result(),
+        research_handoff=_CANDIDATE_HANDOFF,
+    )
 
     assert (
         accepted_after_original_outcome,
         accepted_before_recovery_outcome,
         rejected_outcome,
-        repository.closed_runs,
+        notices.closed_runs,
     ) == (
         RunCompleted(),
         RunCompleted(),
@@ -387,16 +371,15 @@ async def test_complete_run_requires_answer_start_without_changing_run(
     """回答を開始していない現在の試行の完了は呼び出し順の誤りとして例外になり、Runと回答を変えない。"""
     seeded = await _seed_run(session_factory, status="running", attempt_epoch=3)
 
-    async with session_factory() as session:
-        with pytest.raises(RunPhaseMismatchError):
-            async with session.begin():
-                await AgentRunStateRepository(session).complete(
-                    seeded.run_id,
-                    attempt_epoch=3,
-                    result=_answer_result(),
-                    research_handoff=_CANDIDATE_HANDOFF,
-                    now=_CREATED_AT + timedelta(seconds=10),
-                )
+    service = state_service(session_factory, now=_CREATED_AT + timedelta(seconds=10))
+
+    with pytest.raises(RunPhaseMismatchError):
+        await service.complete(
+            seeded.run_id,
+            attempt_epoch=3,
+            result=_answer_result(),
+            research_handoff=_CANDIDATE_HANDOFF,
+        )
 
     assert await _load_complete_persisted(
         session_factory,
@@ -432,15 +415,14 @@ async def test_complete_run_does_not_change_persisted_result_for_old_epoch(
         thread_id=seeded.thread_id,
     )
 
-    async with session_factory() as session:
-        async with session.begin():
-            outcome = await AgentRunStateRepository(session).complete(
-                seeded.run_id,
-                attempt_epoch=3,
-                result=_answer_result(),
-                research_handoff=_CANDIDATE_HANDOFF,
-                now=_CREATED_AT + timedelta(seconds=67),
-            )
+    service = state_service(session_factory, now=_CREATED_AT + timedelta(seconds=67))
+
+    outcome = await service.complete(
+        seeded.run_id,
+        attempt_epoch=3,
+        result=_answer_result(),
+        research_handoff=_CANDIDATE_HANDOFF,
+    )
 
     assert outcome == AttemptSuperseded()
     assert (
@@ -456,6 +438,7 @@ async def test_complete_run_does_not_change_persisted_result_for_old_epoch(
 @pytest.mark.asyncio
 async def test_complete_run_uses_database_time_after_waiting_for_run_lock(
     session_factory: async_sessionmaker[AsyncSession],
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """行ロックを待つ間に回収期限を越えた完了は、ロック後のDB時刻で期限切れとして終える。"""
     async with session_factory() as clock_session:
@@ -470,9 +453,10 @@ async def test_complete_run_uses_database_time_after_waiting_for_run_lock(
         answer_started_at=answer_started_at,
     )
 
+    notices = record_closed_runs(monkeypatch)
+    service = state_service(session_factory, notices=notices)
     async with (
         session_factory() as blocker,
-        session_factory() as saver,
         session_factory() as observer,
     ):
         save_task: asyncio.Task[RunCompleted | CannotContinue] | None = None
@@ -482,19 +466,15 @@ async def test_complete_run_uses_database_time_after_waiting_for_run_lock(
                 select(AgentRun).where(AgentRun.id == seeded.run_id).with_for_update()
             )
 
-            await saver.begin()
-            saver_pid = await saver.scalar(text("SELECT pg_backend_pid()"))
-            assert isinstance(saver_pid, int)
-            saver_repository = AgentRunStateRepository(saver)
             save_task = asyncio.create_task(
-                saver_repository.complete(
+                service.complete(
                     seeded.run_id,
                     attempt_epoch=3,
                     result=_answer_result(),
                     research_handoff=_CANDIDATE_HANDOFF,
                 )
             )
-            await _wait_until_blocked(observer, saver_pid)
+            await wait_until_lock_waiting(observer)
 
             async with asyncio.timeout(2):
                 while True:
@@ -506,17 +486,16 @@ async def test_complete_run_uses_database_time_after_waiting_for_run_lock(
 
             await blocker.commit()
             outcome = await save_task
-            await saver.commit()
         finally:
             if save_task is not None:
                 if not save_task.done():
                     save_task.cancel()
                 await asyncio.gather(save_task, return_exceptions=True)
-            for session in (blocker, saver, observer):
+            for session in (blocker, observer):
                 if session.in_transaction():
                     await session.rollback()
 
-    assert (outcome, saver_repository.closed_runs) == (
+    assert (outcome, notices.closed_runs) == (
         DeadlineExceeded(),
         [
             ClosedRunningRun(

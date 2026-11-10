@@ -1,7 +1,7 @@
-"""回答開始・再生成許可を AgentRunStateRepository とその窓口から実DBで確かめる。
+"""回答開始・再生成許可を AgentRunStateService と回答生成の口から実DBで確かめる。
 
-前提: 時刻を固定する判定は repository を直接呼び、窓口(AgentAnswerGenerationRepository)
-は AgentRunStateService 経由でDB時刻のまま呼ぶ。
+前提: 時刻を固定する判定は service に時刻を渡して呼び、回答生成の口
+(AgentRunAnswerGenerationGate)はDB時刻のまま呼び、予約と通知は記録する偽物で受ける。
 """
 
 from __future__ import annotations
@@ -9,29 +9,36 @@ from __future__ import annotations
 import asyncio
 import uuid
 from datetime import UTC, datetime, timedelta
+from typing import Any
 
 import pytest
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from app.agent.answering.timing import answer_generation_recovery_window
+from app.agent.live_updates.reporters import AgentRunLiveStageReporter
 from app.agent.live_updates.stream import AgentRunLiveStreamEvent
-from app.agent.running.answer_generation import AgentAnswerGenerationRepository
+from app.agent.running.answer_generation import AgentRunAnswerGenerationGate
 from app.agent.running.finish_notice import ClosedRun, ClosedRunningRun
 from app.agent.running.state import (
     AnswerGenerationStarted,
     AttemptSuperseded,
+    CancelledByUser,
     CanContinue,
     CannotContinue,
     DeadlineExceeded,
     RunNotFound,
     RunPhaseMismatchError,
 )
-from app.agent.running.state_repository import AgentRunStateRepository
 from app.agent.running.state_service import AgentRunStateService
-from app.agent.running.stop import AnswerGenerationStopped
 from app.agent.running.types import AgentRunStatus
 from app.models.agent_run import AgentRun
 from tests.agent.running._seed import create_thread_message_run
+from tests.agent.running._state_service import (
+    ClosedRunNotices,
+    state_service,
+    wait_until_lock_waiting,
+)
 
 pytestmark = pytest.mark.integration
 
@@ -62,22 +69,38 @@ class _EpochPublisher:
         return None
 
 
-def _repository(
-    session_factory: async_sessionmaker[AsyncSession],
-    run_id: uuid.UUID,
-    *,
-    attempt_epoch: int = _ATTEMPT_EPOCH,
-    publisher: _RecordingPublisher | None = None,
-) -> AgentAnswerGenerationRepository:
-    recorder = publisher or _RecordingPublisher()
-    return AgentAnswerGenerationRepository(
-        AgentRunStateService(
-            session_factory=session_factory,
-            publisher_for=recorder.publisher_for,  # type: ignore[arg-type]
-        ),
-        run_id,
-        attempt_epoch,
-    )
+class _ObservedGate:
+    """回答生成の口と、その口が送った通知・予約の記録。"""
+
+    def __init__(
+        self,
+        session_factory: async_sessionmaker[AsyncSession],
+        run_id: uuid.UUID,
+        *,
+        attempt_epoch: int = _ATTEMPT_EPOCH,
+    ) -> None:
+        self.publisher = _RecordingPublisher()
+        self.reservations: list[tuple[uuid.UUID, datetime]] = []
+        self.gate = AgentRunAnswerGenerationGate(
+            AgentRunStateService(
+                session_factory=session_factory,
+                publisher_for=self.publisher.publisher_for,  # type: ignore[arg-type]
+            ),
+            run_id,
+            attempt_epoch,
+            schedule_deadline_check=lambda target_run_id, at: self.reservations.append(
+                (target_run_id, at)
+            ),
+            stage_reporter=AgentRunLiveStageReporter(
+                self.publisher.publisher_for(run_id, attempt_epoch)  # type: ignore[arg-type]
+            ),
+        )
+
+    def published(self) -> list[tuple[uuid.UUID, int, dict[str, Any]]]:
+        return [
+            (run_id, epoch, event.model_dump(mode="json", by_alias=True))
+            for run_id, epoch, event in self.publisher.events
+        ]
 
 
 async def _start_at(
@@ -87,13 +110,11 @@ async def _start_at(
     now: datetime,
     attempt_epoch: int = _ATTEMPT_EPOCH,
 ) -> tuple[AnswerGenerationStarted | CannotContinue, list[ClosedRun]]:
-    async with session_factory() as session:
-        async with session.begin():
-            repository = AgentRunStateRepository(session)
-            result = await repository.start_answer_generation(
-                run_id, attempt_epoch=attempt_epoch, now=now
-            )
-    return result, repository.closed_runs
+    notices = ClosedRunNotices()
+    result = await state_service(
+        session_factory, notices=notices, now=now
+    ).start_answer_generation(run_id, attempt_epoch=attempt_epoch)
+    return result, notices.closed_runs
 
 
 async def _authorize_at(
@@ -103,13 +124,11 @@ async def _authorize_at(
     now: datetime,
     attempt_epoch: int = _ATTEMPT_EPOCH,
 ) -> tuple[CanContinue | CannotContinue, list[ClosedRun]]:
-    async with session_factory() as session:
-        async with session.begin():
-            repository = AgentRunStateRepository(session)
-            result = await repository.authorize_answer_regeneration(
-                run_id, attempt_epoch=attempt_epoch, now=now
-            )
-    return result, repository.closed_runs
+    notices = ClosedRunNotices()
+    result = await state_service(
+        session_factory, notices=notices, now=now
+    ).authorize_answer_regeneration(run_id, attempt_epoch=attempt_epoch)
+    return result, notices.closed_runs
 
 
 async def _database_time(session_factory: async_sessionmaker[AsyncSession]) -> datetime:
@@ -161,26 +180,6 @@ async def _load_run(
         run = await session.get(AgentRun, run_id)
         assert run is not None
         return run
-
-
-async def _wait_until_blocked(observer: AsyncSession, backend_pid: int) -> None:
-    async with asyncio.timeout(5):
-        while True:
-            await observer.execute(text("SELECT pg_stat_clear_snapshot()"))
-            is_waiting_for_lock = await observer.scalar(
-                text(
-                    """
-                    SELECT wait_event_type = 'Lock'
-                           AND cardinality(pg_blocking_pids(pid)) > 0
-                    FROM pg_stat_activity
-                    WHERE pid = :pid
-                    """
-                ),
-                {"pid": backend_pid},
-            )
-            if is_waiting_for_lock:
-                return
-            await asyncio.sleep(0.01)
 
 
 @pytest.mark.asyncio
@@ -268,14 +267,19 @@ async def test_start_twice_in_same_attempt_does_not_overwrite_recorded_start(
 
 
 @pytest.mark.asyncio
-async def test_start_missing_run_stops_without_write(
+async def test_gate_start_missing_run_returns_not_found_without_reserving(
     session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
-    """存在しないRunの回答開始は、窓口が見つからないことを止まった理由として送出する。"""
-    with pytest.raises(AnswerGenerationStopped) as stopped:
-        await _repository(session_factory, uuid.uuid4()).start_answer_generation()
+    """存在しないRunの回答開始は見つからないことを返し、予約も通知もしない。"""
+    observed = _ObservedGate(session_factory, uuid.uuid4())
 
-    assert stopped.value.stopped == RunNotFound()
+    result = await observed.gate.start()
+
+    assert (result, observed.reservations, observed.published()) == (
+        RunNotFound(),
+        [],
+        [],
+    )
 
 
 @pytest.mark.asyncio
@@ -285,14 +289,17 @@ async def test_rolled_back_start_does_not_persist_generation_right(
     """巻き戻した回答開始は開始時刻を残さない。"""
     run_id = await _seed_running(session_factory)
 
-    async with session_factory() as session:
-        await session.begin()
-        result = await AgentRunStateRepository(session).start_answer_generation(
-            run_id,
-            attempt_epoch=_ATTEMPT_EPOCH,
-            now=_BEFORE_DEADLINE,
-        )
-        await session.rollback()
+    def open_rolling_back_session() -> AsyncSession:
+        session = session_factory()
+        session.commit = session.rollback  # type: ignore[method-assign]
+        return session
+
+    service = state_service(
+        open_rolling_back_session,  # type: ignore[arg-type]
+        now=_BEFORE_DEADLINE,
+    )
+
+    result = await service.start_answer_generation(run_id, attempt_epoch=_ATTEMPT_EPOCH)
 
     run = await _load_run(session_factory, run_id)
     assert result == AnswerGenerationStarted(run_id, _BEFORE_DEADLINE)
@@ -300,71 +307,103 @@ async def test_rolled_back_start_does_not_persist_generation_right(
 
 
 @pytest.mark.asyncio
-async def test_start_commits_before_returning_success(
+async def test_gate_start_reserves_recovery_from_committed_start_and_notifies_answering(
     session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
-    """窓口の回答開始は、開始時刻をcommitしてから開始できたと返す。"""
+    """回答を始めてよいRunは開始時刻をcommitし、開始時刻に回収の猶予を足した時刻で確認を予約して「回答中」を1件通知する。"""
     run_id = await _seed_running(
         session_factory,
         deadline_at=await _database_time(session_factory) + timedelta(minutes=1),
     )
+    observed = _ObservedGate(session_factory, run_id)
 
-    result = await _repository(session_factory, run_id).start_answer_generation()
+    result = await observed.gate.start()
 
     run = await _load_run(session_factory, run_id)
-    assert result == AnswerGenerationStarted(run_id, run.answer_started_at)
     assert run.answer_started_at is not None
+    assert (result, observed.reservations, observed.published()) == (
+        CanContinue(),
+        [(run_id, run.answer_started_at + answer_generation_recovery_window())],
+        [(run_id, _ATTEMPT_EPOCH, {"type": "stage", "stage": "answering"})],
+    )
 
 
 @pytest.mark.asyncio
-async def test_window_stops_stale_attempt_without_writing(
+async def test_gate_start_stale_attempt_returns_superseded_without_writing(
     session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
-    """窓口から古い世代が回答を開始すると、別の試行が担当していることを止まった理由として送出する。"""
+    """古い世代が回答を始めようとすると別の試行が担当していると返し、開始を記録せず予約も通知もしない。"""
     run_id = await _seed_running(
         session_factory,
         deadline_at=await _database_time(session_factory) + timedelta(minutes=1),
     )
+    observed = _ObservedGate(session_factory, run_id, attempt_epoch=_ATTEMPT_EPOCH - 1)
 
-    with pytest.raises(AnswerGenerationStopped) as stopped:
-        await _repository(
-            session_factory, run_id, attempt_epoch=_ATTEMPT_EPOCH - 1
-        ).start_answer_generation()
+    result = await observed.gate.start()
 
     run = await _load_run(session_factory, run_id)
-    assert stopped.value.stopped == AttemptSuperseded()
+    assert (result, observed.reservations, observed.published()) == (
+        AttemptSuperseded(),
+        [],
+        [],
+    )
     assert run.answer_started_at is None
 
 
 @pytest.mark.asyncio
-async def test_window_expires_run_and_notifies_attempt_after_commit(
+async def test_gate_start_cancelled_run_returns_cancelled_without_writing(
     session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
-    """窓口から期限後に回答を開始すると、Runを期限切れで閉じてその世代へ知らせ、期限切れを送出する。"""
+    """利用者が止めたRunの回答開始は止めたことを返し、状態も開始時刻も変えず予約も通知もしない。"""
+    run_id = await _seed_running(
+        session_factory,
+        status="failed",
+        error_code="cancelled",
+        deadline_at=await _database_time(session_factory) + timedelta(minutes=1),
+    )
+    observed = _ObservedGate(session_factory, run_id)
+
+    result = await observed.gate.start()
+
+    run = await _load_run(session_factory, run_id)
+    assert (result, observed.reservations, observed.published()) == (
+        CancelledByUser(),
+        [],
+        [],
+    )
+    assert (run.status, run.error_code, run.answer_started_at) == (
+        "failed",
+        "cancelled",
+        None,
+    )
+
+
+@pytest.mark.asyncio
+async def test_gate_start_after_deadline_closes_run_and_notifies_only_terminal(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    """期限後に回答を始めようとするとRunを期限切れで閉じてその世代へ終了だけを知らせ、期限切れを返して予約しない。"""
     run_id = await _seed_running(
         session_factory,
         deadline_at=await _database_time(session_factory) - timedelta(seconds=1),
     )
-    publisher = _RecordingPublisher()
+    observed = _ObservedGate(session_factory, run_id)
 
-    with pytest.raises(AnswerGenerationStopped) as stopped:
-        await _repository(
-            session_factory, run_id, publisher=publisher
-        ).start_answer_generation()
+    result = await observed.gate.start()
 
     run = await _load_run(session_factory, run_id)
-    assert stopped.value.stopped == DeadlineExceeded()
+    assert (result, observed.reservations, observed.published()) == (
+        DeadlineExceeded(),
+        [],
+        [
+            (
+                run_id,
+                _ATTEMPT_EPOCH,
+                {"type": "terminal", "status": "deadline_exceeded", "errorCode": None},
+            )
+        ],
+    )
     assert run.status == "deadline_exceeded"
-    assert [
-        (published_run_id, epoch, event.model_dump(mode="json", by_alias=True))
-        for published_run_id, epoch, event in publisher.events
-    ] == [
-        (
-            run_id,
-            _ATTEMPT_EPOCH,
-            {"type": "terminal", "status": "deadline_exceeded", "errorCode": None},
-        )
-    ]
 
 
 @pytest.mark.asyncio
@@ -374,12 +413,12 @@ async def test_lock_wait_uses_database_time_after_acquiring_run_lock(
     """行ロックを待つ間に期限を越えた回答開始は、ロック後のDB時刻で期限切れとして終える。"""
     run_id = await _seed_running(session_factory)
 
+    notices = ClosedRunNotices()
+    service = state_service(session_factory, notices=notices)
     async with (
         session_factory() as locker,
-        session_factory() as contender,
         session_factory() as observer,
     ):
-        repository = AgentRunStateRepository(contender)
         start_task: asyncio.Task[AnswerGenerationStarted | CannotContinue] | None = None
         try:
             await locker.begin()
@@ -389,16 +428,13 @@ async def test_lock_wait_uses_database_time_after_acquiring_run_lock(
                 )
             ).scalar_one()
 
-            await contender.begin()
-            contender_pid = await contender.scalar(text("SELECT pg_backend_pid()"))
-            assert isinstance(contender_pid, int)
             start_task = asyncio.create_task(
-                repository.start_answer_generation(
+                service.start_answer_generation(
                     run_id,
                     attempt_epoch=_ATTEMPT_EPOCH,
                 )
             )
-            await _wait_until_blocked(observer, contender_pid)
+            await wait_until_lock_waiting(observer)
 
             locked_run.deadline_at = await locker.scalar(
                 text("SELECT clock_timestamp()")
@@ -406,18 +442,17 @@ async def test_lock_wait_uses_database_time_after_acquiring_run_lock(
             await locker.commit()
 
             result = await asyncio.wait_for(start_task, timeout=5)
-            await contender.commit()
         finally:
             if start_task is not None:
                 if not start_task.done():
                     start_task.cancel()
                 await asyncio.gather(start_task, return_exceptions=True)
-            for session in (locker, contender, observer):
+            for session in (locker, observer):
                 if session.in_transaction():
                     await session.rollback()
 
     run = await _load_run(session_factory, run_id)
-    assert (result, repository.closed_runs) == (
+    assert (result, notices.closed_runs) == (
         DeadlineExceeded(),
         _closed_by_deadline(run_id),
     )
@@ -477,29 +512,28 @@ async def test_authorize_without_start_does_not_expire(
 
 
 @pytest.mark.asyncio
-async def test_authorize_stale_attempt_does_not_change_run(
+async def test_gate_regenerate_stale_attempt_returns_superseded_without_change(
     session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
-    """古い世代の窓口からの再生成は、期限より先に別の試行が担当していることを送出し、Runを変えない。"""
+    """古い世代の書き直しは期限より先に別の試行が担当していると返し、Runを変えない。"""
     run_id = await _seed_running(
         session_factory,
         answer_started_at=_ANSWER_STARTED_AT,
     )
+    observed = _ObservedGate(session_factory, run_id, attempt_epoch=_ATTEMPT_EPOCH - 1)
 
-    with pytest.raises(AnswerGenerationStopped) as stopped:
-        await _repository(
-            session_factory, run_id, attempt_epoch=_ATTEMPT_EPOCH - 1
-        ).authorize_answer_regeneration()
+    result = await observed.gate.regenerate()
 
     run = await _load_run(session_factory, run_id)
-    assert stopped.value.stopped == AttemptSuperseded()
-    assert run.status == "running"
-    assert run.answer_started_at == _ANSWER_STARTED_AT
+    assert (result, observed.published()) == (AttemptSuperseded(), [])
+    assert (run.status, run.answer_started_at) == ("running", _ANSWER_STARTED_AT)
 
 
 @pytest.mark.asyncio
-async def test_start_commit_failure_returns_no_success(session_factory):
-    # commitに失敗した開始記録を予約元へ成功として渡さない。
+async def test_gate_start_commit_failure_raises_without_reserving(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    """開始時刻のcommitに失敗した回答開始は例外を送出し、回収の確認を予約せず「回答中」も通知しない。"""
     from sqlalchemy import event
 
     run_id = await _seed_running(
@@ -508,39 +542,56 @@ async def test_start_commit_failure_returns_no_success(session_factory):
     )
     session = session_factory()
 
-    def reject_commit(_session):
+    def reject_commit(_session: object) -> None:
         raise RuntimeError("commit rejected")
 
     event.listen(session.sync_session, "before_commit", reject_commit, once=True)
-    repository = _repository(lambda: session, run_id)  # type: ignore[arg-type]
+    observed = _ObservedGate(lambda: session, run_id)  # type: ignore[arg-type]
+
     with pytest.raises(RuntimeError, match="commit rejected"):
-        await repository.start_answer_generation()
+        await observed.gate.start()
+
     run = await _load_run(session_factory, run_id)
-    assert run.answer_started_at is None
-    assert run.status == "running"
+    assert (observed.reservations, observed.published()) == ([], [])
+    assert (run.status, run.answer_started_at) == ("running", None)
 
 
 @pytest.mark.asyncio
-async def test_started_time_schedules_recovery_after_original_deadline(session_factory):
-    # 55秒の開始記録から予約し、元の60秒では維持、生成後の期限で回収する。
-    from app.agent.answering.timing import answer_generation_recovery_window
+async def test_gate_start_reservation_recovers_after_original_deadline(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    """受理期限の直前に回答を始めたRunは、口が予約した時刻まで回収されず、その時刻に回収される。"""
     from app.agent.running.deadline.scheduling import AgentDeadlineScheduler
     from tests.agent.run_deadline.clock import sweep_deadline_exceeded_runs_at
     from tests.agent.run_deadline.test_scheduling import RecordingSource
 
-    run_id = await _seed_running(session_factory)
-    started_at = _DEADLINE_AT - timedelta(seconds=5)
-    result, _closed = await _start_at(session_factory, run_id, now=started_at)
-    assert isinstance(result, AnswerGenerationStarted)
+    deadline_at = await _database_time(session_factory) + timedelta(seconds=5)
+    run_id = await _seed_running(session_factory, deadline_at=deadline_at)
     source = RecordingSource()
     scheduler = AgentDeadlineScheduler(source)
-    recovery_at = result.answer_started_at + answer_generation_recovery_window()
-    scheduler.reserve_in_background(result.run_id, recovery_at)
+    publisher = _RecordingPublisher()
+    gate = AgentRunAnswerGenerationGate(
+        AgentRunStateService(
+            session_factory=session_factory,
+            publisher_for=publisher.publisher_for,  # type: ignore[arg-type]
+        ),
+        run_id,
+        _ATTEMPT_EPOCH,
+        schedule_deadline_check=scheduler.reserve_in_background,
+        stage_reporter=AgentRunLiveStageReporter(
+            publisher.publisher_for(run_id, _ATTEMPT_EPOCH)  # type: ignore[arg-type]
+        ),
+    )
+
+    assert await gate.start() == CanContinue()
     await asyncio.gather(*scheduler._pending)
-    assert source.schedules[0].time == recovery_at
-    assert source.schedules[0].args == [{"run_id": str(run_id)}]
-    for at, expected in [(_DEADLINE_AT, 0), (recovery_at, 1)]:
+
+    [schedule] = source.schedules
+    assert schedule.args == [{"run_id": str(run_id)}]
+    recovered_counts = []
+    for at in (deadline_at, schedule.time):
         async with session_factory() as session:
             async with session.begin():
                 recovered = await sweep_deadline_exceeded_runs_at(session, at=at)
-        assert recovered.total_count == expected
+        recovered_counts.append(recovered.total_count)
+    assert recovered_counts == [0, 1]

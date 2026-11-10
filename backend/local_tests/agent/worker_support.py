@@ -157,10 +157,10 @@ class WorkerExecution:
         if not event["completion_returned"]:
             raise RuntimeError(f"回答の保存判定まで完了していません: {event}")
 
-    async def wait_for_answer_generation_stop(self):
+    async def wait_for_attempt_stop(self):
         event = await self._wait_for_processed_delivery()
         return {
-            "stop_reason": event["answer_generation_stop_reason"],
+            "stop_reason": event["stop_reason"],
             "completion_returned": event["completion_returned"],
         }
 

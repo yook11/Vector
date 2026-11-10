@@ -17,13 +17,13 @@ import logfire
 
 from app.agent.phase_span import agent_phase
 from app.agent.recording.types import PhaseStatus
-from app.agent.running.stop import AnswerGenerationStopped
 
 __all__ = [
     "EvidenceAnswerFailed",
     "EvidenceAnswerRecorder",
     "EvidenceAnswerRecording",
     "EvidenceAnswerRecordingOutcome",
+    "EvidenceAnswerStopped",
     "EvidenceAnswerSucceeded",
     "LogfireEvidenceAnswerRecorder",
     "logfire_evidence_answer_recorder",
@@ -64,7 +64,14 @@ class EvidenceAnswerFailed:
             raise ValueError("attempt_count must be nonnegative")
 
 
-type EvidenceAnswerRecordingOutcome = EvidenceAnswerSucceeded | EvidenceAnswerFailed
+@dataclass(frozen=True, slots=True)
+class EvidenceAnswerStopped:
+    """書き直す前にRunが止まり、生成をやめた根拠回答工程の結論。"""
+
+
+type EvidenceAnswerRecordingOutcome = (
+    EvidenceAnswerSucceeded | EvidenceAnswerFailed | EvidenceAnswerStopped
+)
 
 
 class EvidenceAnswerRecording(Protocol):
@@ -94,7 +101,7 @@ class _EvidenceAnswerRecording:
 @dataclass(frozen=True, slots=True)
 class _EvidenceAnswerExit:
     status: PhaseStatus
-    outcome: EvidenceAnswerRecordingOutcome | None
+    outcome: EvidenceAnswerSucceeded | EvidenceAnswerFailed | None
     error: BaseException | None
 
     @classmethod
@@ -106,18 +113,19 @@ class _EvidenceAnswerExit:
     ) -> _EvidenceAnswerExit:
         from app.agent.answering.evidence_answer.failure import EvidenceAnswerError
 
-        if isinstance(
-            error,
-            asyncio.CancelledError | GeneratorExit | AnswerGenerationStopped,
-        ):
+        if isinstance(error, asyncio.CancelledError | GeneratorExit):
             return cls(status=PhaseStatus.STOPPED, outcome=None, error=error)
-        if error is None and isinstance(outcome, EvidenceAnswerSucceeded):
-            return cls(status=PhaseStatus.COMPLETED, outcome=outcome, error=None)
-        if isinstance(outcome, EvidenceAnswerFailed) and (
-            error is None or isinstance(error, EvidenceAnswerError)
-        ):
-            return cls(status=PhaseStatus.FAILED, outcome=outcome, error=error)
-        return cls(status=PhaseStatus.FAILED, outcome=None, error=error)
+        match outcome:
+            case EvidenceAnswerSucceeded() if error is None:
+                return cls(status=PhaseStatus.COMPLETED, outcome=outcome, error=None)
+            case EvidenceAnswerStopped() if error is None:
+                return cls(status=PhaseStatus.STOPPED, outcome=None, error=None)
+            case EvidenceAnswerFailed() if error is None or isinstance(
+                error, EvidenceAnswerError
+            ):
+                return cls(status=PhaseStatus.FAILED, outcome=outcome, error=error)
+            case _:
+                return cls(status=PhaseStatus.FAILED, outcome=None, error=error)
 
 
 class LogfireEvidenceAnswerRecorder:
@@ -232,7 +240,9 @@ def _record_outcome(evidence_answer_exit: _EvidenceAnswerExit) -> None:
         return
 
 
-def _outcome_label(outcome: EvidenceAnswerRecordingOutcome | None) -> str:
+def _outcome_label(
+    outcome: EvidenceAnswerSucceeded | EvidenceAnswerFailed | None,
+) -> str:
     if isinstance(outcome, EvidenceAnswerSucceeded):
         return "succeeded"
     if isinstance(outcome, EvidenceAnswerFailed):

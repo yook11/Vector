@@ -46,7 +46,7 @@ from app.agent.live_updates.stream import (
 )
 from app.agent.planning.contract import TargetTimeWindow
 from app.config import settings
-from tests.agent.answering_runner._harness import AllowAnswerGenerationStart
+from tests.agent.answering._fakes import ScriptedAnswerGenerationGate
 
 pytestmark = pytest.mark.xdist_group("redis")
 
@@ -116,11 +116,10 @@ async def _answer(
     generator: FakeStreamingGenerator,
     reporter: AgentRunLiveAnswerDeltaReporter,
 ) -> DirectAnswerDraft:
-    return await DirectAnswerService(
-        schedule_deadline_check=lambda *_: None,
+    draft = await DirectAnswerService(
         agent=DIRECT_ANSWER_AGENT,
         llm_text_streamer_scope_factory=generator.activate,
-        repository=AllowAnswerGenerationStart(),
+        gate=ScriptedAnswerGenerationGate(),
         delta_reporter=reporter,
     ).answer(
         DirectAnswerInput(
@@ -128,6 +127,8 @@ async def _answer(
             previous_answer="",
         )
     )
+    assert isinstance(draft, DirectAnswerDraft)
+    return draft
 
 
 async def _evidence_answer(
@@ -136,11 +137,10 @@ async def _evidence_answer(
     *,
     request: AnsweringRequest | None = None,
 ) -> EvidenceAnswerDraft:
-    return await EvidenceAnswerService(
-        schedule_deadline_check=lambda *_: None,
+    draft = await EvidenceAnswerService(
         agent=EVIDENCE_ANSWER_AGENT,
         llm_text_streamer_scope_factory=generator.activate,
-        repository=AllowAnswerGenerationStart(),
+        gate=ScriptedAnswerGenerationGate(),
         delta_reporter=reporter,
     ).answer(
         EvidenceAnswerInput(
@@ -164,6 +164,8 @@ async def _evidence_answer(
             review_missing=(),
         )
     )
+    assert isinstance(draft, EvidenceAnswerDraft)
+    return draft
 
 
 def _delta_events(

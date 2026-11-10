@@ -1,4 +1,4 @@
-"""Direct answer service tests."""
+"""直接回答の工程の生成・再試行・停止・記録(LLMの口と回答の生成の口は偽物)。"""
 
 from __future__ import annotations
 
@@ -11,13 +11,10 @@ from typing import Any
 import pytest
 from logfire.testing import CaptureLogfire
 
-import app.agent.answering.direct_answer.contract as direct_answer_contract
-import app.agent.running.stop as running_stop
 from app.agent.agent import Agent
 from app.agent.answering.contract import AnsweringRequest
 from app.agent.answering.direct_answer.agent import DIRECT_ANSWER_AGENT
 from app.agent.answering.direct_answer.contract import (
-    AnswerGenerationStopped,
     DirectAnswerDraft,
     DirectAnswerInput,
     DirectAnswerInvalidError,
@@ -27,9 +24,14 @@ from app.agent.answering.direct_answer.service import DirectAnswerService
 from app.agent.recording.direct_answer import (
     DirectAnswerFailed,
     DirectAnswerOutcome,
+    DirectAnswerStopped,
     DirectAnswerSucceeded,
 )
-from app.agent.running.state import AttemptSuperseded, DeadlineExceeded
+from app.agent.running.state import (
+    AttemptSuperseded,
+    CannotContinue,
+    DeadlineExceeded,
+)
 from app.agent.threads.contracts import ThreadMessageSnapshot
 from app.ai_providers.errors import (
     AIProviderResultError,
@@ -42,10 +44,7 @@ from app.http.failure import (
     HttpTransportFailureReason,
     HttpTransportStage,
 )
-from tests.agent.answering_runner._harness import (
-    AllowAnswerGenerationStart,
-    ScriptedAnswerGenerationRepository,
-)
+from tests.agent.answering._fakes import ScriptedAnswerGenerationGate
 from tests.agent.llm_call._fakes import RecordedLlmCall
 from tests.agent.recording._fakes import RecordingDirectAnswerRecorder
 from tests.logfire._metric_helpers import collected_metrics
@@ -190,38 +189,26 @@ class RecordingDeltaReporter:
         self.reset_calls += 1
 
 
-def test_answer_generation_stopped_is_shared_identity_compatible_reexport() -> None:
-    assert (
-        direct_answer_contract.AnswerGenerationStopped
-        is running_stop.AnswerGenerationStopped
-    )
-
-
 def _service(
     streamer: ScriptedLlmTextStreamer,
     *,
-    repository: object | None = None,
+    gate: ScriptedAnswerGenerationGate | None = None,
     delta_reporter: RecordingDeltaReporter | None = None,
-    progress: object | None = None,
     recorder: RecordingDirectAnswerRecorder | None = None,
 ) -> DirectAnswerService:
-    start = AllowAnswerGenerationStart() if repository is None else repository
+    answer_gate = ScriptedAnswerGenerationGate() if gate is None else gate
     if recorder is None:
         return DirectAnswerService(
-            schedule_deadline_check=lambda *_: None,
             agent=DIRECT_ANSWER_AGENT,
             llm_text_streamer_scope_factory=_streamer_scope(streamer),
-            repository=start,
+            gate=answer_gate,
             delta_reporter=delta_reporter,
-            progress=progress,
         )
     return DirectAnswerService(
-        schedule_deadline_check=lambda *_: None,
         agent=DIRECT_ANSWER_AGENT,
         llm_text_streamer_scope_factory=_streamer_scope(streamer),
-        repository=start,
+        gate=answer_gate,
         delta_reporter=delta_reporter,
-        progress=progress,
         recorder=recorder,
     )
 
@@ -243,10 +230,9 @@ def _assert_recorded(
 async def test_valid_text_returns_direct_draft_without_retry() -> None:
     streamer = ScriptedLlmTextStreamer(["検索なしで回答できます。"])
     service = DirectAnswerService(
-        schedule_deadline_check=lambda *_: None,
         agent=DIRECT_ANSWER_AGENT,
         llm_text_streamer_scope_factory=_streamer_scope(streamer),
-        repository=AllowAnswerGenerationStart(),
+        gate=ScriptedAnswerGenerationGate(),
     )
 
     draft = await service.answer(_input())
@@ -262,10 +248,9 @@ async def test_direct_answer_removes_inline_citation_markers_after_generation() 
     )
 
     draft = await DirectAnswerService(
-        schedule_deadline_check=lambda *_: None,
         agent=DIRECT_ANSWER_AGENT,
         llm_text_streamer_scope_factory=_streamer_scope(streamer),
-        repository=AllowAnswerGenerationStart(),
+        gate=ScriptedAnswerGenerationGate(),
     ).answer(
         _input(
             AnsweringRequest(
@@ -279,7 +264,7 @@ async def test_direct_answer_removes_inline_citation_markers_after_generation() 
         )
     )
 
-    assert draft.answer == "結論は維持します。 詳細は省略します。"
+    assert draft == DirectAnswerDraft(answer="結論は維持します。 詳細は省略します。")
     assert streamer.calls[0].input.request.question == "前回の結論だけ"
     assert streamer.calls[0].input.request.history == (
         ThreadMessageSnapshot(role="assistant", content="根拠は説明済み"),
@@ -302,7 +287,7 @@ async def test_direct_answer_removes_group_form_citation_markers_after_generatio
 
     draft = await _service(streamer).answer(_input())
 
-    assert draft.answer == "結論は維持します。 詳細は省略します。"
+    assert draft == DirectAnswerDraft(answer="結論は維持します。 詳細は省略します。")
 
 
 @pytest.mark.asyncio
@@ -338,13 +323,12 @@ async def test_blank_then_valid_retries_once_with_same_input(
             exits += 1
 
     draft = await DirectAnswerService(
-        schedule_deadline_check=lambda *_: None,
         agent=DIRECT_ANSWER_AGENT,
         llm_text_streamer_scope_factory=counting_scope,
-        repository=AllowAnswerGenerationStart(),
+        gate=ScriptedAnswerGenerationGate(),
     ).answer(_input())
 
-    assert draft.answer == "再試行後の回答です。"
+    assert draft == DirectAnswerDraft(answer="再試行後の回答です。")
     assert [call.attempt_number for call in streamer.calls] == [1, 2]
     assert streamer.calls[0].input is streamer.calls[1].input
     assert all(call.agent is DIRECT_ANSWER_AGENT for call in streamer.calls)
@@ -459,7 +443,7 @@ async def test_resolvable_ai_failure_retries_once_with_the_same_input() -> None:
 
     assert len(streamer.calls) == 2
     assert streamer.calls[0].input is streamer.calls[1].input
-    assert draft.answer == "再試行後の回答です。"
+    assert draft == DirectAnswerDraft(answer="再試行後の回答です。")
 
 
 @pytest.mark.asyncio
@@ -495,10 +479,9 @@ async def test_streamer_scope_activation_failure_precedes_attempt_and_observatio
 
     with pytest.raises(RuntimeError) as exc_info:
         await DirectAnswerService(
-            schedule_deadline_check=lambda *_: None,
             agent=DIRECT_ANSWER_AGENT,
             llm_text_streamer_scope_factory=broken_scope,
-            repository=AllowAnswerGenerationStart(),
+            gate=ScriptedAnswerGenerationGate(),
             delta_reporter=reporter,
         ).answer(_input())
 
@@ -533,10 +516,9 @@ async def test_streamer_scope_exit_failure_discards_completed_outcome(
 
     with pytest.raises(RuntimeError) as exc_info:
         await DirectAnswerService(
-            schedule_deadline_check=lambda *_: None,
             agent=DIRECT_ANSWER_AGENT,
             llm_text_streamer_scope_factory=broken_scope,
-            repository=AllowAnswerGenerationStart(),
+            gate=ScriptedAnswerGenerationGate(),
         ).answer(_input())
 
     assert exc_info.value is error
@@ -574,10 +556,9 @@ async def test_streamer_scope_exit_failure_replaces_terminal_failure_without_out
 
     with pytest.raises(RuntimeError) as exc_info:
         await DirectAnswerService(
-            schedule_deadline_check=lambda *_: None,
             agent=DIRECT_ANSWER_AGENT,
             llm_text_streamer_scope_factory=broken_scope,
-            repository=AllowAnswerGenerationStart(),
+            gate=ScriptedAnswerGenerationGate(),
         ).answer(_input())
 
     assert exc_info.value is close_error
@@ -600,20 +581,20 @@ async def test_incremental_fragments_reconstruct_existing_final_answer() -> None
         [[" \t回答", "[[1", "]] ", "の続き", "です。\n"]]
     )
     reporter = RecordingDeltaReporter()
-    repository = AllowAnswerGenerationStart()
+    gate = ScriptedAnswerGenerationGate()
 
-    draft = await _service(
-        streamer, delta_reporter=reporter, repository=repository
-    ).answer(_input())
+    draft = await _service(streamer, delta_reporter=reporter, gate=gate).answer(
+        _input()
+    )
 
     assert draft == DirectAnswerDraft(answer="回答 の続きです。")
-    assert "".join(text for _, text in reporter.appended) == draft.answer
+    assert "".join(text for _, text in reporter.appended) == "回答 の続きです。"
     assert {generation for generation, _ in reporter.appended} == {1}
     assert reporter.finished == [1]
     assert reporter.aborted == []
 
-    assert repository.start_calls == 1
-    assert repository.authorize_calls == 0
+    assert gate.start_calls == 1
+    assert gate.regenerate_calls == 0
 
 
 @pytest.mark.asyncio
@@ -632,7 +613,7 @@ async def test_marker_only_blank_generation_retries_without_visible_reset() -> N
     generation_two_text = "".join(
         text for generation, text in reporter.appended if generation == 2
     )
-    assert generation_two_text == draft.answer
+    assert generation_two_text == "再試行 回答"
     assert all(generation == 2 for generation, _ in reporter.appended)
     assert reporter.aborted == [1]
     assert reporter.finished == [2]
@@ -745,22 +726,20 @@ async def test_retry_then_classified_failure_records_attempt_count() -> None:
     )
 
 
-async def test_generation_stop_records_stopped_without_outcome() -> None:
-    """AnswerGenerationStopped は結論を渡さず同一インスタンスで伝播する。"""
+async def test_regeneration_stop_returns_reason_and_records_stopped_outcome() -> None:
+    """書き直す前にRunが止まると、止まった理由を返し、記録係へ止まった結論を渡す。"""
 
     recorder = RecordingDirectAnswerRecorder()
     streamer = ScriptedLlmTextStreamer([" "])
 
-    with pytest.raises(AnswerGenerationStopped) as exc_info:
-        await _service(
-            streamer,
-            repository=ScriptedAnswerGenerationRepository(
-                authorizes=[AnswerGenerationStopped(AttemptSuperseded())]
-            ),
-            recorder=recorder,
-        ).answer(_input())
+    result = await _service(
+        streamer,
+        gate=ScriptedAnswerGenerationGate(regenerations=(AttemptSuperseded(),)),
+        recorder=recorder,
+    ).answer(_input())
 
-    _assert_recorded(recorder, outcome=None, error=exc_info.value)
+    assert result == AttemptSuperseded()
+    _assert_recorded(recorder, outcome=DirectAnswerStopped())
 
 
 @pytest.mark.parametrize(
@@ -786,19 +765,9 @@ async def test_unclassified_failure_and_stops_record_without_outcome(
     _assert_recorded(recorder, outcome=None, error=error)
 
 
-class _RecordingProgress:
-    def __init__(self, timeline: list[str] | None = None) -> None:
-        self.stages: list[str] = []
-        self._timeline = timeline
-
-    async def stage_changed(self, stage: str) -> None:
-        self.stages.append(stage)
-        if self._timeline is not None:
-            self._timeline.append(f"progress:{stage}")
-
-
 @pytest.mark.asyncio
-async def test_start_continue_reports_answering_before_generation() -> None:
+async def test_generation_starts_only_after_the_gate_allows_the_start() -> None:
+    """回答の生成の口が開始を許してから、最初の生成を始める。"""
     timeline: list[str] = []
     streamer = ScriptedLlmTextStreamer(["開始後の回答"])
     original_stream = streamer.stream_text
@@ -808,75 +777,91 @@ async def test_start_continue_reports_answering_before_generation() -> None:
         return original_stream(*args, **kwargs)
 
     streamer.stream_text = tracked_stream  # type: ignore[method-assign]
-    start = ScriptedAnswerGenerationRepository(timeline=timeline)
-    progress = _RecordingProgress(timeline)
 
     draft = await _service(
         streamer,
-        repository=start,
-        progress=progress,
+        gate=ScriptedAnswerGenerationGate(timeline=timeline),
     ).answer(_input())
 
-    assert draft.answer == "開始後の回答"
-    assert timeline == ["answer_start", "progress:answering", "generate"]
+    assert draft == DirectAnswerDraft(answer="開始後の回答")
+    assert timeline == ["answer_start", "generate"]
+
+
+def _unused_scope(
+    streamer: ScriptedLlmTextStreamer, entered: list[int]
+) -> Callable[[], AbstractAsyncContextManager[ScriptedLlmTextStreamer]]:
+    @asynccontextmanager
+    async def scope() -> AsyncIterator[ScriptedLlmTextStreamer]:
+        entered.append(1)
+        yield streamer
+
+    return scope
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "outcome",
-    [
-        AnswerGenerationStopped(DeadlineExceeded()),
-        AnswerGenerationStopped(AttemptSuperseded()),
-        RuntimeError("answer start transaction failed"),
-    ],
-)
-async def test_start_rejection_does_not_generate_or_report_answering(
-    outcome: BaseException,
+@pytest.mark.parametrize("stopped", [DeadlineExceeded(), AttemptSuperseded()])
+async def test_start_stop_returns_reason_without_generating_or_recording(
+    stopped: CannotContinue,
 ) -> None:
+    """開始の前にRunが止まると、止まった理由を返し、生成も記録係も開かない。"""
     streamer = ScriptedLlmTextStreamer(["呼ばれない"])
-    enters = 0
-
-    @asynccontextmanager
-    async def unused_scope() -> AsyncIterator[ScriptedLlmTextStreamer]:
-        nonlocal enters
-        enters += 1
-        yield streamer
-
-    start = ScriptedAnswerGenerationRepository(start=outcome)
-    progress = _RecordingProgress()
+    entered: list[int] = []
+    gate = ScriptedAnswerGenerationGate(start=stopped)
     recorder = RecordingDirectAnswerRecorder()
 
-    with pytest.raises(type(outcome)) as raised:
+    result = await DirectAnswerService(
+        agent=DIRECT_ANSWER_AGENT,
+        llm_text_streamer_scope_factory=_unused_scope(streamer, entered),
+        gate=gate,
+        recorder=recorder,
+    ).answer(_input())
+
+    assert (result, gate.start_calls, entered, streamer.calls, recorder.records) == (
+        stopped,
+        1,
+        [],
+        [],
+        [],
+    )
+
+
+@pytest.mark.asyncio
+async def test_start_failure_propagates_without_generating_or_recording() -> None:
+    """開始の問い合わせが失敗すると、同じ例外を送出し、生成も記録係も開かない。"""
+    failure = RuntimeError("answer start transaction failed")
+    streamer = ScriptedLlmTextStreamer(["呼ばれない"])
+    entered: list[int] = []
+    gate = ScriptedAnswerGenerationGate(start=failure)
+    recorder = RecordingDirectAnswerRecorder()
+
+    with pytest.raises(RuntimeError) as raised:
         await DirectAnswerService(
-            schedule_deadline_check=lambda *_: None,
             agent=DIRECT_ANSWER_AGENT,
-            llm_text_streamer_scope_factory=unused_scope,
-            repository=start,
-            progress=progress,
+            llm_text_streamer_scope_factory=_unused_scope(streamer, entered),
+            gate=gate,
             recorder=recorder,
         ).answer(_input())
 
-    assert raised.value is outcome
-    assert start.calls == 1
-    assert enters == 0
-    assert streamer.calls == []
-    assert progress.stages == []
-    assert recorder.records == []
+    assert raised.value is failure
+    assert (gate.start_calls, entered, streamer.calls, recorder.records) == (
+        1,
+        [],
+        [],
+        [],
+    )
 
 
 @pytest.mark.asyncio
 async def test_regeneration_stop_does_not_start_second_generation() -> None:
+    """書き直す前にRunが止まると、止まった理由を返し、2回目の生成を始めない。"""
     streamer = ScriptedLlmTextStreamer([" \n\t", "呼ばれない"])
-    repository = ScriptedAnswerGenerationRepository(
-        authorizes=[AnswerGenerationStopped(DeadlineExceeded())]
-    )
+    gate = ScriptedAnswerGenerationGate(regenerations=(DeadlineExceeded(),))
 
-    with pytest.raises(AnswerGenerationStopped) as raised:
-        await _service(streamer, repository=repository).answer(_input())
+    result = await _service(streamer, gate=gate).answer(_input())
 
-    assert raised.value.stopped == DeadlineExceeded()
+    assert result == DeadlineExceeded()
     assert [call.attempt_number for call in streamer.calls] == [1]
-    assert repository.authorize_calls == 1
+    assert gate.regenerate_calls == 1
 
 
 @pytest.mark.asyncio
@@ -896,6 +881,6 @@ async def test_regeneration_keeps_single_answer_timeout(
 
     draft = await _service(streamer).answer(_input())
 
-    assert draft.answer == "再試行後の回答です。"
+    assert draft == DirectAnswerDraft(answer="再試行後の回答です。")
     assert created == 1
     assert [call.attempt_number for call in streamer.calls] == [1, 2]

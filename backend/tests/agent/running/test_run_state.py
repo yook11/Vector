@@ -93,11 +93,12 @@ def _attempt_finish(state: RunState, now: datetime) -> object:
     )
 
 
-def _finish(state: RunState, now: datetime) -> object:
-    return state.check_finish(
-        phases={RunPhase.QUEUED, RunPhase.PREPARING, RunPhase.ANSWERING},
-        now=now,
-    )
+def _cancel(state: RunState, now: datetime) -> object:
+    return state.check_cancel(now=now)
+
+
+def _enqueue_failure(state: RunState, now: datetime) -> object:
+    return state.check_enqueue_failure(now=now)
 
 
 _FINISHED_CANCELLED = _finished(AgentRunStatus.FAILED, AgentRunErrorCode.CANCELLED)
@@ -148,6 +149,7 @@ def test_worker_sees_how_finished_run_ended_before_deadline_is_considered(
     assert check(state, _RECOVERY_DEADLINE_AT + timedelta(seconds=1)) == expected
 
 
+@pytest.mark.parametrize("check", [_cancel, _enqueue_failure])
 @pytest.mark.parametrize(
     ("state", "expected"),
     [
@@ -159,10 +161,10 @@ def test_worker_sees_how_finished_run_ended_before_deadline_is_considered(
     ],
 )
 def test_caller_without_attempt_sees_how_finished_run_ended(
-    state: RunState, expected: object
+    check: Check, state: RunState, expected: object
 ) -> None:
     """終了済みのRunを世代を持たない主体が判定すると、完了済み・失敗済みを含む終わり方が返る。"""
-    assert _finish(state, _RECOVERY_DEADLINE_AT + timedelta(seconds=1)) == expected
+    assert check(state, _RECOVERY_DEADLINE_AT + timedelta(seconds=1)) == expected
 
 
 @pytest.mark.parametrize("check", [_progress, _attempt_finish])
@@ -213,7 +215,7 @@ def test_progress_while_answering_is_limited_by_acceptance_deadline() -> None:
     )
 
 
-@pytest.mark.parametrize("check", [_attempt_finish, _finish])
+@pytest.mark.parametrize("check", [_attempt_finish, _cancel])
 def test_finishing_answering_run_is_allowed_until_recovery_deadline(
     check: Check,
 ) -> None:
@@ -223,7 +225,7 @@ def test_finishing_answering_run_is_allowed_until_recovery_deadline(
     )
 
 
-@pytest.mark.parametrize("check", [_attempt_finish, _finish])
+@pytest.mark.parametrize("check", [_attempt_finish, _cancel])
 def test_finishing_answering_run_expires_at_exact_recovery_deadline(
     check: Check,
 ) -> None:
@@ -235,7 +237,8 @@ def test_finishing_answering_run_expires_at_exact_recovery_deadline(
     ("state", "check"),
     [
         pytest.param(_preparing(), _attempt_finish, id="attempt_finish"),
-        pytest.param(_queued(), _finish, id="finish"),
+        pytest.param(_queued(), _cancel, id="cancel"),
+        pytest.param(_queued(), _enqueue_failure, id="enqueue_failure"),
     ],
 )
 def test_finishing_run_before_answer_expires_at_exact_deadline(
@@ -279,13 +282,18 @@ def test_current_attempt_outside_allowed_phases_is_a_bug(
         check(state, _DEADLINE_AT - timedelta(seconds=1))
 
 
+def test_enqueue_failure_is_allowed_for_queued_run_before_deadline() -> None:
+    """待機中のRunの投入の失敗は、受理期限の1秒前なら記録を許される。"""
+    assert _queued().check_enqueue_failure(now=_DEADLINE_AT - timedelta(seconds=1)) == (
+        CanContinue()
+    )
+
+
 @pytest.mark.parametrize("state", [_preparing(), _answering()])
-def test_finish_limited_to_queued_sees_attempt_already_started(state: RunState) -> None:
-    """待機中に限って終えようとしたRunをworkerが既に始めていたら、試行開始済みと返る。"""
+def test_enqueue_failure_sees_attempt_already_started(state: RunState) -> None:
+    """投入の失敗を記録しようとしたRunをworkerが既に始めていたら、試行開始済みと返る。"""
     assert (
-        state.check_finish(
-            phases={RunPhase.QUEUED}, now=_DEADLINE_AT - timedelta(seconds=1)
-        )
+        state.check_enqueue_failure(now=_DEADLINE_AT - timedelta(seconds=1))
         == AttemptAlreadyStarted()
     )
 

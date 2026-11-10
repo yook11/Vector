@@ -14,14 +14,17 @@ from opentelemetry.trace import StatusCode
 
 from app.agent.answering.contract import AnsweringRequest
 from app.agent.answering.evidence_answer.agent import EVIDENCE_ANSWER_AGENT
-from app.agent.answering.evidence_answer.contract import EvidenceAnswerInput
+from app.agent.answering.evidence_answer.contract import (
+    EvidenceAnswerDraft,
+    EvidenceAnswerInput,
+)
 from app.agent.answering.evidence_answer.evidence import AnswerInputEvidence
 from app.agent.answering.evidence_answer.service import EvidenceAnswerService
 from app.agent.contract import ExternalUrlSource
 from app.agent.llm_call.caller import LlmTextStreamer
 from app.agent.llm_call.gemini import GeminiLlmCaller
 from app.agent.planning.contract import TargetTimeWindow
-from tests.agent.answering_runner._harness import AllowAnswerGenerationStart
+from tests.agent.answering._fakes import ScriptedAnswerGenerationGate
 from tests.agent.llm_call._helpers import FakeGeminiClient
 from tests.agent.llm_call._tracing_helpers import span_text
 
@@ -86,10 +89,9 @@ async def test_phase_owns_all_provider_attempts_without_model_text(
         yield GeminiLlmCaller(client=cast(AsyncClient, client))
 
     draft = await EvidenceAnswerService(
-        schedule_deadline_check=lambda *_: None,
         agent=EVIDENCE_ANSWER_AGENT,
         llm_text_streamer_scope_factory=streamer_scope,
-        repository=AllowAnswerGenerationStart(),
+        gate=ScriptedAnswerGenerationGate(),
     ).answer(
         EvidenceAnswerInput(
             request=_request(),
@@ -113,7 +115,9 @@ async def test_phase_owns_all_provider_attempts_without_model_text(
         and (span.attributes or {}).get("logfire.span_type") == "span"
     ]
 
-    assert draft.answer == "MODEL_ANSWER_SENTINEL [[1]]"
+    assert draft == EvidenceAnswerDraft(
+        answer="MODEL_ANSWER_SENTINEL [[1]]", cited_refs=["1"]
+    )
     assert len(phase_spans) == 1
     assert len(attempt_spans) == 2
     phase = phase_spans[0]

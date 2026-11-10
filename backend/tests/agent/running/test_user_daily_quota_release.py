@@ -1,6 +1,7 @@
 """日次quotaの返却契約。
 
-実DBに seed した Run と利用枠に対して確かめ、競合は行ロックの待ちで再現する。
+実DBに seed した Run と利用枠に対して AgentRunStateService の操作で確かめる。
+競合は行ロックの待ちと commit の足止めで再現し、返却の観測は記録に差し替える。
 """
 
 from __future__ import annotations
@@ -34,7 +35,6 @@ from app.agent.running.state import (
     RunCompleted,
     RunNotFound,
 )
-from app.agent.running.state_repository import AgentRunStateRepository
 from app.agent.running.types import AgentRunErrorCode, AgentRunStatus
 from app.models.agent_message import AgentMessage
 from app.models.agent_run import AgentRun
@@ -42,6 +42,12 @@ from app.models.agent_thread import AgentThread
 from app.models.agent_user_daily_quota import AgentUserDailyQuota
 from tests.agent.run_deadline.clock import sweep_deadline_exceeded_runs_at
 from tests.agent.running._start_run_outcomes import started_attempt_epoch
+from tests.agent.running._state_service import (
+    CommitGate,
+    record_closed_runs,
+    state_service,
+    wait_until_lock_waiting,
+)
 from tests.conftest import TEST_ADMIN_ID, TEST_USER_ID
 
 pytestmark = pytest.mark.integration
@@ -189,18 +195,17 @@ async def _read_counter(
 async def _cancel(
     session_factory: async_sessionmaker[AsyncSession],
     seeded: _SeededRun,
+    monkeypatch: pytest.MonkeyPatch,
     *,
     user_id: uuid.UUID | None = None,
 ) -> tuple[object, list[ClosedRun]]:
     """キャンセルの結果と、そのキャンセルが閉じたRunの記録を返す。"""
-    async with session_factory() as session:
-        async with session.begin():
-            repository = AgentRunStateRepository(session)
-            result = await repository.cancel_for_user(
-                seeded.run_id,
-                user_id=user_id or seeded.user_id,
-            )
-    return result, repository.closed_runs
+    notices = record_closed_runs(monkeypatch)
+    result = await state_service(session_factory, notices=notices).cancel_for_user(
+        seeded.run_id,
+        user_id=user_id or seeded.user_id,
+    )
+    return result, notices.closed_runs
 
 
 def _queued_closed(
@@ -259,11 +264,12 @@ def _completed_result() -> AnswerQuestionResult:
 @pytest.mark.asyncio
 async def test_quota_queued_cancel_releases_to_zero_and_keeps_marker_and_row(
     session_factory: async_sessionmaker[AsyncSession],
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """queuedのRunのキャンセルは利用枠を0まで返し、Runの利用日と枠の行は残す。"""
     seeded = await _seed_run(session_factory)
 
-    result = await _cancel(session_factory, seeded)
+    result = await _cancel(session_factory, seeded, monkeypatch)
 
     async with session_factory() as session:
         run = await session.get(AgentRun, seeded.run_id)
@@ -290,12 +296,13 @@ async def test_quota_queued_cancel_releases_to_zero_and_keeps_marker_and_row(
 @pytest.mark.asyncio
 async def test_double_cancel_refunds_once_and_second_result_is_not_release_event(
     session_factory: async_sessionmaker[AsyncSession],
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """同じRunを2回キャンセルしても返却は1回だけで、2回目は停止済みと返り何も閉じない。"""
     seeded = await _seed_run(session_factory, counter_count=2)
 
-    first = await _cancel(session_factory, seeded)
-    second = await _cancel(session_factory, seeded)
+    first = await _cancel(session_factory, seeded, monkeypatch)
+    second = await _cancel(session_factory, seeded, monkeypatch)
 
     assert (
         await _read_counter(
@@ -315,11 +322,12 @@ async def test_double_cancel_refunds_once_and_second_result_is_not_release_event
 @pytest.mark.asyncio
 async def test_running_quota_cancel_is_not_eligible_and_returns_execution_epoch(
     session_factory: async_sessionmaker[AsyncSession],
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """runningのRunのキャンセルは利用枠を返さず、終了通知の送り先になる実行世代を記録する。"""
     seeded = await _seed_run(session_factory, status="running", attempt_epoch=1)
 
-    result = await _cancel(session_factory, seeded)
+    result = await _cancel(session_factory, seeded, monkeypatch)
 
     assert (
         await _read_counter(
@@ -353,12 +361,9 @@ async def test_quota_queued_deadline_exceeded_releases_to_zero(
         deadline_at=_FENCE_DEADLINE_AT,
     )
 
-    async with session_factory() as session:
-        async with session.begin():
-            await AgentRunStateRepository(session).start_attempt(
-                seeded.run_id,
-                now=_FENCE_DEADLINE_AT,
-            )
+    await state_service(session_factory, now=_FENCE_DEADLINE_AT).start_attempt(
+        seeded.run_id
+    )
 
     assert (
         await _read_counter(
@@ -383,12 +388,9 @@ async def test_quota_running_deadline_exceeded_keeps_reservation(
         deadline_at=_FENCE_DEADLINE_AT,
     )
 
-    async with session_factory() as session:
-        async with session.begin():
-            await AgentRunStateRepository(session).start_attempt(
-                seeded.run_id,
-                now=_FENCE_DEADLINE_AT,
-            )
+    await state_service(session_factory, now=_FENCE_DEADLINE_AT).start_attempt(
+        seeded.run_id
+    )
 
     assert (
         await _read_counter(
@@ -403,6 +405,7 @@ async def test_quota_running_deadline_exceeded_keeps_reservation(
 @pytest.mark.asyncio
 async def test_legacy_queued_cancel_is_not_eligible_without_counter(
     session_factory: async_sessionmaker[AsyncSession],
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """利用日を持たない旧来のqueuedのRunは、キャンセルしても返却の対象外になる。"""
     seeded = await _seed_run(
@@ -411,7 +414,7 @@ async def test_legacy_queued_cancel_is_not_eligible_without_counter(
         counter_count=None,
     )
 
-    result = await _cancel(session_factory, seeded)
+    result = await _cancel(session_factory, seeded, monkeypatch)
 
     assert result == (
         CancelledByUser(),
@@ -424,11 +427,12 @@ async def test_legacy_queued_cancel_is_not_eligible_without_counter(
 async def test_missing_or_zero_counter_cancels_without_underflow_as_inconsistent(
     session_factory: async_sessionmaker[AsyncSession],
     counter_count: int | None,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """利用枠の行が無いか0のときは、キャンセルしても負にせず不整合として返す。"""
     seeded = await _seed_run(session_factory, counter_count=counter_count)
 
-    result = await _cancel(session_factory, seeded)
+    result = await _cancel(session_factory, seeded, monkeypatch)
 
     assert (
         await _read_counter(
@@ -447,6 +451,7 @@ async def test_missing_or_zero_counter_cancels_without_underflow_as_inconsistent
 @pytest.mark.asyncio
 async def test_other_user_cannot_cancel_and_owner_releases_only_original_date(
     session_factory: async_sessionmaker[AsyncSession],
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """他のユーザーはキャンセルできず、持ち主のキャンセルはRunの利用日の枠だけを返す。"""
     seeded = await _seed_run(session_factory, counter_count=2)
@@ -460,8 +465,8 @@ async def test_other_user_cannot_cancel_and_owner_releases_only_original_date(
         )
         await setup.commit()
 
-    denied = await _cancel(session_factory, seeded, user_id=_ADMIN_ID)
-    released = await _cancel(session_factory, seeded)
+    denied = await _cancel(session_factory, seeded, monkeypatch, user_id=_ADMIN_ID)
+    released = await _cancel(session_factory, seeded, monkeypatch)
 
     assert denied == (RunNotFound(), [])
     assert (
@@ -489,43 +494,44 @@ async def test_other_user_cannot_cancel_and_owner_releases_only_original_date(
 @pytest.mark.asyncio
 async def test_cancel_winner_refunds_before_waiting_start_loses(
     session_factory: async_sessionmaker[AsyncSession],
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """先にロックを取ったキャンセルが利用枠を返し、ロックを待っていた開始は停止済みを見て開始しない。"""
     seeded = await _seed_run(session_factory)
+    notices = record_closed_runs(monkeypatch)
+    cancel_gate = CommitGate(session_factory)
 
-    async with (
-        session_factory() as cancel_session,
-        session_factory() as start_session,
-        session_factory() as observer,
-    ):
+    async with session_factory() as observer:
+        cancel_task = None
         start_task = None
         try:
-            await cancel_session.begin()
-            cancel_repository = AgentRunStateRepository(cancel_session)
-            cancel_result = await cancel_repository.cancel_for_user(
-                seeded.run_id,
-                user_id=_USER_ID,
+            cancel_task = asyncio.create_task(
+                state_service(cancel_gate, notices=notices).cancel_for_user(  # type: ignore[arg-type]
+                    seeded.run_id,
+                    user_id=_USER_ID,
+                )
             )
+            await asyncio.wait_for(cancel_gate.reached.wait(), timeout=5)
 
-            await start_session.begin()
-            start_pid = await start_session.scalar(text("SELECT pg_backend_pid()"))
-            assert isinstance(start_pid, int)
             start_task = asyncio.create_task(
-                AgentRunStateRepository(start_session).start_attempt(seeded.run_id)
+                state_service(session_factory, notices=notices).start_attempt(
+                    seeded.run_id
+                )
             )
-            await _wait_until_blocked(observer, start_pid)
+            await wait_until_lock_waiting(observer)
 
-            await cancel_session.commit()
+            cancel_gate.open()
+            cancel_result = await asyncio.wait_for(cancel_task, timeout=5)
             start_result = await asyncio.wait_for(start_task, timeout=5)
-            await start_session.commit()
         finally:
-            if start_task is not None:
-                if not start_task.done():
-                    start_task.cancel()
-                await asyncio.gather(start_task, return_exceptions=True)
-            for session in (cancel_session, start_session, observer):
-                if session.in_transaction():
-                    await session.rollback()
+            cancel_gate.open()
+            for task in (cancel_task, start_task):
+                if task is not None:
+                    if not task.done():
+                        task.cancel()
+                    await asyncio.gather(task, return_exceptions=True)
+            if observer.in_transaction():
+                await observer.rollback()
 
     assert start_result == CancelledByUser()
     assert (
@@ -536,7 +542,7 @@ async def test_cancel_winner_refunds_before_waiting_start_loses(
         )
         == 0
     )
-    assert (cancel_result, cancel_repository.closed_runs) == (
+    assert (cancel_result, notices.closed_runs) == (
         CancelledByUser(),
         _queued_closed(seeded, DailyQuotaReleaseOutcome.RELEASED),
     )
@@ -545,49 +551,48 @@ async def test_cancel_winner_refunds_before_waiting_start_loses(
 @pytest.mark.asyncio
 async def test_cancel_waiting_on_run_lock_uses_winning_status_update_for_release(
     session_factory: async_sessionmaker[AsyncSession],
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """ロックを待つ間にRunが開始されたら、キャンセルはロック後のrunningとして終え利用枠を返さない。"""
     seeded = await _seed_run(session_factory)
+    notices = record_closed_runs(monkeypatch)
+    start_gate = CommitGate(session_factory)
 
-    async with (
-        session_factory() as locker,
-        session_factory() as contender,
-        session_factory() as observer,
-    ):
+    async with session_factory() as observer:
+        start_task = None
         cancel_task = None
         try:
-            await locker.begin()
-            await _lock_run_row(locker, seeded.run_id)
+            start_task = asyncio.create_task(
+                state_service(start_gate, notices=notices).start_attempt(  # type: ignore[arg-type]
+                    seeded.run_id
+                )
+            )
+            await asyncio.wait_for(start_gate.reached.wait(), timeout=5)
 
-            await contender.begin()
-            contender_pid = await contender.scalar(text("SELECT pg_backend_pid()"))
-            assert isinstance(contender_pid, int)
-            cancel_repository = AgentRunStateRepository(contender)
             cancel_task = asyncio.create_task(
-                cancel_repository.cancel_for_user(
+                state_service(session_factory, notices=notices).cancel_for_user(
                     seeded.run_id,
                     user_id=_USER_ID,
                 )
             )
+            await wait_until_lock_waiting(observer)
 
-            await _wait_until_blocked(observer, contender_pid)
-
+            start_gate.open()
             attempt_epoch = started_attempt_epoch(
-                await AgentRunStateRepository(locker).start_attempt(seeded.run_id)
+                await asyncio.wait_for(start_task, timeout=5)
             )
             assert attempt_epoch == 1
-            await locker.commit()
 
             cancel_result = await asyncio.wait_for(cancel_task, timeout=5)
-            await contender.commit()
         finally:
-            if cancel_task is not None:
-                if not cancel_task.done():
-                    cancel_task.cancel()
-                await asyncio.gather(cancel_task, return_exceptions=True)
-            for session in (locker, contender, observer):
-                if session.in_transaction():
-                    await session.rollback()
+            start_gate.open()
+            for task in (start_task, cancel_task):
+                if task is not None:
+                    if not task.done():
+                        task.cancel()
+                    await asyncio.gather(task, return_exceptions=True)
+            if observer.in_transaction():
+                await observer.rollback()
 
     assert (
         await _read_counter(
@@ -605,7 +610,7 @@ async def test_cancel_waiting_on_run_lock_uses_winning_status_update_for_release
             "cancelled",
             1,
         )
-    assert (cancel_result, cancel_repository.closed_runs) == (
+    assert (cancel_result, notices.closed_runs) == (
         CancelledByUser(),
         [
             ClosedRunningRun(
@@ -622,6 +627,7 @@ async def test_cancel_waiting_on_run_lock_uses_winning_status_update_for_release
 @pytest.mark.asyncio
 async def test_waiting_deadline_sweep_does_not_overwrite_cancel_or_expired_start(
     session_factory: async_sessionmaker[AsyncSession],
+    monkeypatch: pytest.MonkeyPatch,
     terminalizer: str,
 ) -> None:
     """回収がロックを待つ間に先に終えたキャンセルや開始時の期限切れを、回収は上書きせず二重に返さない。"""
@@ -630,35 +636,33 @@ async def test_waiting_deadline_sweep_does_not_overwrite_cancel_or_expired_start
         created_at=_NOW - timedelta(seconds=61),
         deadline_at=_NOW - timedelta(seconds=1),
     )
+    notices = record_closed_runs(monkeypatch)
+    winner_gate = CommitGate(session_factory)
+    if terminalizer == "cancel":
+        # 期限を過ぎたキャンセルは期限切れで終えるため、受理期限の前に行う。
+        winner = state_service(
+            winner_gate,  # type: ignore[arg-type]
+            notices=notices,
+            now=_NOW - timedelta(seconds=2),
+        ).cancel_for_user(seeded.run_id, user_id=_USER_ID)
+        expected_winner_result: object = CancelledByUser()
+    else:
+        winner = state_service(
+            winner_gate,  # type: ignore[arg-type]
+            notices=notices,
+            now=_NOW,
+        ).start_attempt(seeded.run_id)
+        expected_winner_result = DeadlineExceeded()
+
     async with (
-        session_factory() as winner_session,
         session_factory() as sweep_session,
         session_factory() as observer,
     ):
+        winner_task = None
         sweep_task = None
         try:
-            await winner_session.begin()
-            winner_repository = AgentRunStateRepository(winner_session)
-            if terminalizer == "cancel":
-                cancel_result = await winner_repository.cancel_for_user(
-                    seeded.run_id,
-                    user_id=_USER_ID,
-                    # 期限を過ぎたキャンセルは期限切れで終えるため、受理期限の前に行う。
-                    now=_NOW - timedelta(seconds=2),
-                )
-                assert (cancel_result, winner_repository.closed_runs) == (
-                    CancelledByUser(),
-                    _queued_closed(seeded, DailyQuotaReleaseOutcome.RELEASED),
-                )
-            else:
-                expiry_result = await winner_repository.start_attempt(
-                    seeded.run_id,
-                    now=_NOW,
-                )
-                assert (expiry_result, winner_repository.closed_runs) == (
-                    DeadlineExceeded(),
-                    _queued_closed(seeded, DailyQuotaReleaseOutcome.RELEASED),
-                )
+            winner_task = asyncio.create_task(winner)
+            await asyncio.wait_for(winner_gate.reached.wait(), timeout=5)
 
             await sweep_session.begin()
             sweep_pid = await sweep_session.scalar(text("SELECT pg_backend_pid()"))
@@ -668,18 +672,25 @@ async def test_waiting_deadline_sweep_does_not_overwrite_cancel_or_expired_start
             )
             await _wait_until_blocked(observer, sweep_pid)
 
-            await winner_session.commit()
+            winner_gate.open()
+            winner_result = await asyncio.wait_for(winner_task, timeout=5)
             sweep_result = await asyncio.wait_for(sweep_task, timeout=5)
             await sweep_session.commit()
         finally:
-            if sweep_task is not None:
-                if not sweep_task.done():
-                    sweep_task.cancel()
-                await asyncio.gather(sweep_task, return_exceptions=True)
-            for session in (winner_session, sweep_session, observer):
+            winner_gate.open()
+            for task in (winner_task, sweep_task):
+                if task is not None:
+                    if not task.done():
+                        task.cancel()
+                    await asyncio.gather(task, return_exceptions=True)
+            for session in (sweep_session, observer):
                 if session.in_transaction():
                     await session.rollback()
 
+    assert (winner_result, notices.closed_runs) == (
+        expected_winner_result,
+        _queued_closed(seeded, DailyQuotaReleaseOutcome.RELEASED),
+    )
     assert sweep_result.queued_terminal_count == 0
     assert sweep_result.queued_quota_released_count == 0
     assert sweep_result.queued_quota_not_eligible_count == 0
@@ -716,6 +727,7 @@ async def test_waiting_deadline_sweep_does_not_overwrite_cancel_or_expired_start
 @pytest.mark.asyncio
 async def test_record_failure_never_refunds(
     session_factory: async_sessionmaker[AsyncSession],
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """runningのRunの失敗記録は利用枠を返さず、その後のキャンセルも失敗済みと返り何も閉じない。"""
     seeded = await _seed_run(
@@ -723,28 +735,28 @@ async def test_record_failure_never_refunds(
         status="running",
         attempt_epoch=3,
     )
+    transition_notices = record_closed_runs(monkeypatch)
 
-    async with session_factory() as transition_session:
-        async with transition_session.begin():
-            transition_repository = AgentRunStateRepository(transition_session)
-            recorded = await transition_repository.record_failure(
-                seeded.run_id,
+    recorded = await state_service(
+        session_factory, notices=transition_notices
+    ).record_failure(
+        seeded.run_id,
+        attempt_epoch=3,
+        error_code=AgentRunErrorCode.INTERNAL_ERROR,
+    )
+    assert (recorded, transition_notices.closed_runs) == (
+        FailureRecorded(),
+        [
+            ClosedRunningRun(
+                run_id=seeded.run_id,
                 attempt_epoch=3,
+                status=AgentRunStatus.FAILED,
                 error_code=AgentRunErrorCode.INTERNAL_ERROR,
             )
-            assert (recorded, transition_repository.closed_runs) == (
-                FailureRecorded(),
-                [
-                    ClosedRunningRun(
-                        run_id=seeded.run_id,
-                        attempt_epoch=3,
-                        status=AgentRunStatus.FAILED,
-                        error_code=AgentRunErrorCode.INTERNAL_ERROR,
-                    )
-                ],
-            )
+        ],
+    )
 
-    result = await _cancel(session_factory, seeded)
+    result = await _cancel(session_factory, seeded, monkeypatch)
 
     assert (
         await _read_counter(
@@ -768,6 +780,7 @@ async def test_record_failure_never_refunds(
 @pytest.mark.asyncio
 async def test_competing_terminal_transition_wins_without_refund(
     session_factory: async_sessionmaker[AsyncSession],
+    monkeypatch: pytest.MonkeyPatch,
     transition: str,
     status: str,
     attempt_epoch: int,
@@ -787,35 +800,59 @@ async def test_competing_terminal_transition_wins_without_refund(
         ),
         answer_started_at=_NOW if transition == "complete" else None,
     )
+    notices = record_closed_runs(monkeypatch)
+    transition_gate = CommitGate(session_factory)
 
     async with (
         session_factory() as locker,
-        session_factory() as cancel_session,
         session_factory() as observer,
     ):
+        transition_task = None
         cancel_task = None
         try:
-            await locker.begin()
-            await _lock_run_row(locker, seeded.run_id)
+            # 回収は操作ではないので、テストのセッションで行ロックを握ってから回収する。
+            if transition == "deadline_sweep":
+                await locker.begin()
+                await _lock_run_row(locker, seeded.run_id)
+            elif transition == "enqueue_failed":
+                transition_task = asyncio.create_task(
+                    state_service(
+                        transition_gate,  # type: ignore[arg-type]
+                        notices=notices,
+                    ).record_enqueue_failure(seeded.run_id)
+                )
+                await asyncio.wait_for(transition_gate.reached.wait(), timeout=5)
+            else:
+                transition_task = asyncio.create_task(
+                    state_service(
+                        transition_gate,  # type: ignore[arg-type]
+                        notices=notices,
+                        now=_NOW,
+                    ).complete(
+                        seeded.run_id,
+                        attempt_epoch=1,
+                        result=_completed_result(),
+                        research_handoff=None,
+                    )
+                )
+                await asyncio.wait_for(transition_gate.reached.wait(), timeout=5)
 
-            await cancel_session.begin()
-            cancel_pid = await cancel_session.scalar(text("SELECT pg_backend_pid()"))
-            assert isinstance(cancel_pid, int)
-            cancel_repository = AgentRunStateRepository(cancel_session)
             cancel_task = asyncio.create_task(
-                cancel_repository.cancel_for_user(
+                state_service(session_factory, notices=notices).cancel_for_user(
                     seeded.run_id,
                     user_id=_USER_ID,
                 )
             )
-            await _wait_until_blocked(observer, cancel_pid)
+            await wait_until_lock_waiting(observer)
 
-            repository = AgentRunStateRepository(locker)
             if transition == "enqueue_failed":
-                recorded = await repository.record_enqueue_failure(seeded.run_id)
-                assert (recorded, repository.closed_runs) == (
-                    FailureRecorded(),
-                    _queued_closed(seeded, DailyQuotaReleaseOutcome.RELEASED),
+                assert transition_task is not None
+                transition_gate.open()
+                async with asyncio.timeout(5):
+                    recorded = await transition_task
+                assert recorded == FailureRecorded()
+                expected_closed = _queued_closed(
+                    seeded, DailyQuotaReleaseOutcome.RELEASED
                 )
             elif transition == "deadline_sweep":
                 sweep_result = await sweep_deadline_exceeded_runs_at(locker, at=_NOW)
@@ -825,34 +862,32 @@ async def test_competing_terminal_transition_wins_without_refund(
                 assert sweep_result.queued_quota_inconsistent_count == 0
                 assert sweep_result.running_terminal_runs == ()
                 assert sweep_result.running_quota_reservation_count == 0
+                await locker.commit()
+                expected_closed = []
             else:
-                completed = await repository.complete(
-                    seeded.run_id,
-                    attempt_epoch=1,
-                    result=_completed_result(),
-                    now=_NOW,
-                )
-                assert (completed, repository.closed_runs) == (
-                    RunCompleted(),
-                    [
-                        ClosedRunningRun(
-                            run_id=seeded.run_id,
-                            attempt_epoch=1,
-                            status=AgentRunStatus.COMPLETED,
-                            error_code=None,
-                        )
-                    ],
-                )
-            await locker.commit()
+                assert transition_task is not None
+                transition_gate.open()
+                async with asyncio.timeout(5):
+                    completed = await transition_task
+                assert completed == RunCompleted()
+                expected_closed = [
+                    ClosedRunningRun(
+                        run_id=seeded.run_id,
+                        attempt_epoch=1,
+                        status=AgentRunStatus.COMPLETED,
+                        error_code=None,
+                    )
+                ]
 
             cancel_result = await asyncio.wait_for(cancel_task, timeout=5)
-            await cancel_session.commit()
         finally:
-            if cancel_task is not None:
-                if not cancel_task.done():
-                    cancel_task.cancel()
-                await asyncio.gather(cancel_task, return_exceptions=True)
-            for session in (locker, cancel_session, observer):
+            transition_gate.open()
+            for task in (transition_task, cancel_task):
+                if task is not None:
+                    if not task.done():
+                        task.cancel()
+                    await asyncio.gather(task, return_exceptions=True)
+            for session in (locker, observer):
                 if session.in_transaction():
                     await session.rollback()
 
@@ -864,7 +899,7 @@ async def test_competing_terminal_transition_wins_without_refund(
         )
         == expected_counter
     )
-    assert (cancel_result, cancel_repository.closed_runs) == (expected_outcome, [])
+    assert (cancel_result, notices.closed_runs) == (expected_outcome, expected_closed)
 
 
 @pytest.mark.parametrize(
@@ -879,11 +914,12 @@ async def test_terminal_cancel_is_not_a_release_event(
     session_factory: async_sessionmaker[AsyncSession],
     status: str,
     outcome: object,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """終了済みのRunのキャンセルは終わり方を返すだけで何も閉じず、利用枠を返さない。"""
     seeded = await _seed_run(session_factory, status=status)
 
-    result = await _cancel(session_factory, seeded)
+    result = await _cancel(session_factory, seeded, monkeypatch)
 
     assert (
         await _read_counter(
@@ -900,73 +936,82 @@ async def test_terminal_cancel_is_not_a_release_event(
 @pytest.mark.asyncio
 async def test_release_and_reserve_linearize_in_quota_row_lock_order(
     session_factory: async_sessionmaker[AsyncSession],
+    monkeypatch: pytest.MonkeyPatch,
     first_winner: str,
 ) -> None:
     """キャンセルによる返却と予約は利用枠の行ロックの順に直列化され、後の側は先の側の結果を見る。"""
     seeded = await _seed_run(session_factory, counter_count=10)
+    notices = record_closed_runs(monkeypatch)
+    release_gate = CommitGate(session_factory)
 
     async with (
-        session_factory() as winner,
-        session_factory() as contender,
+        session_factory() as reservation_session,
         session_factory() as observer,
     ):
-        contender_task = None
+        release_task = None
+        reservation_task = None
         try:
-            await winner.begin()
             if first_winner == "release":
-                release_repository = AgentRunStateRepository(winner)
-                release_result = await release_repository.cancel_for_user(
-                    seeded.run_id,
-                    user_id=_USER_ID,
+                release_task = asyncio.create_task(
+                    state_service(
+                        release_gate,  # type: ignore[arg-type]
+                        notices=notices,
+                    ).cancel_for_user(seeded.run_id, user_id=_USER_ID)
                 )
+                await asyncio.wait_for(release_gate.reached.wait(), timeout=5)
 
-                await contender.begin()
-                contender_pid = await contender.scalar(text("SELECT pg_backend_pid()"))
-                assert isinstance(contender_pid, int)
-                contender_task = asyncio.create_task(
-                    contender.execute(_reservation_statement(_USER_ID))
+                await reservation_session.begin()
+                reservation_pid = await reservation_session.scalar(
+                    text("SELECT pg_backend_pid()")
                 )
-                await _wait_until_blocked(observer, contender_pid)
+                assert isinstance(reservation_pid, int)
+                reservation_task = asyncio.create_task(
+                    reservation_session.execute(_reservation_statement(_USER_ID))
+                )
+                await _wait_until_blocked(observer, reservation_pid)
 
-                await winner.commit()
+                release_gate.open()
+                release_result = await asyncio.wait_for(release_task, timeout=5)
                 reservation_result = await asyncio.wait_for(
-                    contender_task,
+                    reservation_task,
                     timeout=5,
                 )
-                await contender.commit()
+                await reservation_session.commit()
                 reservation = reservation_result.mappings().one()
                 assert reservation["used_count"] == 10
                 expected_count = 10
             else:
+                await reservation_session.begin()
                 rejection = (
-                    (await winner.execute(_reservation_statement(_USER_ID)))
+                    (
+                        await reservation_session.execute(
+                            _reservation_statement(_USER_ID)
+                        )
+                    )
                     .mappings()
                     .one()
                 )
                 assert rejection["used_count"] is None
 
-                await contender.begin()
-                contender_pid = await contender.scalar(text("SELECT pg_backend_pid()"))
-                assert isinstance(contender_pid, int)
-                release_repository = AgentRunStateRepository(contender)
-                contender_task = asyncio.create_task(
-                    release_repository.cancel_for_user(
+                release_task = asyncio.create_task(
+                    state_service(session_factory, notices=notices).cancel_for_user(
                         seeded.run_id,
                         user_id=_USER_ID,
                     )
                 )
-                await _wait_until_blocked(observer, contender_pid)
+                await wait_until_lock_waiting(observer)
 
-                await winner.commit()
-                release_result = await asyncio.wait_for(contender_task, timeout=5)
-                await contender.commit()
+                await reservation_session.commit()
+                release_result = await asyncio.wait_for(release_task, timeout=5)
                 expected_count = 9
         finally:
-            if contender_task is not None:
-                if not contender_task.done():
-                    contender_task.cancel()
-                await asyncio.gather(contender_task, return_exceptions=True)
-            for session in (winner, contender, observer):
+            release_gate.open()
+            for task in (release_task, reservation_task):
+                if task is not None:
+                    if not task.done():
+                        task.cancel()
+                    await asyncio.gather(task, return_exceptions=True)
+            for session in (reservation_session, observer):
                 if session.in_transaction():
                     await session.rollback()
 
@@ -978,7 +1023,7 @@ async def test_release_and_reserve_linearize_in_quota_row_lock_order(
         )
         == expected_count
     )
-    assert (release_result, release_repository.closed_runs) == (
+    assert (release_result, notices.closed_runs) == (
         CancelledByUser(),
         _queued_closed(seeded, DailyQuotaReleaseOutcome.RELEASED),
     )

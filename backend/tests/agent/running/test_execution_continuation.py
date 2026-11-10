@@ -15,12 +15,13 @@ from app.agent.running.state import (
     CanContinue,
     CannotContinue,
     DeadlineExceeded,
+    RunPhaseMismatchError,
 )
-from app.agent.running.state_repository import AgentRunStateRepository
 from app.agent.running.types import AgentRunStatus
 from app.models.agent_run import AgentRun
 from app.models.agent_user_daily_quota import AgentUserDailyQuota
 from tests.agent.running._seed import create_thread_message_run
+from tests.agent.running._state_service import ClosedRunNotices, state_service
 from tests.conftest import TEST_USER_ID
 
 pytestmark = pytest.mark.integration
@@ -37,6 +38,7 @@ async def _seed_running(
     *,
     status: str = "running",
     attempt_epoch: int = 1,
+    answer_started_at: datetime | None = None,
 ) -> uuid.UUID:
     async with session_factory() as session:
         session.add(
@@ -51,6 +53,7 @@ async def _seed_running(
             status=status,
             created_at=_CREATED_AT,
             deadline_at=_DEADLINE_AT,
+            answer_started_at=answer_started_at,
             attempt_epoch=attempt_epoch,
             quota_usage_date=_USAGE_DATE,
         )
@@ -64,15 +67,11 @@ async def _decide(
     attempt_epoch: int,
     now: datetime,
 ) -> tuple[CanContinue | CannotContinue, list[ClosedRun]]:
-    async with session_factory() as session:
-        async with session.begin():
-            repository = AgentRunStateRepository(session)
-            result = await repository.check_continuation(
-                run_id,
-                attempt_epoch=attempt_epoch,
-                now=now,
-            )
-    return result, repository.closed_runs
+    notices = ClosedRunNotices()
+    result = await state_service(
+        session_factory, notices=notices, now=now
+    ).authorize_stage_entry(run_id, attempt_epoch=attempt_epoch)
+    return result, notices.closed_runs
 
 
 async def _load(
@@ -166,3 +165,23 @@ async def test_already_expired_run_stops_without_rewrite(
     )
     assert result == (DeadlineExceeded(), [])
     assert await _load(session_factory, run_id) == ("deadline_exceeded", 1, 1)
+
+
+@pytest.mark.asyncio
+async def test_stage_entry_after_answer_start_is_a_phase_mismatch_without_expiring(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    """回答を始めた試行が工程に入ろうとすると、受理期限ちょうどでも期限切れにせず、呼び出し順の誤りとして例外になる。"""
+    run_id = await _seed_running(
+        session_factory, answer_started_at=_DEADLINE_AT - timedelta(seconds=10)
+    )
+
+    with pytest.raises(RunPhaseMismatchError):
+        await _decide(
+            session_factory,
+            run_id=run_id,
+            attempt_epoch=1,
+            now=_DEADLINE_AT,
+        )
+
+    assert await _load(session_factory, run_id) == ("running", 1, 1)

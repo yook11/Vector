@@ -50,10 +50,10 @@ from app.agent.planning.contract import (
     TargetTimeWindow,
 )
 from app.agent.research_handoff import ResearchHandoff, ResearchHandoffInput
-from app.agent.running.state import AttemptSuperseded
-from app.agent.running.stop import AnswerGenerationStopped
+from app.agent.running.state import AttemptSuperseded, CannotContinue
 from tests.agent.answering_runner._harness import (
     PassThroughOrganizer,
+    RecordingStageGate,
     fixed_scope,
     run_identity,
 )
@@ -192,6 +192,7 @@ def _search_runner(
     )
     return AnsweringRunner(
         phases_factory=lambda: phases,
+        stage_gate=RecordingStageGate(),
     )
 
 
@@ -262,6 +263,7 @@ async def test_direct_answer_plan_leaves_handoff_none() -> None:
     )
     runner = AnsweringRunner(
         phases_factory=lambda: phases,
+        stage_gate=RecordingStageGate(),
     )
 
     result = await _run(runner)
@@ -345,12 +347,14 @@ async def test_builder_exception_yields_none_handoff_and_continues_answering(
 
 
 class _StoppingEvidenceAnswerer:
-    """streamingの途中で停止する回答工程。並行taskへ一度制御を渡してから止まる。"""
+    """並行taskへ一度制御を渡してから、Runが止まった理由を返す回答工程。"""
 
-    async def answer(self, input: EvidenceAnswerInput) -> EvidenceAnswerDraft:
+    async def answer(
+        self, input: EvidenceAnswerInput
+    ) -> EvidenceAnswerDraft | CannotContinue:
         del input
         await asyncio.sleep(0)
-        raise AnswerGenerationStopped(AttemptSuperseded())
+        return AttemptSuperseded()
 
 
 class _FailingEvidenceAnswerer:
@@ -463,10 +467,7 @@ async def test_an_organizer_that_never_finishes_is_cut_off_and_the_ledger_surviv
 
 
 async def test_stopping_the_answer_cancels_the_organizer_and_writes_nothing() -> None:
-    """停止したRunはRunResultを返さないため、申し送りは書かれない。
-
-    並行taskはRunを抜ける前にcancelして合流し、Runの外へ残さない。
-    """
+    """回答工程が止まった理由を返すと、整理をcancelして合流してから同じ理由を返す。"""
     organizer = _NeverFinishingOrganizer()
     runner = _search_runner(
         plan=_plan(research_goal="調査目標"),
@@ -479,10 +480,9 @@ async def test_stopping_the_answer_cancels_the_organizer_and_writes_nothing() ->
         evidence_answerer=_StoppingEvidenceAnswerer(),
     )
 
-    with pytest.raises(AnswerGenerationStopped):
-        await _run(runner)
+    outcome = await _run(runner)
 
-    assert organizer.cancelled.is_set()
+    assert (outcome, organizer.cancelled.is_set()) == (AttemptSuperseded(), True)
 
 
 async def test_a_failed_answer_cancels_the_organizer_and_fails_the_run() -> None:
