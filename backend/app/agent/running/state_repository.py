@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import uuid as uuid_mod
 from dataclasses import dataclass
-from datetime import date, datetime
+from datetime import datetime
 from typing import Any
 
 from sqlalchemy import func, select, update
@@ -26,25 +26,26 @@ from app.models.agent_message import AgentMessage
 from app.models.agent_run import AgentRun
 from app.models.agent_thread import AgentThread
 
-__all__ = ["AgentRunStateRepository", "LockedRun"]
+__all__ = ["AgentRunStateRepository", "CurrentRun"]
 
 _LOCK_TIMEOUT = "3s"
 
 
 @dataclass(frozen=True, slots=True)
-class LockedRun:
-    run: AgentRun
-    thread: AgentThread
+class CurrentRun:
+    """ロックした時点のRunの状態と時刻で、同じ操作の中で書き込んでも変わらない。"""
+
     state: RunState
     now: datetime
 
 
 class AgentRunStateRepository:
-    """トランザクションは呼び出し元が所有し、nowを渡すとDBの時刻の代わりに使う。"""
+    """トランザクションは呼び出し元が所有し、lockで読んだRunとそのthreadへ書き、nowを渡すとDBの時刻の代わりに使う。"""
 
     def __init__(self, session: AsyncSession, *, now: datetime | None = None) -> None:
         self._session = session
         self._now = now
+        self._locked_rows: tuple[AgentRun, AgentThread] | None = None
 
     async def lock(
         self,
@@ -52,7 +53,7 @@ class AgentRunStateRepository:
         *,
         owner_id: uuid_mod.UUID | None = None,
         lock_thread: bool = False,
-    ) -> LockedRun | RunNotFound:
+    ) -> CurrentRun | RunNotFound:
         await self._session.execute(
             select(func.set_config("lock_timeout", _LOCK_TIMEOUT, True))
         )
@@ -69,11 +70,10 @@ class AgentRunStateRepository:
         if row is None:
             return RunNotFound()
         run, thread = row
+        self._locked_rows = (run, thread)
         # ロック待ちの間に期限を越えうるため、時刻はロックを取った後に読む。
         locked_now = await database_now(self._session, self._now)
-        return LockedRun(
-            run=run,
-            thread=thread,
+        return CurrentRun(
             state=RunState(
                 status=AgentRunStatus(run.status),
                 error_code=(
@@ -88,23 +88,17 @@ class AgentRunStateRepository:
             now=locked_now,
         )
 
-    async def mark_attempt_started(
-        self, run_id: uuid_mod.UUID, *, attempt_epoch: int
-    ) -> None:
+    async def mark_attempt_started(self, *, attempt_epoch: int) -> None:
         await self._update_run(
-            run_id,
             status=AgentRunStatus.RUNNING.value,
             attempt_epoch=attempt_epoch,
         )
 
-    async def mark_answer_started(
-        self, run_id: uuid_mod.UUID, *, answer_started_at: datetime
-    ) -> None:
-        await self._update_run(run_id, answer_started_at=answer_started_at)
+    async def mark_answer_started(self, *, answer_started_at: datetime) -> None:
+        await self._update_run(answer_started_at=answer_started_at)
 
     async def close(
         self,
-        run_id: uuid_mod.UUID,
         *,
         status: AgentRunStatus,
         error_code: AgentRunErrorCode | None = None,
@@ -116,21 +110,21 @@ class AgentRunStateRepository:
             values["error_code"] = error_code.value
         if assistant_message_id is not None:
             values["assistant_message_id"] = assistant_message_id
-        await self._update_run(run_id, **values)
+        await self._update_run(**values)
 
-    async def release_daily_quota(
-        self, *, user_id: uuid_mod.UUID, usage_date: date | None
-    ) -> DailyQuotaReleaseOutcome:
+    async def release_daily_quota(self) -> DailyQuotaReleaseOutcome:
+        run, thread = self._rows()
         return await release_daily_quota(
-            self._session, user_id=user_id, usage_date=usage_date
+            self._session, user_id=thread.user_id, usage_date=run.quota_usage_date
         )
 
     async def add_assistant_message(
-        self, thread_id: uuid_mod.UUID, *, result: AnswerQuestionResult
+        self, *, result: AnswerQuestionResult
     ) -> uuid_mod.UUID:
+        _, thread = self._rows()
         assistant_message = build_assistant_message_for_result(
-            thread_id=thread_id,
-            seq=await self._next_message_seq(thread_id),
+            thread_id=thread.id,
+            seq=await self._next_message_seq(thread.id),
             result=result,
         )
         self._session.add(assistant_message)
@@ -139,21 +133,27 @@ class AgentRunStateRepository:
         await self._session.flush()
         return assistant_message.id
 
-    def touch_thread(self, thread: AgentThread, *, updated_at: datetime) -> None:
+    def touch_thread(self, *, updated_at: datetime) -> None:
+        _, thread = self._rows()
         thread.updated_at = updated_at
 
-    def replace_research_handoff(
-        self, thread: AgentThread, research_handoff: dict[str, Any]
-    ) -> None:
+    def replace_research_handoff(self, research_handoff: dict[str, Any]) -> None:
+        _, thread = self._rows()
         thread.research_handoff = research_handoff
 
-    async def _update_run(self, run_id: uuid_mod.UUID, **values: object) -> None:
+    async def _update_run(self, **values: object) -> None:
+        run, _ = self._rows()
         await self._session.execute(
             update(AgentRun)
-            .where(AgentRun.id == run_id)
+            .where(AgentRun.id == run.id)
             .values(**values)
             .execution_options(synchronize_session=False)
         )
+
+    def _rows(self) -> tuple[AgentRun, AgentThread]:
+        if self._locked_rows is None:
+            raise RuntimeError("the run must be locked before it is written")
+        return self._locked_rows
 
     async def _next_message_seq(self, thread_id: uuid_mod.UUID) -> int:
         value = (
