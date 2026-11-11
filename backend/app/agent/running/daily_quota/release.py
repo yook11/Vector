@@ -3,7 +3,6 @@ from __future__ import annotations
 import uuid
 from dataclasses import dataclass
 from datetime import date
-from enum import StrEnum
 
 from sqlalchemy import (
     Integer,
@@ -16,37 +15,27 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.agent_user_daily_quota import AgentUserDailyQuota
 
 
-class DailyQuotaReleaseOutcome(StrEnum):
-    RELEASED = "released"
-    NOT_ELIGIBLE = "not_eligible"
-    INCONSISTENT = "inconsistent"
-
-
 async def release_daily_quota(
     session: AsyncSession,
     *,
     user_id: uuid.UUID,
     usage_date: date | None,
-) -> DailyQuotaReleaseOutcome:
+) -> None:
+    """処理が始まらないまま終了したRunについて、ユーザーに利用枠を1回分返却する。"""
+    # 利用枠を使わずに作られた古いRunは、返却するものが無い。
     if usage_date is None:
-        return DailyQuotaReleaseOutcome.NOT_ELIGIBLE
-
-    released_user_id = (
-        await session.execute(
-            update(AgentUserDailyQuota)
-            .where(
-                AgentUserDailyQuota.user_id == user_id,
-                AgentUserDailyQuota.usage_date == usage_date,
-                AgentUserDailyQuota.used_count > 0,
-            )
-            .values(used_count=AgentUserDailyQuota.used_count - 1)
-            .returning(AgentUserDailyQuota.user_id)
-            .execution_options(synchronize_session=False)
+        return
+    await session.execute(
+        update(AgentUserDailyQuota)
+        .where(
+            AgentUserDailyQuota.user_id == user_id,
+            AgentUserDailyQuota.usage_date == usage_date,
+            # 利用回数は0未満にできないので、1以上のときだけ減らす。
+            AgentUserDailyQuota.used_count > 0,
         )
-    ).scalar_one_or_none()
-    if released_user_id is None:
-        return DailyQuotaReleaseOutcome.INCONSISTENT
-    return DailyQuotaReleaseOutcome.RELEASED
+        .values(used_count=AgentUserDailyQuota.used_count - 1)
+        .execution_options(synchronize_session=False)
+    )
 
 
 @dataclass(frozen=True, slots=True)

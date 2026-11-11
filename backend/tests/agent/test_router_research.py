@@ -20,6 +20,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from sqlalchemy.orm import Session
 
 import app.agent.live_updates.transport as live_transport_module
+import app.agent.running.state_repository as state_repository_module
 from app.agent.contract import AnswerPlanSummary, AnswerQuestionResult
 from app.agent.live_updates.stream import AgentRunLiveStreamTerminalEvent
 from app.agent.live_updates.transport import (
@@ -30,13 +31,9 @@ from app.agent.router import get_agent_run_state_service
 from app.agent.run_enqueuer import get_agent_run_enqueuer
 from app.agent.running.creation import AgentRunCreationRepository
 from app.agent.running.daily_quota import observability as daily_quota_observability
-from app.agent.running.daily_quota.release import (
-    DailyQuotaReleaseOutcome,
-)
 from app.agent.running.daily_quota.reservation import DailyRequestLimitExceededError
 from app.agent.running.deadline.scheduling import get_agent_deadline_scheduler
 from app.agent.running.state import CancelledByUser, CannotContinue, RunNotFound
-from app.agent.running.state_repository import AgentRunStateRepository
 from app.agent.running.state_service import AgentRunStateService
 from app.agent.running.types import RunAttempt
 from app.config import settings
@@ -524,7 +521,6 @@ class TestCreateResearchResponse:
         self,
         auth_headers: dict[str, str],
         db_session: AsyncSession,
-        monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         """投入に失敗した Run は enqueue_failed で終わり、応答は例外を含まない。"""
 
@@ -567,18 +563,17 @@ class TestCreateResearchResponse:
         """投入失敗の記録が途中で失敗すると、Run も利用枠も元のまま 503 を返す。"""
         client, fake_enqueue = quota_research_client
         fake_enqueue.exc = RuntimeError("queue unavailable")
-        original_release_daily_quota = AgentRunStateRepository.release_daily_quota
-        recorded: list[DailyQuotaReleaseOutcome] = []
+        original_release_daily_quota = state_repository_module.release_daily_quota
+        release_count = 0
 
-        async def release_then_fail(
-            repository: AgentRunStateRepository,
-            **kwargs: Any,
-        ) -> DailyQuotaReleaseOutcome:
-            recorded.append(await original_release_daily_quota(repository, **kwargs))
+        async def release_then_fail(session: AsyncSession, **kwargs: Any) -> None:
+            nonlocal release_count
+            await original_release_daily_quota(session, **kwargs)
+            release_count += 1
             raise RuntimeError("mark failed transaction aborted")
 
         monkeypatch.setattr(
-            AgentRunStateRepository,
+            state_repository_module,
             "release_daily_quota",
             release_then_fail,
         )
@@ -597,7 +592,7 @@ class TestCreateResearchResponse:
         threads = (await db_session.execute(select(AgentThread))).scalars().all()
         quotas = (await db_session.execute(select(AgentUserDailyQuota))).scalars().all()
         assert len(runs) == 1
-        assert recorded == [DailyQuotaReleaseOutcome.RELEASED]
+        assert release_count == 1
         assert (runs[0].status, runs[0].error_code) == ("queued", None)
         assert len(messages) == 1
         assert messages[0].id == runs[0].user_message_id
@@ -612,7 +607,6 @@ class TestCreateResearchResponse:
         self,
         auth_headers: dict[str, str],
         db_session: AsyncSession,
-        monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         """投入の失敗中に worker が開始した Run は running のまま残す。"""
 
@@ -912,78 +906,13 @@ class TestQuotaRouterTelemetry:
             }
             assert response.headers["retry-after"] == "1"
 
-    async def test_queued_release_observability_failure_keeps_cancelled_response(
+    async def test_running_cancel_publishes_terminal_and_keeps_quota(
         self,
         quota_research_client: tuple[AsyncClient, FakeEnqueue],
         db_session: AsyncSession,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        client, _fake_enqueue = quota_research_client
-        thread = await _create_thread(db_session)
-        message = await _create_message(
-            db_session,
-            thread_id=thread.id,
-            seq=1,
-            role="user",
-            content="queued quota release",
-        )
-        run = await _create_run(
-            db_session,
-            thread_id=thread.id,
-            user_message_id=message.id,
-        )
-        run_id = run.id
-        run.quota_usage_date = _QUOTA_USAGE_DATE
-        db_session.add(
-            AgentUserDailyQuota(
-                user_id=UUID(TEST_USER_ID),
-                usage_date=_QUOTA_USAGE_DATE,
-                used_count=1,
-            )
-        )
-        await db_session.commit()
-        observed: list[dict[str, object]] = []
-
-        def fail_observation(
-            *,
-            run_id: UUID,
-            outcome: DailyQuotaReleaseOutcome,
-        ) -> None:
-            observed.append({"run_id": run_id, "outcome": outcome})
-            raise RuntimeError("quota observability unavailable")
-
-        monkeypatch.setattr(
-            daily_quota_observability,
-            "observe_release",
-            fail_observation,
-        )
-
-        response = await client.post(f"/api/v1/research/runs/{run_id}/cancel")
-
-        assert response.status_code == 204
-        assert observed == [
-            {"run_id": run_id, "outcome": DailyQuotaReleaseOutcome.RELEASED}
-        ]
-        db_session.expire_all()
-        persisted = await _fetch_run(db_session, run_id)
-        assert (persisted.status, persisted.error_code) == ("failed", "cancelled")
-        assert (
-            await db_session.scalar(
-                select(AgentUserDailyQuota.used_count).where(
-                    AgentUserDailyQuota.user_id == UUID(TEST_USER_ID),
-                    AgentUserDailyQuota.usage_date == _QUOTA_USAGE_DATE,
-                )
-            )
-            == 0
-        )
-
-    async def test_running_cancel_publishes_terminal_without_quota_observation(
-        self,
-        quota_research_client: tuple[AsyncClient, FakeEnqueue],
-        db_session: AsyncSession,
-        monkeypatch: pytest.MonkeyPatch,
-    ) -> None:
-        """running のキャンセルは利用枠を観測せず、その世代へ cancelled を通知する。"""
+        """running のキャンセルは利用枠を返さず、その世代へ cancelled を通知する。"""
         client, _fake_enqueue = quota_research_client
         thread = await _create_thread(db_session)
         message = await _create_message(
@@ -1010,22 +939,7 @@ class TestQuotaRouterTelemetry:
             )
         )
         await db_session.commit()
-        observed: list[dict[str, object]] = []
         FakeCancelStreamPublisher.instances = []
-
-        def fail_observation(
-            *,
-            run_id: UUID,
-            outcome: DailyQuotaReleaseOutcome,
-        ) -> None:
-            observed.append({"run_id": run_id, "outcome": outcome})
-            raise RuntimeError("quota observability unavailable")
-
-        monkeypatch.setattr(
-            daily_quota_observability,
-            "observe_release",
-            fail_observation,
-        )
         monkeypatch.setattr(
             live_transport_module,
             "AgentRunLiveStreamPublisher",
@@ -1039,7 +953,6 @@ class TestQuotaRouterTelemetry:
         response = await client.post(f"/api/v1/research/runs/{run_id}/cancel")
 
         assert response.status_code == 204
-        assert observed == []
         assert len(FakeCancelStreamPublisher.instances) == 1
         assert FakeCancelStreamPublisher.instances[0].published == [
             AgentRunLiveStreamTerminalEvent(
@@ -1256,109 +1169,12 @@ class TestQuotaRouterTelemetry:
             == 0
         )
 
-    @pytest.mark.parametrize(
-        ("release_outcome", "event"),
-        [
-            (
-                DailyQuotaReleaseOutcome.RELEASED,
-                "agent_user_daily_quota_released",
-            ),
-            (
-                DailyQuotaReleaseOutcome.INCONSISTENT,
-                "agent_user_daily_quota_release_inconsistent",
-            ),
-            (DailyQuotaReleaseOutcome.NOT_ELIGIBLE, None),
-        ],
-    )
-    async def test_cancel_records_quota_release_result_after_commit(
+    async def test_cancel_commit_failure_keeps_run_and_quota(
         self,
-        read_logs,
-        research_client: tuple[AsyncClient, FakeEnqueue],
-        db_session: AsyncSession,
-        monkeypatch: pytest.MonkeyPatch,
-        release_outcome: DailyQuotaReleaseOutcome,
-        event: str | None,
-    ) -> None:
-        """queued から終えたキャンセルは、commit 後に返却結果を観測する。"""
-        client, _fake_enqueue = research_client
-        thread = await _create_thread(db_session)
-        message = await _create_message(
-            db_session, thread_id=thread.id, seq=1, role="user", content="cancel"
-        )
-        run = await _create_run(
-            db_session, thread_id=thread.id, user_message_id=message.id
-        )
-        run_id = run.id
-        calls: list[dict[str, object]] = []
-
-        async def release_with_fixed_result(
-            _repository: AgentRunStateRepository, **_kwargs: object
-        ) -> DailyQuotaReleaseOutcome:
-            return release_outcome
-
-        original_observer = daily_quota_observability.observe_release
-
-        def observe_release(
-            *,
-            run_id: UUID,
-            outcome: DailyQuotaReleaseOutcome,
-        ) -> None:
-            calls.append({"run_id": run_id, "outcome": outcome})
-            original_observer(run_id=run_id, outcome=outcome)
-
-        monkeypatch.setattr(
-            AgentRunStateRepository,
-            "release_daily_quota",
-            release_with_fixed_result,
-        )
-        monkeypatch.setattr(
-            daily_quota_observability,
-            "observe_release",
-            observe_release,
-        )
-
-        response = await client.post(f"/api/v1/research/runs/{run_id}/cancel")
-        logs = read_logs()
-
-        quota_events = [
-            entry
-            for entry in logs
-            if entry.get("event", "").startswith("agent_user_daily_quota_")
-        ]
-        assert response.status_code == 204
-        assert calls == [{"run_id": run_id, "outcome": release_outcome}]
-        if release_outcome is DailyQuotaReleaseOutcome.RELEASED:
-            assert quota_events == [
-                {
-                    "run_id": str(run_id),
-                    "limit": 10,
-                    "event": "agent_user_daily_quota_released",
-                    "level": "info",
-                    "log_policy": "research",
-                }
-            ]
-        elif release_outcome is DailyQuotaReleaseOutcome.INCONSISTENT:
-            assert quota_events == [
-                {
-                    "run_id": str(run_id),
-                    "limit": 10,
-                    "event": "agent_user_daily_quota_release_inconsistent",
-                    "level": "error",
-                    "log_policy": "research",
-                }
-            ]
-        else:
-            assert event is None
-            assert quota_events == []
-        assert TEST_USER_ID not in repr(logs)
-
-    async def test_cancel_release_commit_failure_records_no_quota_telemetry(
-        self,
-        read_logs,
         quota_research_client: tuple[AsyncClient, FakeEnqueue],
         db_session: AsyncSession,
-        monkeypatch: pytest.MonkeyPatch,
     ) -> None:
+        """キャンセルのcommitが失敗すると500を返し、Runも利用回数も元のまま残る。"""
         client, _fake_enqueue = quota_research_client
         thread = await _create_thread(db_session)
         message = await _create_message(
@@ -1384,7 +1200,6 @@ class TestQuotaRouterTelemetry:
         )
         await db_session.commit()
 
-        calls: list[dict[str, object]] = []
         commit_attempted = False
 
         def fail_commit(_session: object) -> None:
@@ -1392,14 +1207,6 @@ class TestQuotaRouterTelemetry:
             commit_attempted = True
             raise RuntimeError("cancel commit failure")
 
-        def observe_release(**kwargs: object) -> None:
-            calls.append(kwargs)
-
-        monkeypatch.setattr(
-            daily_quota_observability,
-            "observe_release",
-            observe_release,
-        )
         # キャンセルは操作が自分のセッションでcommitするので、Session全体で待ち受ける。
         sa_event.listen(Session, "before_commit", fail_commit, once=True)
         try:
@@ -1407,20 +1214,9 @@ class TestQuotaRouterTelemetry:
         finally:
             if not commit_attempted:
                 sa_event.remove(Session, "before_commit", fail_commit)
-        logs = read_logs()
 
         assert response.status_code == 500
         assert commit_attempted is True
-        assert calls == []
-        assert not [
-            entry
-            for entry in logs
-            if entry.get("event")
-            in {
-                "agent_user_daily_quota_released",
-                "agent_user_daily_quota_release_inconsistent",
-            }
-        ]
 
         if db_session.in_transaction():
             await db_session.rollback()
@@ -1446,17 +1242,15 @@ class TestQuotaRouterTelemetry:
             (RunNotFound(), 404),
         ],
     )
-    async def test_cancel_terminal_result_does_not_record_quota_release(
+    async def test_cancel_result_decides_status_code(
         self,
-        read_logs,
         research_client: tuple[AsyncClient, FakeEnqueue],
         monkeypatch: pytest.MonkeyPatch,
         outcome: object,
         expected_status: int,
     ) -> None:
-        """Runを閉じなかったキャンセルは終わり方に応じたstatusを返し、利用枠を観測しない。"""
+        """キャンセルは、終了させた・続けられないなら204、Runが無ければ404を返す。"""
         client, _fake_enqueue = research_client
-        calls: list[dict[str, object]] = []
 
         async def cancel_as_terminal(
             _service: AgentRunStateService,
@@ -1465,40 +1259,24 @@ class TestQuotaRouterTelemetry:
         ) -> object:
             return outcome
 
-        def observe_release(**kwargs: object) -> None:
-            calls.append(kwargs)
-
         monkeypatch.setattr(
             AgentRunStateService,
             "cancel_for_user",
             cancel_as_terminal,
         )
-        monkeypatch.setattr(
-            daily_quota_observability,
-            "observe_release",
-            observe_release,
-        )
 
         response = await client.post(
             "/api/v1/research/runs/00000000-0000-4000-a000-000000000072/cancel"
         )
-        logs = read_logs()
 
         assert response.status_code == expected_status
-        assert calls == []
-        assert not [
-            entry
-            for entry in logs
-            if entry.get("event", "").startswith("agent_user_daily_quota_")
-        ]
 
-    async def test_cancel_policy_blocked_is_204_without_quota_release(
+    async def test_cancel_policy_blocked_is_204_without_changing_run(
         self,
         research_client: tuple[AsyncClient, FakeEnqueue],
         db_session: AsyncSession,
-        monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        """policy_blockedのRunのキャンセルは204で、Runを変えず利用枠を観測しない。"""
+        """policy_blockedのRunのキャンセルは204で、Runを変えない。"""
         client, _fake_enqueue = research_client
         thread = await _create_thread(db_session)
         message = await _create_message(
@@ -1512,21 +1290,10 @@ class TestQuotaRouterTelemetry:
             attempt_epoch=1,
         )
         run_id = run.id
-        calls: list[dict[str, object]] = []
-
-        def observe_release(**kwargs: object) -> None:
-            calls.append(kwargs)
-
-        monkeypatch.setattr(
-            daily_quota_observability,
-            "observe_release",
-            observe_release,
-        )
 
         response = await client.post(f"/api/v1/research/runs/{run_id}/cancel")
 
         assert response.status_code == 204
-        assert calls == []
         db_session.expire_all()
         persisted = await _fetch_run(db_session, run_id)
         assert (persisted.status, persisted.error_code) == ("policy_blocked", None)

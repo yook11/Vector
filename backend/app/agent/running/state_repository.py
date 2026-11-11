@@ -7,16 +7,13 @@ from dataclasses import dataclass
 from datetime import date, datetime
 from typing import Any
 
-from sqlalchemy import and_, func, literal, select, update
+from sqlalchemy import Row, and_, func, literal, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.sql.elements import ColumnElement
 
 from app.agent.answering import timing as answer_timing
 from app.agent.contract import AnswerQuestionResult
-from app.agent.running.daily_quota.release import (
-    DailyQuotaReleaseOutcome,
-    release_daily_quota,
-)
+from app.agent.running.daily_quota.release import release_daily_quota
 from app.agent.running.state import ACTIVE_STATUSES
 from app.agent.running.types import AgentRunErrorCode, AgentRunStatus, RunAttempt
 from app.agent.threads.result_mapper import (
@@ -27,7 +24,7 @@ from app.models.agent_message import AgentMessage
 from app.models.agent_run import AgentRun
 from app.models.agent_thread import AgentThread
 
-__all__ = ["AgentRunStateRepository", "ClosedRunFacts"]
+__all__ = ["AgentRunStateRepository", "CancelledRun"]
 
 _LOCK_TIMEOUT = "3s"
 
@@ -60,13 +57,10 @@ def _is_answering(now: ColumnElement[datetime]) -> ColumnElement[bool]:
 
 
 @dataclass(frozen=True, slots=True)
-class ClosedRunFacts:
-    """取り消しか投入の失敗で終了させたRunについて、利用枠を返すか、実行中だった試行の画面へ終了を知らせるために使う値。"""
+class CancelledRun:
+    """キャンセルで終了させたRunで、実行中だった場合だけ、画面へ終了を知らせる先の試行を持つ。"""
 
-    was_queued: bool
-    attempt_epoch: int
-    user_id: uuid_mod.UUID
-    quota_usage_date: date | None
+    running_attempt: RunAttempt | None
 
 
 class AgentRunStateRepository:
@@ -189,7 +183,7 @@ class AgentRunStateRepository:
         await self._session.execute(thread_update)
         return True
 
-    async def fail_attempt(
+    async def end_run_of_attempt(
         self, attempt: RunAttempt, *, error_code: AgentRunErrorCode
     ) -> bool:
         """Runを失敗で終了させ、書けたかを返す。
@@ -210,7 +204,7 @@ class AgentRunStateRepository:
 
     async def cancel(
         self, run_id: uuid_mod.UUID, *, owner_id: uuid_mod.UUID
-    ) -> ClosedRunFacts | None:
+    ) -> CancelledRun | None:
         """ユーザーのキャンセルでRunを終了させる。
 
         次をすべて満たすRunだけが対象で、満たさなければ何も書かずNoneを返す。
@@ -218,39 +212,49 @@ class AgentRunStateRepository:
         - まだ終わっていない(待機中か実行中)。
         - 回収期限(回答前は受理期限、回答中は回答開始から数えた期限)を過ぎていない。
         """
-        # 終了させる前に待機中だったかは、書いた後の行から読めないので、分けて書く。
-        for status in ACTIVE_STATUSES:
-            closed = await self._close(
-                AgentRun.id == run_id,
-                AgentThread.user_id == owner_id,
-                _recovery_deadline() > self._now,
-                status=status,
-                error_code=AgentRunErrorCode.CANCELLED,
+        ended_run = await self._end_run(
+            AgentRun.id == run_id,
+            AgentThread.user_id == owner_id,
+            AgentRun.status.in_(ACTIVE_STATUSES),
+            _recovery_deadline() > self._now,
+            error_code=AgentRunErrorCode.CANCELLED,
+        )
+        if ended_run is None:
+            return None
+        if ended_run.status == AgentRunStatus.QUEUED.value:
+            # 処理が始まらないまま終了したので、ユーザーに利用枠を返却する。
+            await release_daily_quota(
+                self._session,
+                user_id=ended_run.user_id,
+                usage_date=ended_run.quota_usage_date,
             )
-            if closed is not None:
-                return closed
-        return None
+            return CancelledRun(running_attempt=None)
+        return CancelledRun(
+            running_attempt=RunAttempt(run_id=run_id, epoch=ended_run.attempt_epoch)
+        )
 
-    async def fail_queued(self, run_id: uuid_mod.UUID) -> ClosedRunFacts | None:
-        """キューへの投入に失敗したRunを、失敗で終了させる。
+    async def end_queued_run(self, run_id: uuid_mod.UUID) -> bool:
+        """キューへの投入に失敗したRunを失敗で終了させ、終了させたかを返す。
 
-        次をすべて満たすRunだけが対象で、満たさなければ何も書かずNoneを返す。
+        次をすべて満たすRunだけが対象で、満たさなければ何も書かずFalseを返す。
         - 待機中のままである。
         - 受理期限(受付時に決めたdeadline_at)を過ぎていない。
         """
-        return await self._close(
+        ended_run = await self._end_run(
             AgentRun.id == run_id,
+            AgentRun.status == AgentRunStatus.QUEUED.value,
             _is_before_answer(self._now),
-            status=AgentRunStatus.QUEUED,
             error_code=AgentRunErrorCode.ENQUEUE_FAILED,
         )
-
-    async def release_daily_quota(
-        self, *, user_id: uuid_mod.UUID, usage_date: date | None
-    ) -> DailyQuotaReleaseOutcome:
-        return await release_daily_quota(
-            self._session, user_id=user_id, usage_date=usage_date
+        if ended_run is None:
+            return False
+        # 処理が始まらないまま終了したので、ユーザーに利用枠を返却する。
+        await release_daily_quota(
+            self._session,
+            user_id=ended_run.user_id,
+            usage_date=ended_run.quota_usage_date,
         )
+        return True
 
     async def exists_for_owner(
         self, run_id: uuid_mod.UUID, *, owner_id: uuid_mod.UUID
@@ -262,39 +266,44 @@ class AgentRunStateRepository:
         )
         return found_run_id is not None
 
-    async def _close(
-        self,
-        *conditions: ColumnElement[bool],
-        status: AgentRunStatus,
-        error_code: AgentRunErrorCode,
-    ) -> ClosedRunFacts | None:
+    async def _end_run(
+        self, *conditions: ColumnElement[bool], error_code: AgentRunErrorCode
+    ) -> Row[tuple[str, int, uuid_mod.UUID, date | None]] | None:
+        """Runを指定の理由(error_code)で終了させ、終了させる前の状態・世代と、ユーザーID・利用枠を使った日付を返す。
+
+        Runが条件に合わず終了させなかったときは、Noneを返す。
+        """
+
         await self._limit_lock_wait()
-        # APIロールが更新できる列はstatusとerror_codeだけなので、この2列だけを書く。
-        row = (
+        # 書き換えた行からは前の状態を読めないので、先にロックして読んだ行を書き換える。
+        before = (
+            select(
+                AgentRun.id,
+                AgentRun.status,
+                AgentRun.attempt_epoch,
+                AgentThread.user_id,
+                AgentRun.quota_usage_date,
+            )
+            .join(AgentThread, AgentRun.thread_id == AgentThread.id)
+            .where(*conditions)
+            .with_for_update(of=AgentRun)
+            .cte("before")
+        )
+
+        return (
             await self._session.execute(
                 update(AgentRun)
-                .where(
-                    AgentRun.thread_id == AgentThread.id,
-                    AgentRun.status == status.value,
-                    *conditions,
-                )
+                .where(AgentRun.id == before.c.id)
                 .values(status=AgentRunStatus.FAILED.value, error_code=error_code.value)
                 .returning(
-                    AgentRun.attempt_epoch,
-                    AgentThread.user_id,
-                    AgentRun.quota_usage_date,
+                    before.c.status,
+                    before.c.attempt_epoch,
+                    before.c.user_id,
+                    before.c.quota_usage_date,
                 )
                 .execution_options(synchronize_session=False)
             )
         ).one_or_none()
-        if row is None:
-            return None
-        return ClosedRunFacts(
-            was_queued=status is AgentRunStatus.QUEUED,
-            attempt_epoch=row.attempt_epoch,
-            user_id=row.user_id,
-            quota_usage_date=row.quota_usage_date,
-        )
 
     async def _limit_lock_wait(self) -> None:
         """他の処理が同じ行を書き換え中のときに待つ時間を、このトランザクションだけ3秒までにする。"""

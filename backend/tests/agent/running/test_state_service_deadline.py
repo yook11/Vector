@@ -15,7 +15,7 @@ from app.agent.running.types import AgentRunErrorCode, AgentRunStatus, RunAttemp
 from app.models.agent_run import AgentRun
 from app.models.agent_user_daily_quota import AgentUserDailyQuota
 from tests.agent.running._seed import create_thread_message_run
-from tests.agent.running._state_service import record_closed_runs, state_service
+from tests.agent.running._state_service import ClosedRunNotices, state_service
 from tests.conftest import TEST_USER_ID
 
 _USER_ID = uuid.UUID(TEST_USER_ID)
@@ -63,7 +63,6 @@ async def _read_run(
 @pytest.mark.asyncio
 async def test_expired_queued_run_is_left_by_cancel_and_closed_by_deadline_check(
     session_factory: async_sessionmaker[AsyncSession],
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """受理期限を過ぎた待機中のRunは、取り消しでは変わらず、期限の確認が期限切れで閉じて利用枠を返す。"""
     await _seed_quota_counter(session_factory, used_count=1)
@@ -74,7 +73,7 @@ async def test_expired_queued_run_is_left_by_cancel_and_closed_by_deadline_check
             deadline_at=datetime.now(UTC) - timedelta(seconds=1),
             quota_usage_date=_USAGE_DATE,
         )
-    notices = record_closed_runs(monkeypatch)
+    notices = ClosedRunNotices()
     service = state_service(session_factory, notices=notices)
 
     cancelled = await service.cancel_for_user(run.id, user_id=_USER_ID)
@@ -100,7 +99,6 @@ async def test_expired_queued_run_is_left_by_cancel_and_closed_by_deadline_check
 @pytest.mark.asyncio
 async def test_expired_running_run_is_left_by_failure_and_closed_by_deadline_check(
     session_factory: async_sessionmaker[AsyncSession],
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """受理期限を過ぎた回答前のRunは、失敗の記録では変わらず、期限の確認が期限切れで閉じてその世代へ知らせる。"""
     async with session_factory() as session:
@@ -110,10 +108,10 @@ async def test_expired_running_run_is_left_by_failure_and_closed_by_deadline_che
             attempt_epoch=3,
             deadline_at=datetime.now(UTC) - timedelta(seconds=1),
         )
-    notices = record_closed_runs(monkeypatch)
+    notices = ClosedRunNotices()
     service = state_service(session_factory, notices=notices)
 
-    recorded = await service.record_failure(
+    recorded = await service.end_run_after_attempt_failure(
         RunAttempt(run_id=run.id, epoch=3),
         error_code=AgentRunErrorCode.GENERATION_UNAVAILABLE,
     )

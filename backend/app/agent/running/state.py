@@ -16,7 +16,7 @@ __all__ = [
     "CanContinue",
     "CancelledByUser",
     "CannotContinue",
-    "FailureRecorded",
+    "RunFailed",
     "RunCompleted",
     "RunNotFound",
     "RunState",
@@ -73,8 +73,8 @@ class RunCompleted:
 
 
 @dataclass(frozen=True, slots=True)
-class FailureRecorded:
-    """Runを失敗として記録した。"""
+class RunFailed:
+    """Runを失敗で終了させた。"""
 
 
 @dataclass(frozen=True, slots=True)

@@ -17,7 +17,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.agent.running.deadline.deadline_exceeded import _recover_deadline_exceeded_runs
 from app.agent.running.finish_notice import ClosedRunningRun
-from app.agent.running.state import CancelledByUser, FailureRecorded
+from app.agent.running.state import CancelledByUser, RunFailed
 from app.agent.running.types import AgentRunErrorCode, AgentRunStatus, RunAttempt
 from app.models.agent_message import AgentMessage
 from app.models.agent_run import AgentRun
@@ -404,12 +404,12 @@ async def test_sweep_preserves_failure_or_cancellation_that_wins_run_lock(
         try:
             terminal_operation: Coroutine[Any, Any, object]
             if terminalizer == "fail":
-                terminal_operation = service.record_failure(
+                terminal_operation = service.end_run_after_attempt_failure(
                     RunAttempt(run_id=run.id, epoch=2),
                     error_code=AgentRunErrorCode.INTERNAL_ERROR,
                 )
                 expected_terminal = (
-                    FailureRecorded(),
+                    RunFailed(),
                     [
                         ClosedRunningRun(
                             attempt=RunAttempt(run_id=run.id, epoch=2),

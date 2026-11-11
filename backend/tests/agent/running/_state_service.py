@@ -1,31 +1,22 @@
-"""操作を呼ぶ service と、commit後の通知の記録・commitの足止め。"""
+"""操作を呼ぶ service と、commit後の終了通知の記録・commitの足止め。"""
 
 from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass, field
 from datetime import datetime
-from uuid import UUID
 
-import pytest
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.agent.live_updates.stream import AgentRunLiveStreamTerminalEvent
-from app.agent.running.daily_quota import observability as daily_quota_observability
-from app.agent.running.daily_quota.release import DailyQuotaReleaseOutcome
-from app.agent.running.finish_notice import (
-    ClosedQueuedRun,
-    ClosedRun,
-    ClosedRunningRun,
-)
+from app.agent.running.finish_notice import ClosedRunningRun
 from app.agent.running.state_service import AgentRunStateService
 from app.agent.running.types import AgentRunStatus, RunAttempt
 
 __all__ = [
     "ClosedRunNotices",
     "CommitGate",
-    "record_closed_runs",
     "state_service",
     "wait_until_lock_waiting",
 ]
@@ -33,19 +24,12 @@ __all__ = [
 
 @dataclass
 class ClosedRunNotices:
-    """commit後に届いた終了通知と利用枠の返却の観測を、閉じたRunとして届いた順に並べる。"""
+    """commit後に実行中だった試行へ届いた終了通知を、届いた順に並べる。"""
 
-    closed_runs: list[ClosedRun] = field(default_factory=list)
+    closed_runs: list[ClosedRunningRun] = field(default_factory=list)
 
     def publisher_for(self, attempt: RunAttempt) -> _RecordingPublisher:
         return _RecordingPublisher(self, attempt)
-
-    def observe_release(
-        self, *, run_id: UUID, outcome: DailyQuotaReleaseOutcome
-    ) -> None:
-        self.closed_runs.append(
-            ClosedQueuedRun(run_id=run_id, quota_release_outcome=outcome)
-        )
 
 
 @dataclass
@@ -62,15 +46,6 @@ class _RecordingPublisher:
                 error_code=event.error_code,
             )
         )
-
-
-def record_closed_runs(monkeypatch: pytest.MonkeyPatch) -> ClosedRunNotices:
-    """利用枠の返却の観測を差し替え、終了通知と合わせて記録する。"""
-    notices = ClosedRunNotices()
-    monkeypatch.setattr(
-        daily_quota_observability, "observe_release", notices.observe_release
-    )
-    return notices
 
 
 def state_service(

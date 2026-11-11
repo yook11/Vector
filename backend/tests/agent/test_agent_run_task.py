@@ -60,8 +60,8 @@ from app.agent.running.stage_gate import AgentRunStageGate
 from app.agent.running.state import (
     CanContinue,
     CannotContinue,
-    FailureRecorded,
     RunCompleted,
+    RunFailed,
 )
 from app.agent.running.state_service import AgentRunStateService
 from app.agent.running.types import AgentRunErrorCode, RunAttempt
@@ -1406,12 +1406,12 @@ async def test_generation_stopped_is_routine_return_without_run_transition(
             complete_calls.append((attempt.run_id, attempt.epoch))
             return CannotContinue()
 
-        async def record_failure(
+        async def end_run_after_attempt_failure(
             self,
             attempt: RunAttempt,
             *,
             error_code: AgentRunErrorCode,
-        ) -> FailureRecorded | CannotContinue:
+        ) -> RunFailed | CannotContinue:
             assert error_code == AgentRunErrorCode.INTERNAL_ERROR
             mark_failed_calls.append((attempt.run_id, attempt.epoch))
             return CannotContinue()
@@ -1520,12 +1520,12 @@ async def test_epoch_advance_before_answer_start_stops_old_worker_at_next_stage(
             complete_calls.append((attempt.run_id, attempt.epoch))
             return CannotContinue()
 
-        async def record_failure(
+        async def end_run_after_attempt_failure(
             self,
             attempt: RunAttempt,
             *,
             error_code: AgentRunErrorCode,
-        ) -> FailureRecorded | CannotContinue:
+        ) -> RunFailed | CannotContinue:
             assert error_code == AgentRunErrorCode.INTERNAL_ERROR
             mark_failed_calls.append((attempt.run_id, attempt.epoch))
             return CannotContinue()
@@ -1633,12 +1633,12 @@ async def test_deadline_stop_leaves_run_without_mark_failed_or_terminal(
         return DeadlineExpiringRunner(kwargs["stage_gate"])
 
     class ObservingStateService(AgentRunStateService):
-        async def record_failure(
+        async def end_run_after_attempt_failure(
             self,
             attempt: RunAttempt,
             *,
             error_code: AgentRunErrorCode,
-        ) -> FailureRecorded | CannotContinue:
+        ) -> RunFailed | CannotContinue:
             mark_failed_calls.append((attempt.run_id, attempt.epoch))
             return CannotContinue()
 
@@ -2109,12 +2109,12 @@ async def test_failed_transition_loser_does_not_publish_terminal(
     FakeLiveStreamPublisher.instances = []
 
     class RejectingStateService(AgentRunStateService):
-        async def record_failure(
+        async def end_run_after_attempt_failure(
             self,
             attempt: RunAttempt,
             *,
             error_code: AgentRunErrorCode,
-        ) -> FailureRecorded | CannotContinue:
+        ) -> RunFailed | CannotContinue:
             assert (attempt.run_id, error_code, attempt.epoch) == (
                 run.id,
                 AgentRunErrorCode.GENERATION_UNAVAILABLE,

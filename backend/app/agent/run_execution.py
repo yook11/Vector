@@ -267,4 +267,4 @@ async def _mark_failed(
     error_code: AgentRunErrorCode,
 ) -> None:
     # 既に止まっていたRunには書かず、閉じたときの通知は操作が送る。
-    await state_service.record_failure(attempt, error_code=error_code)
+    await state_service.end_run_after_attempt_failure(attempt, error_code=error_code)

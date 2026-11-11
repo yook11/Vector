@@ -26,7 +26,7 @@ from app.models.agent_thread import AgentThread
 from app.models.agent_user_daily_quota import AgentUserDailyQuota
 from app.shared.web_url import WebUrl
 from tests.agent.running._state_service import (
-    record_closed_runs,
+    ClosedRunNotices,
     state_service,
     wait_until_lock_waiting,
 )
@@ -224,7 +224,6 @@ async def test_start_run_starts_only_before_fixed_deadline(
 @pytest.mark.asyncio
 async def test_complete_run_uses_answer_recovery_deadline(
     session_factory: async_sessionmaker[AsyncSession],
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """元の期限後も新期限前は保存し、新期限ちょうどでは回答を残さない。"""
     accepted_after_original_deadline = await _seed_run(
@@ -246,7 +245,7 @@ async def test_complete_run_uses_answer_recovery_deadline(
         answer_started_at=_ANSWER_STARTED_AT,
     )
 
-    notices = record_closed_runs(monkeypatch)
+    notices = ClosedRunNotices()
     accepted_after_original_outcome = await state_service(
         session_factory, notices=notices, now=_CREATED_AT + timedelta(seconds=67)
     ).complete(
@@ -423,7 +422,6 @@ async def test_complete_run_does_not_change_persisted_result_for_old_epoch(
 @pytest.mark.asyncio
 async def test_complete_run_waiting_for_an_unchanged_run_keeps_judgement_before_waiting(
     session_factory: async_sessionmaker[AsyncSession],
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """行をロックしただけで書き換えなかった相手を待つ間に回収期限を越えた完了は、待つ前に判定したとおり回答を保存する。"""
     async with session_factory() as clock_session:
@@ -438,7 +436,7 @@ async def test_complete_run_waiting_for_an_unchanged_run_keeps_judgement_before_
         answer_started_at=answer_started_at,
     )
 
-    notices = record_closed_runs(monkeypatch)
+    notices = ClosedRunNotices()
     service = state_service(session_factory, notices=notices)
     async with (
         session_factory() as blocker,

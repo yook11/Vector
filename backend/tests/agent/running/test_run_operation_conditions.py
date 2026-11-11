@@ -11,23 +11,22 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.agent.contract import AnswerPlanSummary, AnswerQuestionResult
-from app.agent.running.daily_quota.release import DailyQuotaReleaseOutcome
-from app.agent.running.finish_notice import ClosedQueuedRun, ClosedRunningRun
+from app.agent.running.finish_notice import ClosedRunningRun
 from app.agent.running.state import (
     AnswerGenerationStarted,
     AttemptStarted,
     CancelledByUser,
     CanContinue,
     CannotContinue,
-    FailureRecorded,
     RunCompleted,
+    RunFailed,
     RunNotFound,
 )
 from app.agent.running.types import AgentRunErrorCode, AgentRunStatus, RunAttempt
 from app.models.agent_run import AgentRun
 from app.models.agent_user_daily_quota import AgentUserDailyQuota
 from tests.agent.running._seed import create_thread_message_run
-from tests.agent.running._state_service import record_closed_runs, state_service
+from tests.agent.running._state_service import ClosedRunNotices, state_service
 from tests.conftest import TEST_USER_ID
 
 _USER_ID = uuid.UUID(TEST_USER_ID)
@@ -85,6 +84,18 @@ async def _seed(
     return run.id
 
 
+async def _read_used_count(session_factory: async_sessionmaker[AsyncSession]) -> int:
+    async with session_factory() as session:
+        used_count = await session.scalar(
+            select(AgentUserDailyQuota.used_count).where(
+                AgentUserDailyQuota.user_id == _USER_ID,
+                AgentUserDailyQuota.usage_date == _USAGE_DATE,
+            )
+        )
+    assert used_count is not None
+    return used_count
+
+
 async def _read_row(
     session_factory: async_sessionmaker[AsyncSession], run_id: uuid.UUID
 ) -> _Row:
@@ -133,13 +144,12 @@ _ENDED = [
 )
 async def test_start_takes_over_run_before_answer_until_deadline(
     session_factory: async_sessionmaker[AsyncSession],
-    monkeypatch: pytest.MonkeyPatch,
     seed: dict[str, Any],
     expected_epoch: int,
 ) -> None:
     """受理期限の直前なら、待機中のRunも回答前のRunも、開始で実行中になり世代が1つ進む。"""
     run_id = await _seed(session_factory, seed)
-    notices = record_closed_runs(monkeypatch)
+    notices = ClosedRunNotices()
 
     result = await state_service(
         session_factory, notices=notices, now=_JUST_BEFORE_DEADLINE
@@ -164,14 +174,13 @@ async def test_start_takes_over_run_before_answer_until_deadline(
 )
 async def test_start_is_refused_without_touching_run(
     session_factory: async_sessionmaker[AsyncSession],
-    monkeypatch: pytest.MonkeyPatch,
     seed: dict[str, Any],
     now: datetime,
 ) -> None:
     """受理期限ちょうどのRun・回答中のRun・終わったRunは開始できず、行も通知も変わらない。"""
     run_id = await _seed(session_factory, seed)
     before = await _read_row(session_factory, run_id)
-    notices = record_closed_runs(monkeypatch)
+    notices = ClosedRunNotices()
 
     result = await state_service(
         session_factory, notices=notices, now=now
@@ -209,14 +218,13 @@ async def test_start_is_refused_for_missing_run(
 )
 async def test_continuation_is_allowed_until_recovery_deadline(
     session_factory: async_sessionmaker[AsyncSession],
-    monkeypatch: pytest.MonkeyPatch,
     seed: dict[str, Any],
     now: datetime,
     answer_started_at: datetime | None,
 ) -> None:
     """回答前は受理期限、回答中は回収期限の直前まで、現在の試行は続けてよく、行は変わらない。"""
     run_id = await _seed(session_factory, seed)
-    notices = record_closed_runs(monkeypatch)
+    notices = ClosedRunNotices()
 
     result = await state_service(
         session_factory, notices=notices, now=now
@@ -241,14 +249,13 @@ async def test_continuation_is_allowed_until_recovery_deadline(
 )
 async def test_continuation_is_refused_without_touching_run(
     session_factory: async_sessionmaker[AsyncSession],
-    monkeypatch: pytest.MonkeyPatch,
     seed: dict[str, Any],
     now: datetime,
 ) -> None:
     """期限ちょうど・別の試行が担当・終わったRunでは続けられず、行も通知も変わらない。"""
     run_id = await _seed(session_factory, seed)
     before = await _read_row(session_factory, run_id)
-    notices = record_closed_runs(monkeypatch)
+    notices = ClosedRunNotices()
 
     result = await state_service(
         session_factory, notices=notices, now=now
@@ -264,11 +271,10 @@ async def test_continuation_is_refused_without_touching_run(
 @pytest.mark.asyncio
 async def test_answer_start_is_recorded_before_answer_until_deadline(
     session_factory: async_sessionmaker[AsyncSession],
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """受理期限の直前なら、回答前の現在の試行は回答開始の時刻をその時刻で記録する。"""
     run_id = await _seed(session_factory, _PREPARING)
-    notices = record_closed_runs(monkeypatch)
+    notices = ClosedRunNotices()
 
     result = await state_service(
         session_factory, notices=notices, now=_JUST_BEFORE_DEADLINE
@@ -293,14 +299,13 @@ async def test_answer_start_is_recorded_before_answer_until_deadline(
 )
 async def test_answer_start_is_refused_without_touching_run(
     session_factory: async_sessionmaker[AsyncSession],
-    monkeypatch: pytest.MonkeyPatch,
     seed: dict[str, Any],
     now: datetime,
 ) -> None:
     """受理期限ちょうど・別の試行が担当・既に回答中・終わったRunでは回答を始められず、行も通知も変わらない。"""
     run_id = await _seed(session_factory, seed)
     before = await _read_row(session_factory, run_id)
-    notices = record_closed_runs(monkeypatch)
+    notices = ClosedRunNotices()
 
     result = await state_service(
         session_factory, notices=notices, now=now
@@ -316,11 +321,10 @@ async def test_answer_start_is_refused_without_touching_run(
 @pytest.mark.asyncio
 async def test_completion_is_saved_while_answering_until_recovery_deadline(
     session_factory: async_sessionmaker[AsyncSession],
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """受理期限を過ぎていても回収期限の直前なら、回答中の現在の試行の回答でRunが完了し、その世代へ知らせる。"""
     run_id = await _seed(session_factory, _ANSWERING)
-    notices = record_closed_runs(monkeypatch)
+    notices = ClosedRunNotices()
 
     result = await state_service(
         session_factory, notices=notices, now=_JUST_BEFORE_RECOVERY_DEADLINE
@@ -353,14 +357,13 @@ async def test_completion_is_saved_while_answering_until_recovery_deadline(
 )
 async def test_completion_is_refused_without_touching_run(
     session_factory: async_sessionmaker[AsyncSession],
-    monkeypatch: pytest.MonkeyPatch,
     seed: dict[str, Any],
     now: datetime,
 ) -> None:
     """回収期限ちょうど・別の試行が担当・回答前・終わったRunでは回答を保存できず、行も通知も変わらない。"""
     run_id = await _seed(session_factory, seed)
     before = await _read_row(session_factory, run_id)
-    notices = record_closed_runs(monkeypatch)
+    notices = ClosedRunNotices()
 
     result = await state_service(session_factory, notices=notices, now=now).complete(
         _attempt(run_id), result=_answer_result(), research_handoff=None
@@ -388,23 +391,22 @@ async def test_completion_is_refused_without_touching_run(
 )
 async def test_failure_is_recorded_until_recovery_deadline(
     session_factory: async_sessionmaker[AsyncSession],
-    monkeypatch: pytest.MonkeyPatch,
     seed: dict[str, Any],
     now: datetime,
     answer_started_at: datetime | None,
 ) -> None:
     """回答前は受理期限、回答中は回収期限の直前まで、現在の試行の失敗でRunが失敗で終わり、その世代へ知らせる。"""
     run_id = await _seed(session_factory, seed)
-    notices = record_closed_runs(monkeypatch)
+    notices = ClosedRunNotices()
 
     result = await state_service(
         session_factory, notices=notices, now=now
-    ).record_failure(
+    ).end_run_after_attempt_failure(
         _attempt(run_id), error_code=AgentRunErrorCode.GENERATION_UNAVAILABLE
     )
 
     assert (result, notices.closed_runs, await _read_row(session_factory, run_id)) == (
-        FailureRecorded(),
+        RunFailed(),
         [
             ClosedRunningRun(
                 attempt=RunAttempt(run_id=run_id, epoch=1),
@@ -428,18 +430,17 @@ async def test_failure_is_recorded_until_recovery_deadline(
 )
 async def test_failure_is_refused_without_touching_run(
     session_factory: async_sessionmaker[AsyncSession],
-    monkeypatch: pytest.MonkeyPatch,
     seed: dict[str, Any],
     now: datetime,
 ) -> None:
     """期限ちょうど・別の試行が担当・終わったRunでは失敗を記録できず、行も通知も変わらない。"""
     run_id = await _seed(session_factory, seed)
     before = await _read_row(session_factory, run_id)
-    notices = record_closed_runs(monkeypatch)
+    notices = ClosedRunNotices()
 
     result = await state_service(
         session_factory, notices=notices, now=now
-    ).record_failure(
+    ).end_run_after_attempt_failure(
         _attempt(run_id), error_code=AgentRunErrorCode.GENERATION_UNAVAILABLE
     )
 
@@ -453,25 +454,21 @@ async def test_failure_is_refused_without_touching_run(
 @pytest.mark.asyncio
 async def test_cancel_closes_queued_run_and_releases_quota(
     session_factory: async_sessionmaker[AsyncSession],
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """受理期限の直前なら、待機中のRunは取り消しで終わり、受付で予約した利用枠が戻る。"""
+    """受理期限の直前なら、待機中のRunは取り消しで終わり、何も通知せず、受付で数えた利用回数が1から0に戻る。"""
     run_id = await _seed(session_factory, _QUEUED)
-    notices = record_closed_runs(monkeypatch)
+    notices = ClosedRunNotices()
 
     result = await state_service(
         session_factory, notices=notices, now=_JUST_BEFORE_DEADLINE
     ).cancel_for_user(run_id, user_id=_USER_ID)
 
-    assert (result, notices.closed_runs, await _read_row(session_factory, run_id)) == (
-        CancelledByUser(),
-        [
-            ClosedQueuedRun(
-                run_id=run_id, quota_release_outcome=DailyQuotaReleaseOutcome.RELEASED
-            )
-        ],
-        ("failed", "cancelled", 0, None),
-    )
+    assert (
+        result,
+        notices.closed_runs,
+        await _read_row(session_factory, run_id),
+        await _read_used_count(session_factory),
+    ) == (CancelledByUser(), [], ("failed", "cancelled", 0, None), 0)
 
 
 @pytest.mark.asyncio
@@ -489,14 +486,13 @@ async def test_cancel_closes_queued_run_and_releases_quota(
 )
 async def test_cancel_closes_running_run_for_its_attempt(
     session_factory: async_sessionmaker[AsyncSession],
-    monkeypatch: pytest.MonkeyPatch,
     seed: dict[str, Any],
     now: datetime,
     answer_started_at: datetime | None,
 ) -> None:
     """回答前は受理期限、回答中は回収期限の直前まで、実行中のRunは取り消しで終わり、その世代へ知らせる。"""
     run_id = await _seed(session_factory, seed)
-    notices = record_closed_runs(monkeypatch)
+    notices = ClosedRunNotices()
 
     result = await state_service(
         session_factory, notices=notices, now=now
@@ -527,14 +523,13 @@ async def test_cancel_closes_running_run_for_its_attempt(
 )
 async def test_cancel_is_refused_without_touching_run(
     session_factory: async_sessionmaker[AsyncSession],
-    monkeypatch: pytest.MonkeyPatch,
     seed: dict[str, Any],
     now: datetime,
 ) -> None:
     """期限ちょうどのRunと終わったRunは取り消しで書き換わらず、行も通知も変わらない。"""
     run_id = await _seed(session_factory, seed)
     before = await _read_row(session_factory, run_id)
-    notices = record_closed_runs(monkeypatch)
+    notices = ClosedRunNotices()
 
     result = await state_service(
         session_factory, notices=notices, now=now
@@ -550,11 +545,10 @@ async def test_cancel_is_refused_without_touching_run(
 @pytest.mark.asyncio
 async def test_cancel_by_another_user_is_not_found_without_touching_run(
     session_factory: async_sessionmaker[AsyncSession],
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """持ち主でない利用者の取り消しは、Runが無いと返り、行も通知も変わらない。"""
     run_id = await _seed(session_factory, _PREPARING)
-    notices = record_closed_runs(monkeypatch)
+    notices = ClosedRunNotices()
 
     result = await state_service(
         session_factory, notices=notices, now=_JUST_BEFORE_DEADLINE
@@ -582,25 +576,21 @@ async def test_cancel_of_missing_run_is_not_found(
 @pytest.mark.asyncio
 async def test_enqueue_failure_closes_queued_run_and_releases_quota(
     session_factory: async_sessionmaker[AsyncSession],
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """受理期限の直前なら、待機中のRunは投入の失敗で終わり、受付で予約した利用枠が戻る。"""
+    """受理期限の直前なら、待機中のRunは投入の失敗で終わり、何も通知せず、受付で数えた利用回数が1から0に戻る。"""
     run_id = await _seed(session_factory, _QUEUED)
-    notices = record_closed_runs(monkeypatch)
+    notices = ClosedRunNotices()
 
     result = await state_service(
         session_factory, notices=notices, now=_JUST_BEFORE_DEADLINE
-    ).record_enqueue_failure(run_id)
+    ).end_run_after_enqueue_failure(run_id)
 
-    assert (result, notices.closed_runs, await _read_row(session_factory, run_id)) == (
-        FailureRecorded(),
-        [
-            ClosedQueuedRun(
-                run_id=run_id, quota_release_outcome=DailyQuotaReleaseOutcome.RELEASED
-            )
-        ],
-        ("failed", "enqueue_failed", 0, None),
-    )
+    assert (
+        result,
+        notices.closed_runs,
+        await _read_row(session_factory, run_id),
+        await _read_used_count(session_factory),
+    ) == (RunFailed(), [], ("failed", "enqueue_failed", 0, None), 0)
 
 
 @pytest.mark.asyncio
@@ -615,18 +605,17 @@ async def test_enqueue_failure_closes_queued_run_and_releases_quota(
 )
 async def test_enqueue_failure_is_refused_without_touching_run(
     session_factory: async_sessionmaker[AsyncSession],
-    monkeypatch: pytest.MonkeyPatch,
     seed: dict[str, Any],
     now: datetime,
 ) -> None:
     """受理期限ちょうどの待機中のRun・試行が始まったRun・終わったRunは投入の失敗で書き換わらず、行も通知も変わらない。"""
     run_id = await _seed(session_factory, seed)
     before = await _read_row(session_factory, run_id)
-    notices = record_closed_runs(monkeypatch)
+    notices = ClosedRunNotices()
 
     result = await state_service(
         session_factory, notices=notices, now=now
-    ).record_enqueue_failure(run_id)
+    ).end_run_after_enqueue_failure(run_id)
 
     assert (result, notices.closed_runs, await _read_row(session_factory, run_id)) == (
         CannotContinue(),

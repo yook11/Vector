@@ -22,15 +22,14 @@ from app.agent.research_handoff import (
     ResearchRunRecord,
     ResearchTaskRecord,
 )
-from app.agent.running.daily_quota.release import DailyQuotaReleaseOutcome
-from app.agent.running.finish_notice import ClosedQueuedRun, ClosedRunningRun
+from app.agent.running.finish_notice import ClosedRunningRun
 from app.agent.running.question_reading import AgentRunQuestionRepository
 from app.agent.running.state import (
     AttemptStarted,
     CancelledByUser,
     CannotContinue,
-    FailureRecorded,
     RunCompleted,
+    RunFailed,
 )
 from app.agent.running.types import AgentRunErrorCode, AgentRunStatus, RunAttempt
 from app.db.errors import (
@@ -47,8 +46,8 @@ from tests.agent.running._seed import (
 )
 from tests.agent.running._start_run_outcomes import started_attempt_epoch
 from tests.agent.running._state_service import (
+    ClosedRunNotices,
     CommitGate,
-    record_closed_runs,
     state_service,
     wait_until_lock_waiting,
 )
@@ -165,7 +164,6 @@ class _LockTimeoutAtCommit:
 @pytest.mark.asyncio
 async def test_complete_run_persists_the_handoff_on_the_thread_and_round_trips(
     session_factory: async_sessionmaker[AsyncSession],
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """完了で渡したhandoffのJSONBはthreadへそのまま保存され、読み戻して検証できる。"""
     async with session_factory() as session:
@@ -179,7 +177,7 @@ async def test_complete_run_persists_the_handoff_on_the_thread_and_round_trips(
     handoff = _handoff()
     handoff_json = handoff.model_dump(mode="json")
 
-    notices = record_closed_runs(monkeypatch)
+    notices = ClosedRunNotices()
     service = state_service(session_factory, notices=notices)
 
     completed = await service.complete(
@@ -213,7 +211,6 @@ async def test_complete_run_persists_the_handoff_on_the_thread_and_round_trips(
 @pytest.mark.asyncio
 async def test_complete_run_keeps_the_existing_handoff_when_none_is_passed(
     session_factory: async_sessionmaker[AsyncSession],
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Noneは「記録を追加しなかった」であり、threadの既存handoffを消さない。"""
     stored = _handoff().model_dump(mode="json")
@@ -228,7 +225,7 @@ async def test_complete_run_keeps_the_existing_handoff_when_none_is_passed(
         thread.research_handoff = stored
         await session.commit()
 
-    notices = record_closed_runs(monkeypatch)
+    notices = ClosedRunNotices()
     service = state_service(session_factory, notices=notices)
 
     completed = await service.complete(
@@ -314,7 +311,7 @@ async def test_complete_run_lost_race_leaves_no_assistant_message(
     if cancelled:
         await service.cancel_for_user(run.id, user_id=UUID(TEST_USER_ID))
     else:
-        await service.record_failure(
+        await service.end_run_after_attempt_failure(
             RunAttempt(run_id=run.id, epoch=run.attempt_epoch),
             error_code=AgentRunErrorCode.STALE,
         )
@@ -429,7 +426,7 @@ async def test_stale_record_failure_does_not_alter_newer_attempt(
     service = state_service(session_factory)
 
     attempt_epoch = started_attempt_epoch(await service.start_attempt(run.id))
-    recorded = await service.record_failure(
+    recorded = await service.end_run_after_attempt_failure(
         RunAttempt(run_id=run.id, epoch=1),
         error_code=AgentRunErrorCode.STALE,
     )
@@ -606,12 +603,11 @@ async def test_start_run_reports_idempotent_skip_for_missing_run(
 @pytest.mark.asyncio
 async def test_start_run_reports_idempotent_skip_when_transition_loses_race(
     session_factory: async_sessionmaker[AsyncSession],
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """行ロックを待った開始は、先に確定したキャンセルを見て世代を進めずに拒否する。"""
     async with session_factory() as setup_session:
         _thread, _message, run = await _create_thread_message_run(setup_session)
-    notices = record_closed_runs(monkeypatch)
+    notices = ClosedRunNotices()
     gate = CommitGate(session_factory)
     winner = state_service(gate, notices=notices)  # type: ignore[arg-type]
     contender = state_service(session_factory)
@@ -641,12 +637,7 @@ async def test_start_run_reports_idempotent_skip_when_transition_loses_race(
 
     assert (cancelled, notices.closed_runs) == (
         CancelledByUser(),
-        [
-            ClosedQueuedRun(
-                run_id=run.id,
-                quota_release_outcome=DailyQuotaReleaseOutcome.NOT_ELIGIBLE,
-            )
-        ],
+        [],
     )
     assert skip_result == CannotContinue()
     async with session_factory() as session:
@@ -659,7 +650,6 @@ async def test_start_run_reports_idempotent_skip_when_transition_loses_race(
 @pytest.mark.asyncio
 async def test_record_enqueue_failure_remains_epoch_independent(
     session_factory: async_sessionmaker[AsyncSession],
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """受付失敗は世代を見ずにqueuedのRunを失敗で終え、世代を変えない。"""
     async with session_factory() as setup_session:
@@ -667,20 +657,15 @@ async def test_record_enqueue_failure_remains_epoch_independent(
             setup_session,
             attempt_epoch=7,
         )
-    notices = record_closed_runs(monkeypatch)
+    notices = ClosedRunNotices()
 
     recorded = await state_service(
         session_factory, notices=notices
-    ).record_enqueue_failure(run.id)
+    ).end_run_after_enqueue_failure(run.id)
 
     assert (recorded, notices.closed_runs) == (
-        FailureRecorded(),
-        [
-            ClosedQueuedRun(
-                run_id=run.id,
-                quota_release_outcome=DailyQuotaReleaseOutcome.NOT_ELIGIBLE,
-            )
-        ],
+        RunFailed(),
+        [],
     )
     async with session_factory() as session:
         failed = await session.get(AgentRun, run.id)
@@ -758,7 +743,6 @@ async def test_answer_save_lock_timeout_rolls_back_without_artifacts(
 @pytest.mark.asyncio
 async def test_answer_save_lock_timeout_is_transaction_local_after_commit(
     session_factory: async_sessionmaker[AsyncSession],
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """完了が設定するlock_timeoutはそのtransactionの中だけで効き、commit後は元に戻る。"""
     async with session_factory() as session:
@@ -769,7 +753,7 @@ async def test_answer_save_lock_timeout_is_transaction_local_after_commit(
             answer_started_at=datetime.now(UTC),
         )
         run_id, epoch = run.id, run.attempt_epoch
-    notices = record_closed_runs(monkeypatch)
+    notices = ClosedRunNotices()
 
     async with engine_test.connect() as connection:
         before = await connection.scalar(select(func.current_setting("lock_timeout")))

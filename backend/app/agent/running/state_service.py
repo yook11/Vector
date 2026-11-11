@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import AsyncIterator, Callable, Coroutine
-from contextlib import asynccontextmanager, suppress
+from contextlib import asynccontextmanager
 from datetime import datetime
 from functools import wraps
 from typing import Any
@@ -15,7 +15,6 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.agent.contract import AnswerQuestionResult
 from app.agent.running.daily_quota import observability as daily_quota_observability
-from app.agent.running.daily_quota.observability import DailyQuotaReleaseResult
 from app.agent.running.deadline.deadline_exceeded import (
     DeadlineRunSweepResult,
     check_agent_run_deadline,
@@ -23,8 +22,6 @@ from app.agent.running.deadline.deadline_exceeded import (
     sweep_deadline_exceeded_runs_for_thread,
 )
 from app.agent.running.finish_notice import (
-    ClosedQueuedRun,
-    ClosedRun,
     ClosedRunningRun,
     LivePublisherFor,
     notify_closed_run,
@@ -35,8 +32,8 @@ from app.agent.running.state import (
     CancelledByUser,
     CanContinue,
     CannotContinue,
-    FailureRecorded,
     RunCompleted,
+    RunFailed,
     RunNotFound,
 )
 from app.agent.running.state_repository import AgentRunStateRepository
@@ -138,11 +135,11 @@ class AgentRunStateService:
         return RunCompleted()
 
     @_retry_transient_database_failure
-    async def record_failure(
+    async def end_run_after_attempt_failure(
         self, attempt: RunAttempt, *, error_code: AgentRunErrorCode
-    ) -> FailureRecorded | CannotContinue:
+    ) -> RunFailed | CannotContinue:
         async with self._transaction() as session:
-            failed = await self._repository(session).fail_attempt(
+            failed = await self._repository(session).end_run_of_attempt(
                 attempt, error_code=error_code
             )
         if not failed:
@@ -153,7 +150,7 @@ class AgentRunStateService:
             ),
             publisher_for=self._publisher_for,
         )
-        return FailureRecorded()
+        return RunFailed()
 
     @_retry_transient_database_failure
     async def cancel_for_user(
@@ -161,47 +158,31 @@ class AgentRunStateService:
     ) -> CancelledByUser | CannotContinue | RunNotFound:
         async with self._transaction() as session:
             repository = self._repository(session)
-            closed = await repository.cancel(run_id, owner_id=user_id)
-            if closed is None:
+            cancelled = await repository.cancel(run_id, owner_id=user_id)
+            if cancelled is None:
                 if not await repository.exists_for_owner(run_id, owner_id=user_id):
                     return RunNotFound()
                 return CannotContinue()
-            closed_run: ClosedRun
-            if closed.was_queued:
-                # 待機中のまま閉じたRunは、受付で予約した利用枠を返す。
-                closed_run = ClosedQueuedRun(
-                    run_id=run_id,
-                    quota_release_outcome=await repository.release_daily_quota(
-                        user_id=closed.user_id, usage_date=closed.quota_usage_date
-                    ),
-                )
-            else:
-                closed_run = ClosedRunningRun(
-                    attempt=RunAttempt(run_id=run_id, epoch=closed.attempt_epoch),
+        if cancelled.running_attempt is not None:
+            await notify_closed_run(
+                ClosedRunningRun(
+                    attempt=cancelled.running_attempt,
                     status=AgentRunStatus.FAILED,
                     error_code=AgentRunErrorCode.CANCELLED,
-                )
-        await notify_closed_run(closed_run, publisher_for=self._publisher_for)
+                ),
+                publisher_for=self._publisher_for,
+            )
         return CancelledByUser()
 
     @_retry_transient_database_failure
-    async def record_enqueue_failure(
+    async def end_run_after_enqueue_failure(
         self, run_id: UUID
-    ) -> FailureRecorded | CannotContinue:
+    ) -> RunFailed | CannotContinue:
         async with self._transaction() as session:
-            repository = self._repository(session)
-            closed = await repository.fail_queued(run_id)
-            if closed is None:
-                return CannotContinue()
-            # 待機中のまま閉じたRunは、受付で予約した利用枠を返す。
-            quota_release_outcome = await repository.release_daily_quota(
-                user_id=closed.user_id, usage_date=closed.quota_usage_date
-            )
-        await notify_closed_run(
-            ClosedQueuedRun(run_id=run_id, quota_release_outcome=quota_release_outcome),
-            publisher_for=self._publisher_for,
-        )
-        return FailureRecorded()
+            failed = await self._repository(session).end_queued_run(run_id)
+        if not failed:
+            return CannotContinue()
+        return RunFailed()
 
     @_retry_transient_database_failure
     async def sweep_deadline_exceeded_runs(self) -> DeadlineRunSweepResult:
@@ -243,23 +224,10 @@ class AgentRunStateService:
                 raise translate_database_error(exc) from exc
 
     async def _notify_swept(self, result: DeadlineRunSweepResult) -> None:
-        released: tuple[tuple[DailyQuotaReleaseResult, int], ...] = (
-            ("released", result.queued_quota_released_count),
-            ("not_eligible", result.queued_quota_not_eligible_count),
-            ("inconsistent", result.queued_quota_inconsistent_count),
+        daily_quota_observability.observe_stale_reservations(
+            queued_count=result.queued_quota_inconsistent_count,
+            running_count=result.running_quota_reservation_count,
         )
-        for quota_result, count in released:
-            if count > 0:
-                with suppress(Exception):
-                    daily_quota_observability.record_daily_quota_release(
-                        result=quota_result,
-                        count=count,
-                    )
-        with suppress(Exception):
-            daily_quota_observability.observe_stale_reservations(
-                queued_count=result.queued_quota_inconsistent_count,
-                running_count=result.running_quota_reservation_count,
-            )
         for attempt in result.running_terminal_runs:
             await notify_closed_run(
                 ClosedRunningRun(

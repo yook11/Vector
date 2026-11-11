@@ -58,7 +58,7 @@ from app.agent.running.deadline.scheduling import (
 from app.agent.running.state import (
     CancelledByUser,
     CannotContinue,
-    FailureRecorded,
+    RunFailed,
     RunNotFound,
     has_attempt_started,
     is_finished,
@@ -227,7 +227,7 @@ async def create_research_response(
             run_id=str(created.run_id),
         )
         try:
-            recorded = await state_service.record_enqueue_failure(created.run_id)
+            recorded = await state_service.end_run_after_enqueue_failure(created.run_id)
         except Exception as update_exc:
             logger.exception(
                 "agent_run_enqueue_failed_mark_failed_failed",
@@ -238,7 +238,7 @@ async def create_research_response(
                 detail="Failed to enqueue research run",
             ) from update_exc
         match recorded:
-            case FailureRecorded():
+            case RunFailed():
                 pass
             case CannotContinue():
                 logger.info(

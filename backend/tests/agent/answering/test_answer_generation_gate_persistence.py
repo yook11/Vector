@@ -19,7 +19,7 @@ from app.agent.answering.timing import answer_generation_recovery_window
 from app.agent.live_updates.reporters import AgentRunLiveStageReporter
 from app.agent.live_updates.stream import AgentRunLiveStreamEvent
 from app.agent.running.answer_generation import AgentRunAnswerGenerationGate
-from app.agent.running.finish_notice import ClosedRun
+from app.agent.running.finish_notice import ClosedRunningRun
 from app.agent.running.state import (
     AnswerGenerationStarted,
     CanContinue,
@@ -106,7 +106,7 @@ async def _start_at(
     *,
     now: datetime,
     attempt_epoch: int = _ATTEMPT_EPOCH,
-) -> tuple[AnswerGenerationStarted | CannotContinue, list[ClosedRun]]:
+) -> tuple[AnswerGenerationStarted | CannotContinue, list[ClosedRunningRun]]:
     notices = ClosedRunNotices()
     result = await state_service(
         session_factory, notices=notices, now=now
@@ -120,7 +120,7 @@ async def _authorize_at(
     *,
     now: datetime,
     attempt_epoch: int = _ATTEMPT_EPOCH,
-) -> tuple[CanContinue | CannotContinue, list[ClosedRun]]:
+) -> tuple[CanContinue | CannotContinue, list[ClosedRunningRun]]:
     notices = ClosedRunNotices()
     result = await state_service(
         session_factory, notices=notices, now=now

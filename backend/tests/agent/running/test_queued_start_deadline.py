@@ -1,6 +1,6 @@
 """queued Run の受理期限による開始の禁止と、開始が利用枠に触れないこと。
 
-実DBで AgentRunStateService の操作から確かめ、返却の観測は記録に差し替える。
+実DBで AgentRunStateService の操作から確かめ、終了通知は記録する偽物で受ける。
 """
 
 from __future__ import annotations
@@ -9,10 +9,8 @@ import uuid
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
 from types import SimpleNamespace
-from typing import Any
 
 import pytest
-from logfire.testing import CaptureLogfire
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
@@ -27,11 +25,10 @@ from app.models.agent_run import AgentRun
 from app.models.agent_thread import AgentThread
 from app.models.agent_user_daily_quota import AgentUserDailyQuota
 from tests.agent.running._state_service import (
-    record_closed_runs,
+    ClosedRunNotices,
     state_service,
 )
 from tests.conftest import TEST_USER_ID
-from tests.logfire._metric_helpers import collected_metrics
 
 _USER_ID = uuid.UUID(TEST_USER_ID)
 _USAGE_DATE = date(2026, 7, 22)
@@ -135,25 +132,10 @@ def _ctx(session_factory: async_sessionmaker[AsyncSession]) -> SimpleNamespace:
     )
 
 
-def _quota_release_metric_points(capfire: CaptureLogfire) -> list[dict[str, Any]]:
-    metric = next(
-        (
-            item
-            for item in collected_metrics(capfire)
-            if item["name"] == "agent_user_daily_quota_releases_total"
-        ),
-        None,
-    )
-    if metric is None:
-        return []
-    return list(metric["data"]["data_points"])
-
-
 @pytest.mark.integration
 @pytest.mark.asyncio
 async def test_queued_start_deadline_starts_just_before_and_refuses_at_boundary(
     session_factory: async_sessionmaker[AsyncSession],
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """期限の直前は開始し、期限ちょうどは開始せず待機中のまま残して利用枠も返さない。"""
     deadline_seconds = _run_deadline_seconds()
@@ -168,7 +150,7 @@ async def test_queued_start_deadline_starts_just_before_and_refuses_at_boundary(
         created_at=_DB_NOW - timedelta(seconds=deadline_seconds),
         quota_usage_date=date(2026, 7, 21),
     )
-    notices = record_closed_runs(monkeypatch)
+    notices = ClosedRunNotices()
     service = state_service(session_factory, notices=notices, now=_DB_NOW)
 
     before_result = await service.start_attempt(just_before.run_id)
@@ -216,7 +198,6 @@ async def test_timely_start_and_running_redelivery_never_release_quota(
 async def test_expired_queued_task_skips_live_provider_and_leaves_run_untouched(
     read_logs,
     session_factory: async_sessionmaker[AsyncSession],
-    capfire: CaptureLogfire,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """受理期限を過ぎた待機中のRunのtaskは、配信も回答の工程も作らず、Runと利用枠を変えずに終わる。"""
@@ -278,4 +259,3 @@ async def test_expired_queued_task_skips_live_provider_and_leaves_run_untouched(
             "log_policy": "research",
         }
     ]
-    assert _quota_release_metric_points(capfire) == []
