@@ -97,7 +97,6 @@ router = APIRouter(
 logger = create_policy_json_logger(__name__, RESEARCH_LOG_RULES)
 
 _ACTIVE_RUN_DETAIL = "A run is already in progress for this thread"
-_RUN_ALREADY_COMPLETED_DETAIL = "Run already completed"
 _THREAD_NOT_FOUND_DETAIL = "Research thread not found"
 _RUN_NOT_FOUND_DETAIL = "Research run not found"
 _SSE_RETRY_AFTER_SECONDS = 5
@@ -348,7 +347,6 @@ async def delete_research_thread(
     status_code=status.HTTP_204_NO_CONTENT,
     responses={
         status.HTTP_404_NOT_FOUND: {"description": _RUN_NOT_FOUND_DETAIL},
-        status.HTTP_409_CONFLICT: {"description": _RUN_ALREADY_COMPLETED_DETAIL},
     },
 )
 async def cancel_research_run(
@@ -361,14 +359,10 @@ async def cancel_research_run(
     match await state_service.cancel_for_user(run_id, user_id=user.id):
         case RunNotFound():
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
-        case RunAlreadyCompleted():
-            raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail=_RUN_ALREADY_COMPLETED_DETAIL,
-            )
         case (
             CancelledByUser()
             | DeadlineExceeded()
+            | RunAlreadyCompleted()
             | RunAlreadyFailed()
             | RunAlreadyCancelled()
             | RunAlreadyDeadlineExceeded()

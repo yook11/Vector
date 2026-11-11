@@ -1455,7 +1455,7 @@ class TestQuotaRouterTelemetry:
             (RunAlreadyCancelled(), 204),
             (RunAlreadyDeadlineExceeded(), 204),
             (RunNotFound(), 404),
-            (RunAlreadyCompleted(), 409),
+            (RunAlreadyCompleted(), 204),
         ],
     )
     async def test_cancel_terminal_result_does_not_record_quota_release(
@@ -2355,7 +2355,7 @@ class TestCancelResearchRun:
         assert run.status == "failed"
         assert run.error_code == "cancelled"
 
-    async def test_cancel_completed_run_returns_409_and_preserves_completed(
+    async def test_cancel_completed_run_returns_204_and_preserves_completed(
         self,
         research_client: tuple[AsyncClient, FakeEnqueue],
         db_session: AsyncSession,
@@ -2386,8 +2386,7 @@ class TestCancelResearchRun:
 
         response = await client.post(f"/api/v1/research/runs/{run.id}/cancel")
 
-        assert response.status_code == 409
-        assert response.json() == {"detail": "Run already completed"}
+        assert response.status_code == 204
         await db_session.refresh(run)
         assert run.status == "completed"
         assert run.error_code is None
