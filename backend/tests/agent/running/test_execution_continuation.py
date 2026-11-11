@@ -15,6 +15,7 @@ from app.agent.running.state import (
     CanContinue,
     CannotContinue,
     DeadlineExceeded,
+    RunAlreadyDeadlineExceeded,
     RunPhaseMismatchError,
 )
 from app.agent.running.types import AgentRunStatus, RunAttempt
@@ -154,7 +155,7 @@ async def test_wrong_epoch_or_non_running_stops_without_write(
 async def test_already_expired_run_stops_without_rewrite(
     session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
-    """既に期限切れで終わったRunの継続確認は、書き換えも通知もせずに期限切れと返す。"""
+    """既に期限切れで終わったRunの継続確認は、書き換えも通知もせずに既に期限切れで閉じていると返す。"""
     run_id = await _seed_running(session_factory, status="deadline_exceeded")
     result = await _decide(
         session_factory,
@@ -162,7 +163,7 @@ async def test_already_expired_run_stops_without_rewrite(
         attempt_epoch=1,
         now=_DEADLINE_AT,
     )
-    assert result == (DeadlineExceeded(), [])
+    assert result == (RunAlreadyDeadlineExceeded(), [])
     assert await _load(session_factory, run_id) == ("deadline_exceeded", 1, 1)
 
 

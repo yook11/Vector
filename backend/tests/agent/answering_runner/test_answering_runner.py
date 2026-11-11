@@ -38,7 +38,11 @@ from app.agent.planning.contract import (
     QuestionPlan,
 )
 from app.agent.planning.failure import PlanningError
-from app.agent.running.state import AttemptSuperseded, CancelledByUser, CannotContinue
+from app.agent.running.state import (
+    AttemptSuperseded,
+    CannotContinue,
+    RunAlreadyCancelled,
+)
 from app.agent.threads.contracts import ThreadMessageSnapshot
 from app.ai_providers.errors import AIProviderNotSentError, AIProviderNotSentReason
 from tests.agent.answering_runner._harness import (
@@ -399,7 +403,7 @@ async def test_stop_before_planning_returns_the_reason_without_planning() -> Non
     factory, planner, direct_answerer = _direct_factory(
         answers=["最終回答"], events=events
     )
-    gate = RecordingStageGate(stop_at="planning", stopped=CancelledByUser())
+    gate = RecordingStageGate(stop_at="planning", stopped=RunAlreadyCancelled())
 
     outcome = await _runner(factory, stage_gate=gate).run(
         RunInput(question="元の質問", history=()),
@@ -407,7 +411,7 @@ async def test_stop_before_planning_returns_the_reason_without_planning() -> Non
     )
 
     assert (outcome, events, gate.stages, planner.calls, direct_answerer.calls) == (
-        CancelledByUser(),
+        RunAlreadyCancelled(),
         ["phases_factory"],
         ["planning"],
         [],

@@ -59,11 +59,11 @@ from app.agent.running.answer_generation import AgentRunAnswerGenerationGate
 from app.agent.running.stage_gate import AgentRunStageGate
 from app.agent.running.state import (
     AttemptSuperseded,
-    CancelledByUser,
     CanContinue,
     CannotContinue,
     DeadlineExceeded,
     FailureRecorded,
+    RunAlreadyCancelled,
     RunCompleted,
     RunNotFound,
 )
@@ -157,12 +157,7 @@ class FakeAnsweringRunner:
         match await cast(Any, self.answer_generation_gate).start():
             case CanContinue():
                 pass
-            case (
-                CancelledByUser()
-                | DeadlineExceeded()
-                | AttemptSuperseded()
-                | RunNotFound()
-            ) as stopped:
+            case CannotContinue() as stopped:
                 return stopped
         final_output = await cast(Any, self.execution).answer()
         return RunResult(
@@ -1964,7 +1959,7 @@ async def test_completion_loser_with_existing_delta_has_no_terminal_or_assistant
                 fake_agent.result,
                 1,
             )
-            return CancelledByUser()
+            return RunAlreadyCancelled()
 
     _patch_delta_worker(monkeypatch, build_agent)
     monkeypatch.setattr(
@@ -2064,8 +2059,8 @@ async def test_completion_failure_publishes_failed_terminal(
 
 @pytest.mark.parametrize(
     "rejection",
-    [RunNotFound(), CancelledByUser(), AttemptSuperseded()],
-    ids=("run-not-found", "cancelled-by-user", "attempt-superseded"),
+    [RunNotFound(), RunAlreadyCancelled(), AttemptSuperseded()],
+    ids=("run-not-found", "run-already-cancelled", "attempt-superseded"),
 )
 @pytest.mark.asyncio
 async def test_completion_skip_does_not_publish_terminal(

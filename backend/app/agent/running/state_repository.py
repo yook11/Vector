@@ -1,8 +1,9 @@
-"""Runの状態を変える操作が使う、Runの行のロック・読み出し・書き込み。"""
+"""Runの状態を変える操作が使う、続けてよいかの確認とRunの行への書き込み。"""
 
 from __future__ import annotations
 
 import uuid as uuid_mod
+from collections.abc import Collection
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
@@ -16,8 +17,18 @@ from app.agent.running.daily_quota.release import (
     release_daily_quota,
 )
 from app.agent.running.deadline.deadline_exceeded import database_now
-from app.agent.running.state import RunNotFound, RunState
-from app.agent.running.types import AgentRunErrorCode, AgentRunStatus
+from app.agent.running.state import (
+    AttemptAlreadyStarted,
+    CanContinue,
+    CannotContinue,
+    DeadlineExceeded,
+    RunAlreadyEnded,
+    RunNotFound,
+    RunPhase,
+    RunState,
+    active_run_state,
+)
+from app.agent.running.types import AgentRunErrorCode, AgentRunStatus, RunAttempt
 from app.agent.threads.result_mapper import (
     build_assistant_message_for_result,
     build_source_rows_for_message,
@@ -40,20 +51,73 @@ class CurrentRun:
 
 
 class AgentRunStateRepository:
-    """トランザクションは呼び出し元が所有し、lockで読んだRunとそのthreadへ書き、nowを渡すとDBの時刻の代わりに使う。"""
+    """トランザクションは呼び出し元が所有し、確認でロックして読んだRunとそのthreadへ書き、nowを渡すとDBの時刻の代わりに使う。"""
 
     def __init__(self, session: AsyncSession, *, now: datetime | None = None) -> None:
         self._session = session
         self._now = now
         self._locked_rows: tuple[AgentRun, AgentThread] | None = None
+        self._current_run: CurrentRun | None = None
 
-    async def lock(
+    @property
+    def current_run(self) -> CurrentRun:
+        if self._current_run is None:
+            raise RuntimeError("the run must be checked before it is read")
+        return self._current_run
+
+    async def check_start(self, run_id: uuid_mod.UUID) -> CanContinue | CannotContinue:
+        match await self._lock_and_read(run_id):
+            case CurrentRun() as current_run:
+                return current_run.state.check_start(now=current_run.now)
+            case CannotContinue() as stopped:
+                return stopped
+
+    async def check_attempt(
+        self,
+        attempt: RunAttempt,
+        *,
+        phases: Collection[RunPhase],
+        lock_thread: bool = False,
+    ) -> CanContinue | CannotContinue:
+        match await self._lock_and_read(attempt.run_id, lock_thread=lock_thread):
+            case CurrentRun() as current_run:
+                return current_run.state.check_attempt(
+                    attempt_epoch=attempt.epoch, phases=phases, now=current_run.now
+                )
+            case CannotContinue() as stopped:
+                return stopped
+
+    async def check_cancel(
+        self, run_id: uuid_mod.UUID, *, owner_id: uuid_mod.UUID
+    ) -> CanContinue | DeadlineExceeded | RunAlreadyEnded | RunNotFound:
+        match await self._lock_and_read(run_id, owner_id=owner_id):
+            case CurrentRun() as current_run:
+                return current_run.state.check_cancel(now=current_run.now)
+            case CannotContinue() as stopped:
+                return stopped
+
+    async def check_enqueue_failure(
+        self, run_id: uuid_mod.UUID
+    ) -> (
+        CanContinue
+        | AttemptAlreadyStarted
+        | DeadlineExceeded
+        | RunAlreadyEnded
+        | RunNotFound
+    ):
+        match await self._lock_and_read(run_id):
+            case CurrentRun() as current_run:
+                return current_run.state.check_enqueue_failure(now=current_run.now)
+            case CannotContinue() as stopped:
+                return stopped
+
+    async def _lock_and_read(
         self,
         run_id: uuid_mod.UUID,
         *,
         owner_id: uuid_mod.UUID | None = None,
         lock_thread: bool = False,
-    ) -> CurrentRun | RunNotFound:
+    ) -> CurrentRun | RunNotFound | RunAlreadyEnded:
         await self._session.execute(
             select(func.set_config("lock_timeout", _LOCK_TIMEOUT, True))
         )
@@ -70,23 +134,23 @@ class AgentRunStateRepository:
         if row is None:
             return RunNotFound()
         run, thread = row
-        self._locked_rows = (run, thread)
-        # ロック待ちの間に期限を越えうるため、時刻はロックを取った後に読む。
-        locked_now = await database_now(self._session, self._now)
-        return CurrentRun(
-            state=RunState(
-                status=AgentRunStatus(run.status),
-                error_code=(
-                    None
-                    if run.error_code is None
-                    else AgentRunErrorCode(run.error_code)
-                ),
-                attempt_epoch=run.attempt_epoch,
-                deadline_at=run.deadline_at,
-                answer_started_at=run.answer_started_at,
+        match active_run_state(
+            status=AgentRunStatus(run.status),
+            error_code=(
+                None if run.error_code is None else AgentRunErrorCode(run.error_code)
             ),
-            now=locked_now,
-        )
+            attempt_epoch=run.attempt_epoch,
+            deadline_at=run.deadline_at,
+            answer_started_at=run.answer_started_at,
+        ):
+            case RunState() as state:
+                self._locked_rows = (run, thread)
+                # ロック待ちの間に期限を越えうるため、時刻はロックを取った後に読む。
+                locked_now = await database_now(self._session, self._now)
+                self._current_run = CurrentRun(state=state, now=locked_now)
+                return self._current_run
+            case CannotContinue() as ended:
+                return ended
 
     async def mark_attempt_started(self, *, attempt_epoch: int) -> None:
         await self._update_run(
@@ -152,7 +216,7 @@ class AgentRunStateRepository:
 
     def _rows(self) -> tuple[AgentRun, AgentThread]:
         if self._locked_rows is None:
-            raise RuntimeError("the run must be locked before it is written")
+            raise RuntimeError("the run must be checked before it is written")
         return self._locked_rows
 
     async def _next_message_seq(self, thread_id: uuid_mod.UUID) -> int:

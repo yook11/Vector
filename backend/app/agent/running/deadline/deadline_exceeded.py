@@ -215,8 +215,6 @@ async def _lock_runs_for_deadline_recovery(
             quota_usage_date=quota_usage_date,
             state=RunState(
                 status=AgentRunStatus(status),
-                # 候補は待機中・実行中のRunだけで、制約によりerror_codeを持たない。
-                error_code=None,
                 attempt_epoch=attempt_epoch,
                 deadline_at=deadline_at,
                 answer_started_at=answer_started_at,

@@ -10,7 +10,7 @@ from app.agent.contract import (
     AnswerQuestionResult,
     ExternalUrlSource,
 )
-from app.agent.running.state import DeadlineExceeded, RunCompleted
+from app.agent.running.state import RunAlreadyDeadlineExceeded, RunCompleted
 from local_tests.agent.deadline_race_support import (
     pending_answer_completion,
     pending_deadline_recovery,
@@ -138,7 +138,7 @@ async def test_deadline_recovery_wins_race_and_rejects_answer(
     )
 
     assert recovery.total_count == 1
-    assert completion == DeadlineExceeded()
+    assert completion == RunAlreadyDeadlineExceeded()
     assert {
         "status": result_after_save_attempt.run["status"],
         "assistant_message_id": result_after_save_attempt.run["assistant_message_id"],

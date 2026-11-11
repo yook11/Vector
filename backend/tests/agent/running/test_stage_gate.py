@@ -24,6 +24,8 @@ from app.agent.running.state import (
     CanContinue,
     CannotContinue,
     DeadlineExceeded,
+    RunAlreadyCancelled,
+    RunAlreadyDeadlineExceeded,
 )
 from app.agent.running.state_service import AgentRunStateService
 from app.agent.running.types import RunAttempt
@@ -195,7 +197,7 @@ async def test_current_attempt_continues_and_notifies_stage_once(
 async def test_committed_cancel_stops_next_stage_without_notifying(
     session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
-    """利用者の停止がcommitされると、次の工程に入るときに止めたことを返し、その段階を通知しない。"""
+    """利用者の停止がcommitされると、次の工程に入るときに既に止められていると返し、その段階を通知しない。"""
     run_id = await _seed_running_run(session_factory)
     publisher = RecordingPublisher()
     gate = _new_gate(session_factory, publisher, run_id=run_id, attempt_epoch=1)
@@ -210,7 +212,7 @@ async def test_committed_cancel_stops_next_stage_without_notifying(
     result = await gate.enter("evidence_collection")
 
     assert (result, publisher.published()) == (
-        CancelledByUser(),
+        RunAlreadyCancelled(),
         [(run_id, 1, {"type": "stage", "stage": "planning"})],
     )
 
@@ -244,7 +246,7 @@ async def test_restart_stops_old_attempt_at_next_stage_without_notifying(
 async def test_expired_deadline_closes_run_once_and_notifies_only_terminal(
     session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
-    """受理期限を過ぎたRunは工程に入るときに一度だけ期限切れで閉じて終了だけを通知し、以後も期限切れを返す。"""
+    """受理期限を過ぎたRunは工程に入るときに一度だけ期限切れで閉じて終了だけを通知し、以後は既に期限切れで閉じていると返す。"""
     run_id = await _seed_running_run(
         session_factory,
         deadline_at=datetime.now(UTC) - timedelta(seconds=1),
@@ -258,7 +260,7 @@ async def test_expired_deadline_closes_run_once_and_notifies_only_terminal(
         persisted = await session.get(AgentRun, run_id)
     assert persisted is not None
     assert (results, publisher.published()) == (
-        [DeadlineExceeded(), DeadlineExceeded()],
+        [DeadlineExceeded(), RunAlreadyDeadlineExceeded()],
         [
             (
                 run_id,

@@ -8,18 +8,22 @@ from datetime import UTC, datetime, timedelta
 import pytest
 
 from app.agent.running.state import (
+    AnswerAlreadyStarted,
     AttemptAlreadyStarted,
     AttemptSuperseded,
     CancelledByUser,
     CanContinue,
     CannotContinue,
     DeadlineExceeded,
+    RunAlreadyCancelled,
     RunAlreadyCompleted,
+    RunAlreadyDeadlineExceeded,
     RunAlreadyFailed,
     RunNotFound,
     RunPhase,
     RunPhaseMismatchError,
     RunState,
+    active_run_state,
     has_attempt_started,
 )
 from app.agent.running.types import AgentRunErrorCode, AgentRunStatus
@@ -36,7 +40,6 @@ Check = Callable[[RunState, datetime], object]
 def _queued() -> RunState:
     return RunState(
         status=AgentRunStatus.QUEUED,
-        error_code=None,
         attempt_epoch=0,
         deadline_at=_DEADLINE_AT,
         answer_started_at=None,
@@ -46,7 +49,6 @@ def _queued() -> RunState:
 def _preparing(*, attempt_epoch: int = _EPOCH) -> RunState:
     return RunState(
         status=AgentRunStatus.RUNNING,
-        error_code=None,
         attempt_epoch=attempt_epoch,
         deadline_at=_DEADLINE_AT,
         answer_started_at=None,
@@ -56,20 +58,7 @@ def _preparing(*, attempt_epoch: int = _EPOCH) -> RunState:
 def _answering(*, attempt_epoch: int = _EPOCH) -> RunState:
     return RunState(
         status=AgentRunStatus.RUNNING,
-        error_code=None,
         attempt_epoch=attempt_epoch,
-        deadline_at=_DEADLINE_AT,
-        answer_started_at=_ANSWER_STARTED_AT,
-    )
-
-
-def _finished(
-    status: AgentRunStatus, error_code: AgentRunErrorCode | None = None
-) -> RunState:
-    return RunState(
-        status=status,
-        error_code=error_code,
-        attempt_epoch=_EPOCH,
         deadline_at=_DEADLINE_AT,
         answer_started_at=_ANSWER_STARTED_AT,
     )
@@ -95,13 +84,85 @@ def _enqueue_failure(state: RunState, now: datetime) -> object:
     return state.check_enqueue_failure(now=now)
 
 
-_FINISHED_CANCELLED = _finished(AgentRunStatus.FAILED, AgentRunErrorCode.CANCELLED)
-_FINISHED_DEADLINE = _finished(AgentRunStatus.DEADLINE_EXCEEDED)
-_FINISHED_COMPLETED = _finished(AgentRunStatus.COMPLETED)
-_FINISHED_FAILED = _finished(
-    AgentRunStatus.FAILED, AgentRunErrorCode.GENERATION_UNAVAILABLE
+@pytest.mark.parametrize(
+    ("status", "error_code", "expected"),
+    [
+        pytest.param(
+            AgentRunStatus.FAILED,
+            AgentRunErrorCode.CANCELLED,
+            RunAlreadyCancelled(),
+            id="cancelled",
+        ),
+        pytest.param(
+            AgentRunStatus.DEADLINE_EXCEEDED,
+            None,
+            RunAlreadyDeadlineExceeded(),
+            id="deadline_exceeded",
+        ),
+        pytest.param(
+            AgentRunStatus.COMPLETED, None, RunAlreadyCompleted(), id="completed"
+        ),
+        pytest.param(
+            AgentRunStatus.FAILED,
+            AgentRunErrorCode.GENERATION_UNAVAILABLE,
+            RunAlreadyFailed(),
+            id="failed",
+        ),
+        pytest.param(
+            AgentRunStatus.POLICY_BLOCKED, None, RunAlreadyFailed(), id="policy_blocked"
+        ),
+    ],
 )
-_FINISHED_POLICY_BLOCKED = _finished(AgentRunStatus.POLICY_BLOCKED)
+def test_ended_run_is_read_as_how_it_ended(
+    status: AgentRunStatus, error_code: AgentRunErrorCode | None, expected: object
+) -> None:
+    """終わったRunの保存値は、状態ではなく終わり方(停止・期限切れ・完了・失敗)として読まれる。"""
+    assert (
+        active_run_state(
+            status=status,
+            error_code=error_code,
+            attempt_epoch=_EPOCH,
+            deadline_at=_DEADLINE_AT,
+            answer_started_at=_ANSWER_STARTED_AT,
+        )
+        == expected
+    )
+
+
+def test_active_run_is_read_as_its_state() -> None:
+    """動いているRunの保存値は、状態・世代・受理期限・回答開始時刻を持つ状態として読まれる。"""
+    assert active_run_state(
+        status=AgentRunStatus.RUNNING,
+        error_code=None,
+        attempt_epoch=_EPOCH,
+        deadline_at=_DEADLINE_AT,
+        answer_started_at=_ANSWER_STARTED_AT,
+    ) == RunState(
+        status=AgentRunStatus.RUNNING,
+        attempt_epoch=_EPOCH,
+        deadline_at=_DEADLINE_AT,
+        answer_started_at=_ANSWER_STARTED_AT,
+    )
+
+
+@pytest.mark.parametrize(
+    "status",
+    [
+        AgentRunStatus.COMPLETED,
+        AgentRunStatus.FAILED,
+        AgentRunStatus.POLICY_BLOCKED,
+        AgentRunStatus.DEADLINE_EXCEEDED,
+    ],
+)
+def test_state_cannot_be_built_for_ended_run(status: AgentRunStatus) -> None:
+    """終わったRunの状態を作ろうとすると、誤りとして例外になる。"""
+    with pytest.raises(ValueError):
+        RunState(
+            status=status,
+            attempt_epoch=_EPOCH,
+            deadline_at=_DEADLINE_AT,
+            answer_started_at=_ANSWER_STARTED_AT,
+        )
 
 
 @pytest.mark.parametrize(
@@ -110,55 +171,13 @@ _FINISHED_POLICY_BLOCKED = _finished(AgentRunStatus.POLICY_BLOCKED)
         pytest.param(_queued(), RunPhase.QUEUED, id="queued"),
         pytest.param(_preparing(), RunPhase.PREPARING, id="running-before-answer"),
         pytest.param(_answering(), RunPhase.ANSWERING, id="running-after-answer"),
-        pytest.param(_FINISHED_COMPLETED, RunPhase.FINISHED, id="completed"),
-        pytest.param(_FINISHED_FAILED, RunPhase.FINISHED, id="failed"),
-        pytest.param(_FINISHED_POLICY_BLOCKED, RunPhase.FINISHED, id="policy_blocked"),
-        pytest.param(_FINISHED_DEADLINE, RunPhase.FINISHED, id="deadline_exceeded"),
     ],
 )
 def test_phase_follows_status_and_answer_start(
     state: RunState, expected: RunPhase
 ) -> None:
-    """Runの段階は、状態と回答開始の有無から待機中・準備中・回答中・終了のどれか1つに決まる。"""
+    """動いているRunの段階は、状態と回答開始の有無から待機中・準備中・回答中のどれか1つに決まる。"""
     assert state.phase is expected
-
-
-@pytest.mark.parametrize("check", [_start, _attempt])
-@pytest.mark.parametrize(
-    ("state", "expected"),
-    [
-        pytest.param(_FINISHED_CANCELLED, CancelledByUser(), id="cancelled"),
-        pytest.param(_FINISHED_DEADLINE, DeadlineExceeded(), id="deadline_exceeded"),
-        pytest.param(_FINISHED_COMPLETED, AttemptSuperseded(), id="completed"),
-        pytest.param(_FINISHED_FAILED, AttemptSuperseded(), id="failed"),
-        pytest.param(
-            _FINISHED_POLICY_BLOCKED, AttemptSuperseded(), id="policy_blocked"
-        ),
-    ],
-)
-def test_worker_sees_how_finished_run_ended_before_deadline_is_considered(
-    check: Check, state: RunState, expected: object
-) -> None:
-    """終了済みのRunを試行が判定すると、期限を過ぎていても終わり方(停止・期限切れ・別の試行が担当)が返る。"""
-    assert check(state, _RECOVERY_DEADLINE_AT + timedelta(seconds=1)) == expected
-
-
-@pytest.mark.parametrize("check", [_cancel, _enqueue_failure])
-@pytest.mark.parametrize(
-    ("state", "expected"),
-    [
-        pytest.param(_FINISHED_CANCELLED, CancelledByUser(), id="cancelled"),
-        pytest.param(_FINISHED_DEADLINE, DeadlineExceeded(), id="deadline_exceeded"),
-        pytest.param(_FINISHED_COMPLETED, RunAlreadyCompleted(), id="completed"),
-        pytest.param(_FINISHED_FAILED, RunAlreadyFailed(), id="failed"),
-        pytest.param(_FINISHED_POLICY_BLOCKED, RunAlreadyFailed(), id="policy_blocked"),
-    ],
-)
-def test_caller_without_attempt_sees_how_finished_run_ended(
-    check: Check, state: RunState, expected: object
-) -> None:
-    """終了済みのRunを世代を持たない主体が判定すると、完了済み・失敗済みを含む終わり方が返る。"""
-    assert check(state, _RECOVERY_DEADLINE_AT + timedelta(seconds=1)) == expected
 
 
 def test_stale_attempt_is_superseded_without_expiring_run() -> None:
@@ -192,9 +211,9 @@ def test_start_allows_redelivered_run_before_answer() -> None:
 
 
 def test_start_yields_to_answering_attempt_without_expiring_it_after_deadline() -> None:
-    """回答中のRunへ受理期限後に再配信が届いても、期限切れにせず別の試行が担当していると返る。"""
+    """回答中のRunへ受理期限後に再配信が届いても、期限切れにせず回答が始まっていると返る。"""
     assert _answering().check_start(now=_DEADLINE_AT + timedelta(seconds=1)) == (
-        AttemptSuperseded()
+        AnswerAlreadyStarted()
     )
 
 
@@ -290,18 +309,12 @@ def test_enqueue_failure_sees_attempt_already_started(state: RunState) -> None:
             True,
             id="answering-at-recovery-deadline",
         ),
-        pytest.param(
-            _FINISHED_COMPLETED,
-            _RECOVERY_DEADLINE_AT,
-            False,
-            id="completed",
-        ),
     ],
 )
 def test_deadline_recovery_targets_active_runs_past_recovery_deadline(
     state: RunState, now: datetime, expected: bool
 ) -> None:
-    """期限回収の対象は、回収期限に達した実行中のRunだけになる。"""
+    """動いているRunは、回収期限に達したときだけ期限回収の対象になる。"""
     assert state.is_due_for_deadline_recovery(now=now) is expected
 
 
@@ -315,10 +328,19 @@ def test_attempt_started_only_after_first_epoch(
 
 @pytest.mark.parametrize(
     "stopped",
-    [CancelledByUser(), DeadlineExceeded(), AttemptSuperseded(), RunNotFound()],
+    [
+        DeadlineExceeded(),
+        AttemptSuperseded(),
+        AnswerAlreadyStarted(),
+        RunNotFound(),
+        RunAlreadyCompleted(),
+        RunAlreadyFailed(),
+        RunAlreadyCancelled(),
+        RunAlreadyDeadlineExceeded(),
+    ],
 )
 def test_every_stop_reason_is_received_as_cannot_continue(stopped: object) -> None:
-    """止まった理由の4つの型は、どれも「続けられない」として受けられる。"""
+    """止まった理由の型は、どれも「続けられない」として受けられる。"""
     assert isinstance(stopped, CannotContinue)
 
 
@@ -326,11 +348,10 @@ def test_every_stop_reason_is_received_as_cannot_continue(stopped: object) -> No
     "outcome",
     [
         CanContinue(),
-        RunAlreadyCompleted(),
-        RunAlreadyFailed(),
+        CancelledByUser(),
         AttemptAlreadyStarted(),
     ],
 )
 def test_other_outcomes_are_not_received_as_cannot_continue(outcome: object) -> None:
-    """続けてよい・完了済み・失敗済み・試行開始済みは、「続けられない」としては受けられない。"""
+    """続けてよい・この操作による停止・試行開始済みは、「続けられない」としては受けられない。"""
     assert not isinstance(outcome, CannotContinue)

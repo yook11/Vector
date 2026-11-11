@@ -60,7 +60,9 @@ from app.agent.running.state import (
     CancelledByUser,
     DeadlineExceeded,
     FailureRecorded,
+    RunAlreadyCancelled,
     RunAlreadyCompleted,
+    RunAlreadyDeadlineExceeded,
     RunAlreadyFailed,
     RunNotFound,
     has_attempt_started,
@@ -246,10 +248,14 @@ async def create_research_response(
                 pass
             case AttemptAlreadyStarted():
                 _log_enqueue_failure_skipped(created.run_id, "attempt_already_started")
-            case CancelledByUser():
-                _log_enqueue_failure_skipped(created.run_id, "cancelled_by_user")
             case DeadlineExceeded():
                 _log_enqueue_failure_skipped(created.run_id, "deadline_exceeded")
+            case RunAlreadyCancelled():
+                _log_enqueue_failure_skipped(created.run_id, "run_already_cancelled")
+            case RunAlreadyDeadlineExceeded():
+                _log_enqueue_failure_skipped(
+                    created.run_id, "run_already_deadline_exceeded"
+                )
             case RunAlreadyCompleted():
                 _log_enqueue_failure_skipped(created.run_id, "run_already_completed")
             case RunAlreadyFailed():
@@ -360,7 +366,13 @@ async def cancel_research_run(
                 status_code=status.HTTP_409_CONFLICT,
                 detail=_RUN_ALREADY_COMPLETED_DETAIL,
             )
-        case CancelledByUser() | DeadlineExceeded() | RunAlreadyFailed():
+        case (
+            CancelledByUser()
+            | DeadlineExceeded()
+            | RunAlreadyFailed()
+            | RunAlreadyCancelled()
+            | RunAlreadyDeadlineExceeded()
+        ):
             return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 

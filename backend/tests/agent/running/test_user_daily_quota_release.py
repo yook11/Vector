@@ -30,7 +30,9 @@ from app.agent.running.state import (
     CancelledByUser,
     DeadlineExceeded,
     FailureRecorded,
+    RunAlreadyCancelled,
     RunAlreadyCompleted,
+    RunAlreadyDeadlineExceeded,
     RunAlreadyFailed,
     RunCompleted,
     RunNotFound,
@@ -316,7 +318,7 @@ async def test_double_cancel_refunds_once_and_second_result_is_not_release_event
         CancelledByUser(),
         _queued_closed(seeded, DailyQuotaReleaseOutcome.RELEASED),
     )
-    assert second == (CancelledByUser(), [])
+    assert second == (RunAlreadyCancelled(), [])
 
 
 @pytest.mark.asyncio
@@ -532,7 +534,7 @@ async def test_cancel_winner_refunds_before_waiting_start_loses(
             if observer.in_transaction():
                 await observer.rollback()
 
-    assert start_result == CancelledByUser()
+    assert start_result == RunAlreadyCancelled()
     assert (
         await _read_counter(
             session_factory,
@@ -769,7 +771,7 @@ async def test_record_failure_never_refunds(
     ("transition", "status", "attempt_epoch", "expected_outcome", "expected_counter"),
     [
         ("enqueue_failed", "queued", 0, RunAlreadyFailed(), 0),
-        ("deadline_sweep", "queued", 0, DeadlineExceeded(), 0),
+        ("deadline_sweep", "queued", 0, RunAlreadyDeadlineExceeded(), 0),
         ("complete", "running", 1, RunAlreadyCompleted(), 1),
     ],
 )

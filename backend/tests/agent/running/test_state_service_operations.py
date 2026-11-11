@@ -26,11 +26,14 @@ from app.agent.running.daily_quota.release import DailyQuotaReleaseOutcome
 from app.agent.running.finish_notice import ClosedQueuedRun, ClosedRunningRun
 from app.agent.running.question_reading import AgentRunQuestionRepository
 from app.agent.running.state import (
+    AnswerAlreadyStarted,
     AttemptStarted,
     AttemptSuperseded,
     CancelledByUser,
     CannotContinue,
     FailureRecorded,
+    RunAlreadyCancelled,
+    RunAlreadyFailed,
     RunCompleted,
     RunNotFound,
     RunPhaseMismatchError,
@@ -370,8 +373,8 @@ async def test_stale_complete_run_with_a_handoff_does_not_persist_it(
 @pytest.mark.parametrize(
     ("cancelled", "expected"),
     [
-        pytest.param(False, AttemptSuperseded(), id="failure-recorded"),
-        pytest.param(True, CancelledByUser(), id="cancelled"),
+        pytest.param(False, RunAlreadyFailed(), id="failure-recorded"),
+        pytest.param(True, RunAlreadyCancelled(), id="cancelled"),
     ],
 )
 async def test_complete_run_lost_race_leaves_no_assistant_message(
@@ -556,7 +559,7 @@ async def test_start_run_reexecutes_running_and_skips_terminal_runs(
     assert thread_id == running.thread_id
     assert question.content == "worker question"
     assert question.seq == 1
-    assert skipped == AttemptSuperseded()
+    assert skipped == RunAlreadyFailed()
     async with session_factory() as session:
         restarted = await session.get(AgentRun, running.id)
         terminal = await session.get(AgentRun, failed.id)
@@ -582,7 +585,7 @@ async def test_start_run_rejects_answering_run_without_changing_attempt(
     session_factory: async_sessionmaker[AsyncSession],
     redelivery_delay: timedelta,
 ) -> None:
-    """回答生成開始済みなら別の試行が担当しているとして開始せず、世代と状態を変えない。"""
+    """回答生成開始済みなら回答が始まっているとして開始せず、世代と状態を変えない。"""
     created_at = datetime(2026, 9, 27, 12, 0, tzinfo=UTC)
     answer_started_at = created_at + timedelta(seconds=55)
     redelivered_at = answer_started_at + redelivery_delay
@@ -600,7 +603,7 @@ async def test_start_run_rejects_answering_run_without_changing_attempt(
 
     redelivery = await service.start_attempt(run.id)
 
-    assert redelivery == AttemptSuperseded()
+    assert redelivery == AnswerAlreadyStarted()
     async with session_factory() as session:
         current = await session.get(AgentRun, run.id)
         assert current is not None
@@ -726,7 +729,7 @@ async def test_start_run_reports_idempotent_skip_when_transition_loses_race(
             )
         ],
     )
-    assert skip_result == CancelledByUser()
+    assert skip_result == RunAlreadyCancelled()
     async with session_factory() as session:
         failed = await session.get(AgentRun, run.id)
         assert failed is not None

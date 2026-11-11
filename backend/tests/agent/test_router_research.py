@@ -38,7 +38,9 @@ from app.agent.running.deadline.scheduling import get_agent_deadline_scheduler
 from app.agent.running.state import (
     CancelledByUser,
     DeadlineExceeded,
+    RunAlreadyCancelled,
     RunAlreadyCompleted,
+    RunAlreadyDeadlineExceeded,
     RunAlreadyFailed,
     RunNotFound,
 )
@@ -1450,6 +1452,8 @@ class TestQuotaRouterTelemetry:
             (CancelledByUser(), 204),
             (DeadlineExceeded(), 204),
             (RunAlreadyFailed(), 204),
+            (RunAlreadyCancelled(), 204),
+            (RunAlreadyDeadlineExceeded(), 204),
             (RunNotFound(), 404),
             (RunAlreadyCompleted(), 409),
         ],
@@ -2507,7 +2511,7 @@ class TestCancelResearchRun:
         )
         refreshed_run = await db_session.get(AgentRun, run_id)
         assert refreshed_run is not None
-        assert completed == CancelledByUser()
+        assert completed == RunAlreadyCancelled()
         assert refreshed_run.status == "failed"
         assert refreshed_run.error_code == "cancelled"
         messages = (

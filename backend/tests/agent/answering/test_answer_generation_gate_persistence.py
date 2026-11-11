@@ -23,10 +23,11 @@ from app.agent.running.finish_notice import ClosedRun, ClosedRunningRun
 from app.agent.running.state import (
     AnswerGenerationStarted,
     AttemptSuperseded,
-    CancelledByUser,
     CanContinue,
     CannotContinue,
     DeadlineExceeded,
+    RunAlreadyCancelled,
+    RunAlreadyFailed,
     RunNotFound,
     RunPhaseMismatchError,
 )
@@ -234,7 +235,7 @@ async def test_start_stale_attempt_does_not_record_or_expire_run(
 async def test_start_terminal_run_does_not_record_or_overwrite_status(
     session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
-    """失敗で終わったRunの回答開始は別の試行が担当したと返し、状態も開始時刻も書かない。"""
+    """失敗で終わったRunの回答開始は既に失敗していると返し、状態も開始時刻も書かない。"""
     run_id = await _seed_running(
         session_factory,
         status="failed",
@@ -244,7 +245,7 @@ async def test_start_terminal_run_does_not_record_or_overwrite_status(
     result = await _start_at(session_factory, run_id, now=_BEFORE_DEADLINE)
 
     run = await _load_run(session_factory, run_id)
-    assert result == (AttemptSuperseded(), [])
+    assert result == (RunAlreadyFailed(), [])
     assert run.status == "failed"
     assert run.answer_started_at is None
 
@@ -357,7 +358,7 @@ async def test_gate_start_stale_attempt_returns_superseded_without_writing(
 async def test_gate_start_cancelled_run_returns_cancelled_without_writing(
     session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
-    """利用者が止めたRunの回答開始は止めたことを返し、状態も開始時刻も変えず予約も通知もしない。"""
+    """利用者が止めたRunの回答開始は既に止められていると返し、状態も開始時刻も変えず予約も通知もしない。"""
     run_id = await _seed_running(
         session_factory,
         status="failed",
@@ -370,7 +371,7 @@ async def test_gate_start_cancelled_run_returns_cancelled_without_writing(
 
     run = await _load_run(session_factory, run_id)
     assert (result, observed.reservations, observed.published()) == (
-        CancelledByUser(),
+        RunAlreadyCancelled(),
         [],
         [],
     )

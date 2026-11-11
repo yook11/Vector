@@ -41,9 +41,12 @@ async def main():
     from app.agent.running.stage_gate import AgentRunStageGate
     from app.agent.running.state import (
         AttemptSuperseded,
-        CancelledByUser,
         CanContinue,
         DeadlineExceeded,
+        RunAlreadyCancelled,
+        RunAlreadyCompleted,
+        RunAlreadyDeadlineExceeded,
+        RunAlreadyFailed,
         RunNotFound,
     )
     from app.agent.running.state_service import AgentRunStateService
@@ -145,14 +148,20 @@ async def main():
             match result:
                 case CanContinue():
                     pass
-                case CancelledByUser():
-                    stop_reason = "cancelled_by_user"
                 case DeadlineExceeded():
                     stop_reason = "deadline_exceeded"
                 case AttemptSuperseded():
                     stop_reason = "attempt_superseded"
                 case RunNotFound():
                     stop_reason = "run_not_found"
+                case RunAlreadyCompleted():
+                    stop_reason = "run_already_completed"
+                case RunAlreadyFailed():
+                    stop_reason = "run_already_failed"
+                case RunAlreadyCancelled():
+                    stop_reason = "run_already_cancelled"
+                case RunAlreadyDeadlineExceeded():
+                    stop_reason = "run_already_deadline_exceeded"
             return result
 
         async def observe_stage_entry(gate, stage):

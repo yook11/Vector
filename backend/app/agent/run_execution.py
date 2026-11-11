@@ -33,11 +33,15 @@ from app.agent.running.question_reading import (
 )
 from app.agent.running.stage_gate import AgentRunStageGate
 from app.agent.running.state import (
+    AnswerAlreadyStarted,
     AttemptStarted,
     AttemptSuperseded,
-    CancelledByUser,
     CannotContinue,
     DeadlineExceeded,
+    RunAlreadyCancelled,
+    RunAlreadyCompleted,
+    RunAlreadyDeadlineExceeded,
+    RunAlreadyFailed,
     RunCompleted,
     RunNotFound,
 )
@@ -207,14 +211,22 @@ async def execute_run_attempt(
 
 def _stop_reason(stopped: CannotContinue) -> str:
     match stopped:
-        case CancelledByUser():
-            return "cancelled_by_user"
         case DeadlineExceeded():
             return "deadline_exceeded"
         case AttemptSuperseded():
             return "attempt_superseded"
+        case AnswerAlreadyStarted():
+            return "answer_already_started"
         case RunNotFound():
             return "run_not_found"
+        case RunAlreadyCompleted():
+            return "run_already_completed"
+        case RunAlreadyFailed():
+            return "run_already_failed"
+        case RunAlreadyCancelled():
+            return "run_already_cancelled"
+        case RunAlreadyDeadlineExceeded():
+            return "run_already_deadline_exceeded"
         # 基底の子は閉じられないので、名前を決めていない理由は誤りとして止める。
         case _:
             raise AssertionError(

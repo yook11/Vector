@@ -30,6 +30,7 @@ from app.agent.running.state import (
     CancelledByUser,
     CannotContinue,
     DeadlineExceeded,
+    RunAlreadyCancelled,
 )
 from app.agent.running.types import RunAttempt
 from app.models.agent_message import AgentMessage
@@ -442,7 +443,7 @@ async def test_cancel_winner_refunds_once_and_expired_start_reports_idempotent_s
             )
         ],
     )
-    assert result == CancelledByUser()
+    assert result == RunAlreadyCancelled()
     run = await _read_run(session_factory, seeded.run_id)
     assert (run.status, run.error_code) == ("failed", "cancelled")
     assert await _read_counter(session_factory, usage_date=_USAGE_DATE) == 0
