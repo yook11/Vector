@@ -17,7 +17,6 @@ from app.agent.contract import (
     AnswerQuestionResult,
     ExternalUrlSource,
 )
-from app.agent.running.finish_notice import ClosedRunningRun
 from app.agent.running.state import CannotContinue, RunCompleted
 from app.agent.running.types import AgentRunStatus, RunAttempt
 from app.models.agent_message import AgentMessage, AgentMessageSource
@@ -26,6 +25,7 @@ from app.models.agent_thread import AgentThread
 from app.models.agent_user_daily_quota import AgentUserDailyQuota
 from app.shared.web_url import WebUrl
 from tests.agent.running._state_service import (
+    ClosedRunningRun,
     ClosedRunNotices,
     state_service,
     wait_until_lock_waiting,

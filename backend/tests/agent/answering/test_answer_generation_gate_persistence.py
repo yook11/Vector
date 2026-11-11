@@ -19,7 +19,6 @@ from app.agent.answering.timing import answer_generation_recovery_window
 from app.agent.live_updates.reporters import AgentRunLiveStageReporter
 from app.agent.live_updates.stream import AgentRunLiveStreamEvent
 from app.agent.running.answer_generation import AgentRunAnswerGenerationGate
-from app.agent.running.finish_notice import ClosedRunningRun
 from app.agent.running.state import (
     AnswerGenerationStarted,
     CanContinue,
@@ -30,6 +29,7 @@ from app.agent.running.types import RunAttempt
 from app.models.agent_run import AgentRun
 from tests.agent.running._seed import create_thread_message_run
 from tests.agent.running._state_service import (
+    ClosedRunningRun,
     ClosedRunNotices,
     state_service,
     wait_until_lock_waiting,

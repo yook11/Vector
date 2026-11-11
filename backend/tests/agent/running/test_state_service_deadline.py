@@ -9,13 +9,16 @@ import pytest
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from app.agent.running.finish_notice import ClosedRunningRun
 from app.agent.running.state import CannotContinue
 from app.agent.running.types import AgentRunErrorCode, AgentRunStatus, RunAttempt
 from app.models.agent_run import AgentRun
 from app.models.agent_user_daily_quota import AgentUserDailyQuota
 from tests.agent.running._seed import create_thread_message_run
-from tests.agent.running._state_service import ClosedRunNotices, state_service
+from tests.agent.running._state_service import (
+    ClosedRunningRun,
+    ClosedRunNotices,
+    state_service,
+)
 from tests.conftest import TEST_USER_ID
 
 _USER_ID = uuid.UUID(TEST_USER_ID)

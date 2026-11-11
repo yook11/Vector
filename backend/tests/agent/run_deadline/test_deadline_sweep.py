@@ -16,7 +16,6 @@ from sqlalchemy import literal, select, text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.agent.running.deadline.deadline_exceeded import _recover_deadline_exceeded_runs
-from app.agent.running.finish_notice import ClosedRunningRun
 from app.agent.running.state import CancelledByUser, RunFailed
 from app.agent.running.types import AgentRunErrorCode, AgentRunStatus, RunAttempt
 from app.models.agent_message import AgentMessage
@@ -28,6 +27,7 @@ from tests.agent.run_deadline.clock import (
     sweep_deadline_exceeded_runs_for_thread_at,
 )
 from tests.agent.running._state_service import (
+    ClosedRunningRun,
     ClosedRunNotices,
     CommitGate,
     state_service,
