@@ -29,7 +29,7 @@ async def test_duplicate_before_answer_generation_only_latest_execution_saves_an
     await older_execution.resume_planning()
     older_execution_result = await older_execution.wait_for_attempt_stop()
     assert older_execution_result == {
-        "stop_reason": "attempt_superseded",
+        "attempt_stopped": True,
         "completion_returned": False,
     }
 

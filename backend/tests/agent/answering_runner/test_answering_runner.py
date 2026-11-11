@@ -38,11 +38,7 @@ from app.agent.planning.contract import (
     QuestionPlan,
 )
 from app.agent.planning.failure import PlanningError
-from app.agent.running.state import (
-    AttemptSuperseded,
-    CannotContinue,
-    RunAlreadyCancelled,
-)
+from app.agent.running.state import CannotContinue
 from app.agent.threads.contracts import ThreadMessageSnapshot
 from app.ai_providers.errors import AIProviderNotSentError, AIProviderNotSentReason
 from tests.agent.answering_runner._harness import (
@@ -380,11 +376,11 @@ async def test_stopping_failure_is_wrapped_as_run_error_with_the_same_cause(
     )
 
 
-async def test_stopped_answer_returns_the_reason_and_closes_run_span_without_error(
+async def test_stopped_answer_is_returned_and_closes_run_span_without_error(
     capfire: CaptureLogfire,
 ) -> None:
-    """回答工程が止まった理由を返すと、runnerは同じ理由を返しspanをerrorにしない。"""
-    factory, _, _ = _direct_factory(answers=[AttemptSuperseded()])
+    """回答工程が続けられないと返すと、runnerは同じ答えを返しspanをerrorにしない。"""
+    factory, _, _ = _direct_factory(answers=[CannotContinue()])
 
     outcome = await _runner(factory).run(
         RunInput(question="元の質問", history=()),
@@ -392,18 +388,18 @@ async def test_stopped_answer_returns_the_reason_and_closes_run_span_without_err
     )
 
     span = one_span_named(capfire, "agent_answering_run")
-    assert outcome == AttemptSuperseded()
+    assert outcome == CannotContinue()
     assert exception_event(span) is None
     assert span["attributes"].get("logfire.level_num", 0) < 17
 
 
-async def test_stop_before_planning_returns_the_reason_without_planning() -> None:
-    """計画に入る問い合わせで止まると、計画も回答も呼ばずに止まった理由を返す。"""
+async def test_stop_before_planning_is_returned_without_planning() -> None:
+    """計画に入る問い合わせで止まると、計画も回答も呼ばずに続けられないと返す。"""
     events: list[str] = []
     factory, planner, direct_answerer = _direct_factory(
         answers=["最終回答"], events=events
     )
-    gate = RecordingStageGate(stop_at="planning", stopped=RunAlreadyCancelled())
+    gate = RecordingStageGate(stop_at="planning", stopped=CannotContinue())
 
     outcome = await _runner(factory, stage_gate=gate).run(
         RunInput(question="元の質問", history=()),
@@ -411,7 +407,7 @@ async def test_stop_before_planning_returns_the_reason_without_planning() -> Non
     )
 
     assert (outcome, events, gate.stages, planner.calls, direct_answerer.calls) == (
-        RunAlreadyCancelled(),
+        CannotContinue(),
         ["phases_factory"],
         ["planning"],
         [],

@@ -35,15 +35,7 @@ from app.agent.running.daily_quota.release import (
 )
 from app.agent.running.daily_quota.reservation import DailyRequestLimitExceededError
 from app.agent.running.deadline.scheduling import get_agent_deadline_scheduler
-from app.agent.running.state import (
-    CancelledByUser,
-    DeadlineExceeded,
-    RunAlreadyCancelled,
-    RunAlreadyCompleted,
-    RunAlreadyDeadlineExceeded,
-    RunAlreadyFailed,
-    RunNotFound,
-)
+from app.agent.running.state import CancelledByUser, CannotContinue, RunNotFound
 from app.agent.running.state_repository import AgentRunStateRepository
 from app.agent.running.state_service import AgentRunStateService
 from app.agent.running.types import RunAttempt
@@ -1450,12 +1442,8 @@ class TestQuotaRouterTelemetry:
         ("outcome", "expected_status"),
         [
             (CancelledByUser(), 204),
-            (DeadlineExceeded(), 204),
-            (RunAlreadyFailed(), 204),
-            (RunAlreadyCancelled(), 204),
-            (RunAlreadyDeadlineExceeded(), 204),
+            (CannotContinue(), 204),
             (RunNotFound(), 404),
-            (RunAlreadyCompleted(), 204),
         ],
     )
     async def test_cancel_terminal_result_does_not_record_quota_release(
@@ -2177,7 +2165,7 @@ class TestDeleteResearchThread:
             result=_direct_result(),
             research_handoff=None,
         )
-        assert completed == RunNotFound()
+        assert completed == CannotContinue()
         assert await db_session.scalar(select(func.count()).select_from(AgentRun)) == 0
         assert (
             await db_session.scalar(select(func.count()).select_from(AgentMessage)) == 0
@@ -2510,7 +2498,7 @@ class TestCancelResearchRun:
         )
         refreshed_run = await db_session.get(AgentRun, run_id)
         assert refreshed_run is not None
-        assert completed == RunAlreadyCancelled()
+        assert completed == CannotContinue()
         assert refreshed_run.status == "failed"
         assert refreshed_run.error_code == "cancelled"
         messages = (

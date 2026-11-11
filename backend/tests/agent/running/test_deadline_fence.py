@@ -18,13 +18,7 @@ from app.agent.contract import (
     ExternalUrlSource,
 )
 from app.agent.running.finish_notice import ClosedRunningRun
-from app.agent.running.state import (
-    AttemptSuperseded,
-    CannotContinue,
-    DeadlineExceeded,
-    RunCompleted,
-    RunPhaseMismatchError,
-)
+from app.agent.running.state import CannotContinue, RunCompleted
 from app.agent.running.types import AgentRunStatus, RunAttempt
 from app.models.agent_message import AgentMessage, AgentMessageSource
 from app.models.agent_run import AgentRun
@@ -198,7 +192,7 @@ async def test_start_run_starts_only_before_fixed_deadline(
 ) -> None:
     """期限前だけqueued runを開始する。
 
-    境界ちょうどはdeadline_exceededのままepochを進めない。
+    境界ちょうどはqueuedのままepochを進めない。
     """
     before = await _seed_run(session_factory, status="queued", attempt_epoch=0)
     at_deadline = await _seed_run(session_factory, status="queued", attempt_epoch=0)
@@ -220,7 +214,7 @@ async def test_start_run_starts_only_before_fixed_deadline(
             error_code=None,
         ),
         _PersistedStart(
-            status="deadline_exceeded",
+            status="queued",
             attempt_epoch=0,
             error_code=None,
         ),
@@ -285,7 +279,7 @@ async def test_complete_run_uses_answer_recovery_deadline(
     ) == (
         RunCompleted(),
         RunCompleted(),
-        DeadlineExceeded(),
+        CannotContinue(),
         [
             ClosedRunningRun(
                 attempt=RunAttempt(
@@ -299,11 +293,6 @@ async def test_complete_run_uses_answer_recovery_deadline(
                     run_id=accepted_before_recovery_deadline.run_id, epoch=3
                 ),
                 status=AgentRunStatus.COMPLETED,
-                error_code=None,
-            ),
-            ClosedRunningRun(
-                attempt=RunAttempt(run_id=rejected.run_id, epoch=3),
-                status=AgentRunStatus.DEADLINE_EXCEEDED,
                 error_code=None,
             ),
         ],
@@ -349,7 +338,7 @@ async def test_complete_run_uses_answer_recovery_deadline(
             research_handoff=_CANDIDATE_HANDOFF,
         ),
         _PersistedComplete(
-            status="deadline_exceeded",
+            status="running",
             attempt_epoch=3,
             deadline_at=_DEADLINE_AT,
             answer_started_at=_ANSWER_STARTED_AT,
@@ -366,18 +355,18 @@ async def test_complete_run_uses_answer_recovery_deadline(
 async def test_complete_run_requires_answer_start_without_changing_run(
     session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
-    """回答を開始していない現在の試行の完了は呼び出し順の誤りとして例外になり、Runと回答を変えない。"""
+    """回答を開始していない現在の試行の完了は続けられないと返り、Runと回答を変えない。"""
     seeded = await _seed_run(session_factory, status="running", attempt_epoch=3)
 
     service = state_service(session_factory, now=_CREATED_AT + timedelta(seconds=10))
 
-    with pytest.raises(RunPhaseMismatchError):
-        await service.complete(
-            RunAttempt(run_id=seeded.run_id, epoch=3),
-            result=_answer_result(),
-            research_handoff=_CANDIDATE_HANDOFF,
-        )
+    outcome = await service.complete(
+        RunAttempt(run_id=seeded.run_id, epoch=3),
+        result=_answer_result(),
+        research_handoff=_CANDIDATE_HANDOFF,
+    )
 
+    assert outcome == CannotContinue()
     assert await _load_complete_persisted(
         session_factory,
         run_id=seeded.run_id,
@@ -420,7 +409,7 @@ async def test_complete_run_does_not_change_persisted_result_for_old_epoch(
         research_handoff=_CANDIDATE_HANDOFF,
     )
 
-    assert outcome == AttemptSuperseded()
+    assert outcome == CannotContinue()
     assert (
         await _load_complete_persisted(
             session_factory,
@@ -432,11 +421,11 @@ async def test_complete_run_does_not_change_persisted_result_for_old_epoch(
 
 
 @pytest.mark.asyncio
-async def test_complete_run_uses_database_time_after_waiting_for_run_lock(
+async def test_complete_run_waiting_for_an_unchanged_run_keeps_judgement_before_waiting(
     session_factory: async_sessionmaker[AsyncSession],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """行ロックを待つ間に回収期限を越えた完了は、ロック後のDB時刻で期限切れとして終える。"""
+    """行をロックしただけで書き換えなかった相手を待つ間に回収期限を越えた完了は、待つ前に判定したとおり回答を保存する。"""
     async with session_factory() as clock_session:
         database_time = await clock_session.scalar(select(func.clock_timestamp()))
     assert isinstance(database_time, datetime)
@@ -491,11 +480,11 @@ async def test_complete_run_uses_database_time_after_waiting_for_run_lock(
                     await session.rollback()
 
     assert (outcome, notices.closed_runs) == (
-        DeadlineExceeded(),
+        RunCompleted(),
         [
             ClosedRunningRun(
                 attempt=RunAttempt(run_id=seeded.run_id, epoch=3),
-                status=AgentRunStatus.DEADLINE_EXCEEDED,
+                status=AgentRunStatus.COMPLETED,
                 error_code=None,
             )
         ],
@@ -505,9 +494,9 @@ async def test_complete_run_uses_database_time_after_waiting_for_run_lock(
         run_id=seeded.run_id,
         thread_id=seeded.thread_id,
     )
-    assert persisted.status == "deadline_exceeded"
+    assert persisted.status == "completed"
     assert persisted.answer_started_at == answer_started_at
-    assert persisted.has_assistant_message is False
-    assert persisted.message_count == 1
-    assert persisted.source_count == 0
-    assert persisted.research_handoff == _ORIGINAL_HANDOFF
+    assert persisted.has_assistant_message is True
+    assert persisted.message_count == 2
+    assert persisted.source_count == 1
+    assert persisted.research_handoff == _CANDIDATE_HANDOFF

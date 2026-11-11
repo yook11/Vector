@@ -19,20 +19,14 @@ from app.agent.answering.timing import answer_generation_recovery_window
 from app.agent.live_updates.reporters import AgentRunLiveStageReporter
 from app.agent.live_updates.stream import AgentRunLiveStreamEvent
 from app.agent.running.answer_generation import AgentRunAnswerGenerationGate
-from app.agent.running.finish_notice import ClosedRun, ClosedRunningRun
+from app.agent.running.finish_notice import ClosedRun
 from app.agent.running.state import (
     AnswerGenerationStarted,
-    AttemptSuperseded,
     CanContinue,
     CannotContinue,
-    DeadlineExceeded,
-    RunAlreadyCancelled,
-    RunAlreadyFailed,
-    RunNotFound,
-    RunPhaseMismatchError,
 )
 from app.agent.running.state_service import AgentRunStateService
-from app.agent.running.types import AgentRunStatus, RunAttempt
+from app.agent.running.types import RunAttempt
 from app.models.agent_run import AgentRun
 from tests.agent.running._seed import create_thread_message_run
 from tests.agent.running._state_service import (
@@ -130,7 +124,7 @@ async def _authorize_at(
     notices = ClosedRunNotices()
     result = await state_service(
         session_factory, notices=notices, now=now
-    ).authorize_answer_regeneration(RunAttempt(run_id=run_id, epoch=attempt_epoch))
+    ).authorize_continuation(RunAttempt(run_id=run_id, epoch=attempt_epoch))
     return result, notices.closed_runs
 
 
@@ -139,16 +133,6 @@ async def _database_time(session_factory: async_sessionmaker[AsyncSession]) -> d
         database_time = await session.scalar(text("SELECT clock_timestamp()"))
     assert isinstance(database_time, datetime)
     return database_time
-
-
-def _closed_by_deadline(run_id: uuid.UUID) -> list[ClosedRun]:
-    return [
-        ClosedRunningRun(
-            attempt=RunAttempt(run_id=run_id, epoch=_ATTEMPT_EPOCH),
-            status=AgentRunStatus.DEADLINE_EXCEEDED,
-            error_code=None,
-        )
-    ]
 
 
 async def _seed_running(
@@ -200,17 +184,17 @@ async def test_start_current_attempt_before_deadline_records_database_time(
 
 
 @pytest.mark.asyncio
-async def test_start_at_deadline_expires_without_recording_start(
+async def test_start_at_deadline_is_refused_without_recording_start(
     session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
-    """期限ちょうどの回答開始はRunを期限切れで終えてその世代へ知らせ、開始時刻を記録しない。"""
+    """期限ちょうどの回答開始は続けられないと返し、Runを閉じず開始時刻も記録しない。"""
     run_id = await _seed_running(session_factory)
 
     result = await _start_at(session_factory, run_id, now=_DEADLINE_AT)
 
     run = await _load_run(session_factory, run_id)
-    assert result == (DeadlineExceeded(), _closed_by_deadline(run_id))
-    assert run.status == "deadline_exceeded"
+    assert result == (CannotContinue(), [])
+    assert run.status == "running"
     assert run.answer_started_at is None
 
 
@@ -218,7 +202,7 @@ async def test_start_at_deadline_expires_without_recording_start(
 async def test_start_stale_attempt_does_not_record_or_expire_run(
     session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
-    """古い世代の回答開始は期限より先に別の試行が担当していると返し、Runを記録も期限切れにもしない。"""
+    """古い世代の回答開始は続けられないと返し、Runに開始時刻を記録しない。"""
     run_id = await _seed_running(session_factory)
 
     result = await _start_at(
@@ -226,7 +210,7 @@ async def test_start_stale_attempt_does_not_record_or_expire_run(
     )
 
     run = await _load_run(session_factory, run_id)
-    assert result == (AttemptSuperseded(), [])
+    assert result == (CannotContinue(), [])
     assert run.status == "running"
     assert run.answer_started_at is None
 
@@ -235,7 +219,7 @@ async def test_start_stale_attempt_does_not_record_or_expire_run(
 async def test_start_terminal_run_does_not_record_or_overwrite_status(
     session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
-    """失敗で終わったRunの回答開始は既に失敗していると返し、状態も開始時刻も書かない。"""
+    """失敗で終わったRunの回答開始は続けられないと返し、状態も開始時刻も書かない。"""
     run_id = await _seed_running(
         session_factory,
         status="failed",
@@ -245,7 +229,7 @@ async def test_start_terminal_run_does_not_record_or_overwrite_status(
     result = await _start_at(session_factory, run_id, now=_BEFORE_DEADLINE)
 
     run = await _load_run(session_factory, run_id)
-    assert result == (RunAlreadyFailed(), [])
+    assert result == (CannotContinue(), [])
     assert run.status == "failed"
     assert run.answer_started_at is None
 
@@ -254,31 +238,31 @@ async def test_start_terminal_run_does_not_record_or_overwrite_status(
 async def test_start_twice_in_same_attempt_does_not_overwrite_recorded_start(
     session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
-    """同じ試行が回答を2度開始すると呼び出し順の誤りとして例外になり、記録済みの開始時刻を変えない。"""
+    """同じ試行が回答を2度開始しようとすると続けられないと返り、記録済みの開始時刻を変えない。"""
     run_id = await _seed_running(
         session_factory,
         answer_started_at=_ANSWER_STARTED_AT,
     )
 
-    with pytest.raises(RunPhaseMismatchError):
-        await _start_at(session_factory, run_id, now=_BEFORE_DEADLINE)
+    result = await _start_at(session_factory, run_id, now=_BEFORE_DEADLINE)
 
     run = await _load_run(session_factory, run_id)
+    assert result == (CannotContinue(), [])
     assert run.status == "running"
     assert run.answer_started_at == _ANSWER_STARTED_AT
 
 
 @pytest.mark.asyncio
-async def test_gate_start_missing_run_returns_not_found_without_reserving(
+async def test_gate_start_missing_run_is_refused_without_reserving(
     session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
-    """存在しないRunの回答開始は見つからないことを返し、予約も通知もしない。"""
+    """存在しないRunの回答開始は続けられないと返し、予約も通知もしない。"""
     observed = _ObservedGate(session_factory, uuid.uuid4())
 
     result = await observed.gate.start()
 
     assert (result, observed.reservations, observed.published()) == (
-        RunNotFound(),
+        CannotContinue(),
         [],
         [],
     )
@@ -333,10 +317,10 @@ async def test_gate_start_reserves_recovery_from_committed_start_and_notifies_an
 
 
 @pytest.mark.asyncio
-async def test_gate_start_stale_attempt_returns_superseded_without_writing(
+async def test_gate_start_stale_attempt_is_refused_without_writing(
     session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
-    """古い世代が回答を始めようとすると別の試行が担当していると返し、開始を記録せず予約も通知もしない。"""
+    """古い世代が回答を始めようとすると続けられないと返し、開始を記録せず予約も通知もしない。"""
     run_id = await _seed_running(
         session_factory,
         deadline_at=await _database_time(session_factory) + timedelta(minutes=1),
@@ -347,7 +331,7 @@ async def test_gate_start_stale_attempt_returns_superseded_without_writing(
 
     run = await _load_run(session_factory, run_id)
     assert (result, observed.reservations, observed.published()) == (
-        AttemptSuperseded(),
+        CannotContinue(),
         [],
         [],
     )
@@ -355,10 +339,10 @@ async def test_gate_start_stale_attempt_returns_superseded_without_writing(
 
 
 @pytest.mark.asyncio
-async def test_gate_start_cancelled_run_returns_cancelled_without_writing(
+async def test_gate_start_cancelled_run_is_refused_without_writing(
     session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
-    """利用者が止めたRunの回答開始は既に止められていると返し、状態も開始時刻も変えず予約も通知もしない。"""
+    """利用者が止めたRunの回答開始は続けられないと返し、状態も開始時刻も変えず予約も通知もしない。"""
     run_id = await _seed_running(
         session_factory,
         status="failed",
@@ -371,7 +355,7 @@ async def test_gate_start_cancelled_run_returns_cancelled_without_writing(
 
     run = await _load_run(session_factory, run_id)
     assert (result, observed.reservations, observed.published()) == (
-        RunAlreadyCancelled(),
+        CannotContinue(),
         [],
         [],
     )
@@ -383,10 +367,10 @@ async def test_gate_start_cancelled_run_returns_cancelled_without_writing(
 
 
 @pytest.mark.asyncio
-async def test_gate_start_after_deadline_closes_run_and_notifies_only_terminal(
+async def test_gate_start_after_deadline_is_refused_without_closing_or_notifying(
     session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
-    """期限後に回答を始めようとするとRunを期限切れで閉じてその世代へ終了だけを知らせ、期限切れを返して予約しない。"""
+    """期限後に回答を始めようとすると続けられないと返し、Runを閉じず予約も通知もしない。"""
     run_id = await _seed_running(
         session_factory,
         deadline_at=await _database_time(session_factory) - timedelta(seconds=1),
@@ -397,25 +381,22 @@ async def test_gate_start_after_deadline_closes_run_and_notifies_only_terminal(
 
     run = await _load_run(session_factory, run_id)
     assert (result, observed.reservations, observed.published()) == (
-        DeadlineExceeded(),
+        CannotContinue(),
         [],
-        [
-            (
-                run_id,
-                _ATTEMPT_EPOCH,
-                {"type": "terminal", "status": "deadline_exceeded", "errorCode": None},
-            )
-        ],
+        [],
     )
-    assert run.status == "deadline_exceeded"
+    assert run.status == "running"
 
 
 @pytest.mark.asyncio
-async def test_lock_wait_uses_database_time_after_acquiring_run_lock(
+async def test_start_waiting_for_a_changed_run_is_judged_again_on_the_changed_row(
     session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
-    """行ロックを待つ間に期限を越えた回答開始は、ロック後のDB時刻で期限切れとして終える。"""
-    run_id = await _seed_running(session_factory)
+    """行ロックを待つ間に相手が受理期限を過去へ書き換えると、回答開始は書き換え後の行で判定し直されて止まり、Runを閉じない。"""
+    run_id = await _seed_running(
+        session_factory,
+        deadline_at=await _database_time(session_factory) + timedelta(minutes=1),
+    )
 
     notices = ClosedRunNotices()
     service = state_service(session_factory, notices=notices)
@@ -455,12 +436,59 @@ async def test_lock_wait_uses_database_time_after_acquiring_run_lock(
                     await session.rollback()
 
     run = await _load_run(session_factory, run_id)
-    assert (result, notices.closed_runs) == (
-        DeadlineExceeded(),
-        _closed_by_deadline(run_id),
-    )
-    assert run.status == "deadline_exceeded"
+    assert (result, notices.closed_runs) == (CannotContinue(), [])
+    assert run.status == "running"
     assert run.answer_started_at is None
+
+
+@pytest.mark.asyncio
+async def test_start_waiting_for_an_unchanged_run_keeps_the_time_before_waiting(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    """行をロックしただけで書き換えなかった相手を待った回答開始は、待つ前に評価した時刻を開始時刻として記録する。"""
+    run_id = await _seed_running(
+        session_factory,
+        deadline_at=await _database_time(session_factory) + timedelta(minutes=1),
+    )
+
+    service = state_service(session_factory)
+    async with (
+        session_factory() as locker,
+        session_factory() as observer,
+    ):
+        start_task: asyncio.Task[AnswerGenerationStarted | CannotContinue] | None = None
+        try:
+            await locker.begin()
+            await locker.execute(
+                select(AgentRun.id).where(AgentRun.id == run_id).with_for_update()
+            )
+
+            start_task = asyncio.create_task(
+                service.start_answer_generation(
+                    RunAttempt(run_id=run_id, epoch=_ATTEMPT_EPOCH),
+                )
+            )
+            await wait_until_lock_waiting(observer)
+
+            released_at = await locker.scalar(text("SELECT clock_timestamp()"))
+            await locker.rollback()
+
+            result = await asyncio.wait_for(start_task, timeout=5)
+        finally:
+            if start_task is not None:
+                if not start_task.done():
+                    start_task.cancel()
+                await asyncio.gather(start_task, return_exceptions=True)
+            for session in (locker, observer):
+                if session.in_transaction():
+                    await session.rollback()
+
+    run = await _load_run(session_factory, run_id)
+    assert run.answer_started_at is not None
+    assert (result, run.answer_started_at < released_at) == (
+        AnswerGenerationStarted(run_id, run.answer_started_at),
+        True,
+    )
 
 
 @pytest.mark.asyncio
@@ -486,10 +514,10 @@ async def test_authorize_before_recovery_deadline_keeps_start_time(
 
 
 @pytest.mark.asyncio
-async def test_authorize_at_recovery_deadline_expires_without_changing_start_time(
+async def test_authorize_at_recovery_deadline_is_refused_without_changing_run(
     session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
-    """回収期限ちょうどの再生成はRunを期限切れで終えてその世代へ知らせ、開始時刻を変えない。"""
+    """回収期限ちょうどの再生成は続けられないと返し、Runを閉じず開始時刻も変えない。"""
     run_id = await _seed_running(
         session_factory,
         answer_started_at=_ANSWER_STARTED_AT,
@@ -498,31 +526,16 @@ async def test_authorize_at_recovery_deadline_expires_without_changing_start_tim
     result = await _authorize_at(session_factory, run_id, now=_RECOVERY_DEADLINE_AT)
 
     run = await _load_run(session_factory, run_id)
-    assert result == (DeadlineExceeded(), _closed_by_deadline(run_id))
-    assert run.status == "deadline_exceeded"
+    assert result == (CannotContinue(), [])
+    assert run.status == "running"
     assert run.answer_started_at == _ANSWER_STARTED_AT
 
 
 @pytest.mark.asyncio
-async def test_authorize_without_start_does_not_expire(
+async def test_gate_regenerate_stale_attempt_is_refused_without_change(
     session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
-    """回答を開始していない試行の再生成は期限より先に呼び出し順の誤りとして例外になり、期限切れにしない。"""
-    run_id = await _seed_running(session_factory)
-
-    with pytest.raises(RunPhaseMismatchError):
-        await _authorize_at(session_factory, run_id, now=_DEADLINE_AT)
-
-    run = await _load_run(session_factory, run_id)
-    assert run.status == "running"
-    assert run.answer_started_at is None
-
-
-@pytest.mark.asyncio
-async def test_gate_regenerate_stale_attempt_returns_superseded_without_change(
-    session_factory: async_sessionmaker[AsyncSession],
-) -> None:
-    """古い世代の書き直しは期限より先に別の試行が担当していると返し、Runを変えない。"""
+    """古い世代の書き直しは続けられないと返し、Runを変えない。"""
     run_id = await _seed_running(
         session_factory,
         answer_started_at=_ANSWER_STARTED_AT,
@@ -532,7 +545,7 @@ async def test_gate_regenerate_stale_attempt_returns_superseded_without_change(
     result = await observed.gate.regenerate()
 
     run = await _load_run(session_factory, run_id)
-    assert (result, observed.published()) == (AttemptSuperseded(), [])
+    assert (result, observed.published()) == (CannotContinue(), [])
     assert (run.status, run.answer_started_at) == ("running", _ANSWER_STARTED_AT)
 
 

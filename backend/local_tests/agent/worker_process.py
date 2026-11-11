@@ -39,16 +39,7 @@ async def main():
     from app.agent.evidence_collection.internal_search.ai import gemini
     from app.agent.running.answer_generation import AgentRunAnswerGenerationGate
     from app.agent.running.stage_gate import AgentRunStageGate
-    from app.agent.running.state import (
-        AttemptSuperseded,
-        CanContinue,
-        DeadlineExceeded,
-        RunAlreadyCancelled,
-        RunAlreadyCompleted,
-        RunAlreadyDeadlineExceeded,
-        RunAlreadyFailed,
-        RunNotFound,
-    )
+    from app.agent.running.state import CanContinue, CannotContinue
     from app.agent.running.state_service import AgentRunStateService
     from app.models.agent_run import AgentRun
     from app.queue.brokers import broker_agent
@@ -61,7 +52,7 @@ async def main():
         control = WorkerControl(redis, sys.argv[1])
         delivery = None
         completion_returned = False
-        stop_reason = None
+        attempt_stopped = False
         answer_generation_calls = 0
         stream_message_id = None
         acknowledged = False
@@ -110,7 +101,7 @@ async def main():
 
         async def receive_deliveries():
             nonlocal delivery, pause_before_ack, completion_returned
-            nonlocal answer_generation_calls, stop_reason
+            nonlocal answer_generation_calls, attempt_stopped
             nonlocal stream_message_id, acknowledged
             instruction = await control.receive("receive")
             pause_before_ack = instruction.get("pause_before_ack", False)
@@ -126,7 +117,7 @@ async def main():
                     delivery = broker_agent.formatter.loads(message=message.data)
                     completion_returned = False
                     answer_generation_calls = 0
-                    stop_reason = None
+                    attempt_stopped = False
                     stream_message_id = None
                     acknowledged = False
                     processed.clear()
@@ -144,24 +135,12 @@ async def main():
             return result
 
         def record_stop(result):
-            nonlocal stop_reason
+            nonlocal attempt_stopped
             match result:
                 case CanContinue():
                     pass
-                case DeadlineExceeded():
-                    stop_reason = "deadline_exceeded"
-                case AttemptSuperseded():
-                    stop_reason = "attempt_superseded"
-                case RunNotFound():
-                    stop_reason = "run_not_found"
-                case RunAlreadyCompleted():
-                    stop_reason = "run_already_completed"
-                case RunAlreadyFailed():
-                    stop_reason = "run_already_failed"
-                case RunAlreadyCancelled():
-                    stop_reason = "run_already_cancelled"
-                case RunAlreadyDeadlineExceeded():
-                    stop_reason = "run_already_deadline_exceeded"
+                case CannotContinue():
+                    attempt_stopped = True
             return result
 
         async def observe_stage_entry(gate, stage):
@@ -187,7 +166,7 @@ async def main():
                         "worker_pid": os.getpid(),
                         "is_err": result.is_err,
                         "completion_returned": completion_returned,
-                        "stop_reason": stop_reason,
+                        "attempt_stopped": attempt_stopped,
                         "answer_generation_calls": answer_generation_calls,
                         "stream_message_id": stream_message_id,
                         "consumer_name": broker_agent.consumer_name,

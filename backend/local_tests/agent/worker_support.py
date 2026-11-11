@@ -160,7 +160,7 @@ class WorkerExecution:
     async def wait_for_attempt_stop(self):
         event = await self._wait_for_processed_delivery()
         return {
-            "stop_reason": event["stop_reason"],
+            "attempt_stopped": event["attempt_stopped"],
             "completion_returned": event["completion_returned"],
         }
 

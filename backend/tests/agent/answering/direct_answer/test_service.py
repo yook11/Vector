@@ -27,11 +27,7 @@ from app.agent.recording.direct_answer import (
     DirectAnswerStopped,
     DirectAnswerSucceeded,
 )
-from app.agent.running.state import (
-    AttemptSuperseded,
-    CannotContinue,
-    DeadlineExceeded,
-)
+from app.agent.running.state import CannotContinue
 from app.agent.threads.contracts import ThreadMessageSnapshot
 from app.ai_providers.errors import (
     AIProviderResultError,
@@ -726,19 +722,19 @@ async def test_retry_then_classified_failure_records_attempt_count() -> None:
     )
 
 
-async def test_regeneration_stop_returns_reason_and_records_stopped_outcome() -> None:
-    """書き直す前にRunが止まると、止まった理由を返し、記録係へ止まった結論を渡す。"""
+async def test_regeneration_stop_is_returned_and_records_stopped_outcome() -> None:
+    """書き直す前にRunが止まると、続けられないと返し、記録係へ止まった結論を渡す。"""
 
     recorder = RecordingDirectAnswerRecorder()
     streamer = ScriptedLlmTextStreamer([" "])
 
     result = await _service(
         streamer,
-        gate=ScriptedAnswerGenerationGate(regenerations=(AttemptSuperseded(),)),
+        gate=ScriptedAnswerGenerationGate(regenerations=(CannotContinue(),)),
         recorder=recorder,
     ).answer(_input())
 
-    assert result == AttemptSuperseded()
+    assert result == CannotContinue()
     _assert_recorded(recorder, outcome=DirectAnswerStopped())
 
 
@@ -799,11 +795,9 @@ def _unused_scope(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("stopped", [DeadlineExceeded(), AttemptSuperseded()])
-async def test_start_stop_returns_reason_without_generating_or_recording(
-    stopped: CannotContinue,
-) -> None:
-    """開始の前にRunが止まると、止まった理由を返し、生成も記録係も開かない。"""
+async def test_start_stop_is_returned_without_generating_or_recording() -> None:
+    """開始の前にRunが止まると、続けられないと返し、生成も記録係も開かない。"""
+    stopped = CannotContinue()
     streamer = ScriptedLlmTextStreamer(["呼ばれない"])
     entered: list[int] = []
     gate = ScriptedAnswerGenerationGate(start=stopped)
@@ -853,13 +847,13 @@ async def test_start_failure_propagates_without_generating_or_recording() -> Non
 
 @pytest.mark.asyncio
 async def test_regeneration_stop_does_not_start_second_generation() -> None:
-    """書き直す前にRunが止まると、止まった理由を返し、2回目の生成を始めない。"""
+    """書き直す前にRunが止まると、続けられないと返し、2回目の生成を始めない。"""
     streamer = ScriptedLlmTextStreamer([" \n\t", "呼ばれない"])
-    gate = ScriptedAnswerGenerationGate(regenerations=(DeadlineExceeded(),))
+    gate = ScriptedAnswerGenerationGate(regenerations=(CannotContinue(),))
 
     result = await _service(streamer, gate=gate).answer(_input())
 
-    assert result == DeadlineExceeded()
+    assert result == CannotContinue()
     assert [call.attempt_number for call in streamer.calls] == [1]
     assert gate.regenerate_calls == 1
 

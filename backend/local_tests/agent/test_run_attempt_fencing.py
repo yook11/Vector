@@ -8,7 +8,7 @@ from app.agent.contract import (
     ExternalUrlSource,
 )
 from app.agent.running.creation import AgentRunCreationRepository
-from app.agent.running.state import AttemptSuperseded, RunCompleted
+from app.agent.running.state import CannotContinue, RunCompleted
 from app.agent.running.types import RunAttempt
 from local_tests.agent.support import (
     fetch_saved_run_result,
@@ -90,7 +90,7 @@ async def test_only_latest_attempt_can_complete_run(
         system_database, run_id=run_id, thread_id=created.thread_id
     )
     assert latest_attempt_epoch > older_attempt_epoch
-    assert older_attempt_completion == AttemptSuperseded()
+    assert older_attempt_completion == CannotContinue()
     assert latest_attempt_completion == RunCompleted()
     assert saved_result.run["status"] == "completed"
     assert saved_result.run["attempt_epoch"] == latest_attempt_epoch

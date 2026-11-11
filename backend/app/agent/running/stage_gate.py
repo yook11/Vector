@@ -24,7 +24,7 @@ class AgentRunStageGate:
         self._stage_reporter = stage_reporter
 
     async def enter(self, stage: AnsweringStage) -> CanContinue | CannotContinue:
-        match await self._state_service.authorize_stage_entry(self._attempt):
+        match await self._state_service.authorize_continuation(self._attempt):
             case CanContinue() as can_continue:
                 await self._stage_reporter.stage_changed(stage)
                 return can_continue

@@ -26,17 +26,11 @@ from app.agent.running.daily_quota.release import DailyQuotaReleaseOutcome
 from app.agent.running.finish_notice import ClosedQueuedRun, ClosedRunningRun
 from app.agent.running.question_reading import AgentRunQuestionRepository
 from app.agent.running.state import (
-    AnswerAlreadyStarted,
     AttemptStarted,
-    AttemptSuperseded,
     CancelledByUser,
     CannotContinue,
     FailureRecorded,
-    RunAlreadyCancelled,
-    RunAlreadyFailed,
     RunCompleted,
-    RunNotFound,
-    RunPhaseMismatchError,
 )
 from app.agent.running.types import AgentRunErrorCode, AgentRunStatus, RunAttempt
 from app.db.errors import (
@@ -169,80 +163,6 @@ class _LockTimeoutAtCommit:
 
 
 @pytest.mark.asyncio
-async def test_complete_run_warns_on_citation_source_mismatch_without_failing_run(
-    read_logs,
-    session_factory: async_sessionmaker[AsyncSession],
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """出典と引用番号が食い違う回答も完了し、本文や出典を含まない警告だけを残す。"""
-    async with session_factory() as session:
-        _thread, _message, run = await _create_thread_message_run(
-            session,
-            status="running",
-            attempt_epoch=1,
-            answer_started_at=datetime.now(UTC),
-        )
-    result = AnswerQuestionResult(
-        status="answered",
-        answer="sensitive answer body [[2]]",
-        sources=[
-            ExternalUrlSource(
-                source_ref="1",
-                url=WebUrl("https://example.com/secret-source-url"),
-                title="Sensitive source title",
-                evidence_claim="Sensitive evidence claim.",
-                source_name="Example",
-            )
-        ],
-        missing_aspects=[],
-        plan_summary=_plan_summary("search"),
-    )
-
-    notices = record_closed_runs(monkeypatch)
-    service = state_service(session_factory, notices=notices)
-
-    completed = await service.complete(
-        RunAttempt(run_id=run.id, epoch=run.attempt_epoch),
-        result=result,
-        research_handoff=None,
-    )
-    logs = read_logs()
-
-    assert (completed, notices.closed_runs) == (
-        RunCompleted(),
-        [
-            ClosedRunningRun(
-                attempt=RunAttempt(run_id=run.id, epoch=1),
-                status=AgentRunStatus.COMPLETED,
-                error_code=None,
-            )
-        ],
-    )
-    mismatch_logs = [
-        entry
-        for entry in logs
-        if entry.get("event") == "agent_citation_source_mismatch"
-    ]
-    assert len(mismatch_logs) == 1
-    warning = mismatch_logs[0]
-    assert warning["level"] == "warning"
-    assert warning["run_id"] == str(run.id)
-    assert warning["marker_without_source_refs"] == ["2"]
-    assert warning["source_without_marker_refs"] == ["1"]
-    serialized_warning = repr(warning)
-    assert "sensitive answer body" not in serialized_warning
-    assert "secret-source-url" not in serialized_warning
-    assert "Sensitive source title" not in serialized_warning
-    assert "Sensitive evidence claim" not in serialized_warning
-
-    async with session_factory() as session:
-        completed_run = await session.get(AgentRun, run.id)
-        assert completed_run is not None
-        assert completed_run.status == "completed"
-        assert completed_run.assistant_message_id is not None
-
-
-@pytest.mark.asyncio
 async def test_complete_run_persists_the_handoff_on_the_thread_and_round_trips(
     session_factory: async_sessionmaker[AsyncSession],
     monkeypatch: pytest.MonkeyPatch,
@@ -360,7 +280,7 @@ async def test_stale_complete_run_with_a_handoff_does_not_persist_it(
         research_handoff=handoff_json,
     )
 
-    assert outcome == AttemptSuperseded()
+    assert outcome == CannotContinue()
     async with session_factory() as session:
         current = await session.get(AgentRun, run.id)
         persisted_thread = await session.get(AgentThread, thread_id)
@@ -371,18 +291,17 @@ async def test_stale_complete_run_with_a_handoff_does_not_persist_it(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("cancelled", "expected"),
+    "cancelled",
     [
-        pytest.param(False, RunAlreadyFailed(), id="failure-recorded"),
-        pytest.param(True, RunAlreadyCancelled(), id="cancelled"),
+        pytest.param(False, id="failure-recorded"),
+        pytest.param(True, id="cancelled"),
     ],
 )
 async def test_complete_run_lost_race_leaves_no_assistant_message(
     session_factory: async_sessionmaker[AsyncSession],
     cancelled: bool,
-    expected: CannotContinue,
 ) -> None:
-    """失敗記録かキャンセルに先を越された完了は、先に確定した終わり方を返して回答を残さない。"""
+    """失敗記録かキャンセルに先を越された完了は、続けられないと返して回答を残さない。"""
     async with session_factory() as setup_session:
         _thread, _message, run = await _create_thread_message_run(
             setup_session,
@@ -405,7 +324,7 @@ async def test_complete_run_lost_race_leaves_no_assistant_message(
         research_handoff=None,
     )
 
-    assert outcome == expected
+    assert outcome == CannotContinue()
     async with session_factory() as session:
         failed = await session.get(AgentRun, run.id)
         assert failed is not None
@@ -452,7 +371,7 @@ async def test_stale_complete_run_loses_epoch_fence_and_leaves_no_artifacts(
         research_handoff=None,
     )
 
-    assert outcome == AttemptSuperseded()
+    assert outcome == CannotContinue()
     async with session_factory() as session:
         current = await session.get(AgentRun, run.id)
         assert current is not None
@@ -515,7 +434,7 @@ async def test_stale_record_failure_does_not_alter_newer_attempt(
         error_code=AgentRunErrorCode.STALE,
     )
 
-    assert recorded == AttemptSuperseded()
+    assert recorded == CannotContinue()
     async with session_factory() as session:
         current = await session.get(AgentRun, run.id)
         assert current is not None
@@ -559,7 +478,7 @@ async def test_start_run_reexecutes_running_and_skips_terminal_runs(
     assert thread_id == running.thread_id
     assert question.content == "worker question"
     assert question.seq == 1
-    assert skipped == RunAlreadyFailed()
+    assert skipped == CannotContinue()
     async with session_factory() as session:
         restarted = await session.get(AgentRun, running.id)
         terminal = await session.get(AgentRun, failed.id)
@@ -603,7 +522,7 @@ async def test_start_run_rejects_answering_run_without_changing_attempt(
 
     redelivery = await service.start_attempt(run.id)
 
-    assert redelivery == AnswerAlreadyStarted()
+    assert redelivery == CannotContinue()
     async with session_factory() as session:
         current = await session.get(AgentRun, run.id)
         assert current is not None
@@ -676,12 +595,12 @@ async def test_concurrent_start_runs_receive_distinct_sequence_values(
 async def test_start_run_reports_idempotent_skip_for_missing_run(
     session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
-    """存在しないRunの開始は見つからないとして拒否する。"""
+    """存在しないRunの開始は続けられないと返す。"""
     missing_run_id = UUID("00000000-0000-4000-a000-000000000099")
 
     skip_result = await state_service(session_factory).start_attempt(missing_run_id)
 
-    assert skip_result == RunNotFound()
+    assert skip_result == CannotContinue()
 
 
 @pytest.mark.asyncio
@@ -729,7 +648,7 @@ async def test_start_run_reports_idempotent_skip_when_transition_loses_race(
             )
         ],
     )
-    assert skip_result == RunAlreadyCancelled()
+    assert skip_result == CannotContinue()
     async with session_factory() as session:
         failed = await session.get(AgentRun, run.id)
         assert failed is not None
@@ -889,13 +808,13 @@ async def test_answer_save_lock_timeout_is_transaction_local_after_commit(
     ],
 )
 @pytest.mark.asyncio
-async def test_completion_failure_reason_precedence_preserves_existing_data(
+async def test_completion_by_stale_attempt_preserves_existing_data(
     status: str,
     attempt_epoch: int,
     answer_started_at: datetime | None,
     session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
-    """世代の違う完了は期限より先に別の試行の担当と判定され、Run・thread・既存の回答を変えない。"""
+    """世代の違う完了は続けられないと返り、Run・thread・既存の回答を変えない。"""
     async with session_factory() as session:
         thread, _, run = await _create_thread_message_run(
             session,
@@ -912,7 +831,7 @@ async def test_completion_failure_reason_precedence_preserves_existing_data(
         research_handoff=_handoff().model_dump(mode="json"),
     )
 
-    assert completion == AttemptSuperseded()
+    assert completion == CannotContinue()
     async with session_factory() as session:
         persisted = await session.get(AgentRun, run_id)
         saved_thread = await session.get(AgentThread, thread_id)
@@ -936,10 +855,10 @@ async def test_completion_failure_reason_precedence_preserves_existing_data(
 
 
 @pytest.mark.asyncio
-async def test_completion_before_answer_start_is_a_phase_mismatch_without_writes(
+async def test_completion_before_answer_start_is_refused_without_writes(
     session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
-    """回答を始めていない現在の試行の完了は呼び出し順の誤りとして例外になり、Run・threadを変えない。"""
+    """回答を始めていない現在の試行の完了は続けられないと返り、Run・threadを変えない。"""
     async with session_factory() as session:
         thread, _, run = await _create_thread_message_run(
             session,
@@ -950,13 +869,13 @@ async def test_completion_before_answer_start_is_a_phase_mismatch_without_writes
         run_id, thread_id = run.id, thread.id
         original_updated_at = thread.updated_at
 
-    with pytest.raises(RunPhaseMismatchError):
-        await state_service(session_factory).complete(
-            RunAttempt(run_id=run_id, epoch=1),
-            result=_external_result(),
-            research_handoff=_handoff().model_dump(mode="json"),
-        )
+    completion = await state_service(session_factory).complete(
+        RunAttempt(run_id=run_id, epoch=1),
+        result=_external_result(),
+        research_handoff=_handoff().model_dump(mode="json"),
+    )
 
+    assert completion == CannotContinue()
     async with session_factory() as session:
         persisted = await session.get(AgentRun, run_id)
         saved_thread = await session.get(AgentThread, thread_id)

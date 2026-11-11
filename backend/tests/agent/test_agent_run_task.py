@@ -58,14 +58,10 @@ from app.agent.run_enqueuer import AgentRunTrigger
 from app.agent.running.answer_generation import AgentRunAnswerGenerationGate
 from app.agent.running.stage_gate import AgentRunStageGate
 from app.agent.running.state import (
-    AttemptSuperseded,
     CanContinue,
     CannotContinue,
-    DeadlineExceeded,
     FailureRecorded,
-    RunAlreadyCancelled,
     RunCompleted,
-    RunNotFound,
 )
 from app.agent.running.state_service import AgentRunStateService
 from app.agent.running.types import AgentRunErrorCode, RunAttempt
@@ -990,11 +986,11 @@ async def test_run_agent_answer_binds_attempt_epoch_to_live_and_db_controls(
 
 
 @pytest.mark.asyncio
-async def test_answer_start_deadline_publishes_existing_terminal_event(
+async def test_answer_start_after_deadline_stops_without_closing_or_notifying(
     session_factory: async_sessionmaker[AsyncSession],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """回答開始で受理期限を過ぎていたRunは期限切れで終わり、その世代へ終了を通知する。"""
+    """回答開始で受理期限を過ぎていたRunのtaskは、Runを閉じず終了も通知せずに止まる。"""
     async with session_factory() as session:
         _thread, _message, run = await _create_thread_message_run(session)
     FakeLiveStreamPublisher.instances = []
@@ -1013,7 +1009,7 @@ async def test_answer_start_deadline_publishes_existing_terminal_event(
                     assert persisted is not None
                     persisted.deadline_at = datetime.now(UTC) - timedelta(seconds=1)
             stopped = await cast(Any, self._answer_generation_gate).start()
-            assert stopped == DeadlineExceeded()
+            assert stopped == CannotContinue()
             return stopped
 
     def build_runner(**kwargs: object) -> DeadlineAtAnswerStartRunner:
@@ -1041,13 +1037,11 @@ async def test_answer_start_deadline_publishes_existing_terminal_event(
         for event in FakeLiveStreamPublisher.instances[0].published
         if isinstance(event, AgentRunLiveStreamTerminalEvent)
     ]
-    assert terminal == [
-        AgentRunLiveStreamTerminalEvent(status="deadline_exceeded"),
-    ]
+    assert terminal == []
     async with session_factory() as session:
         persisted = await session.get(AgentRun, run.id)
     assert persisted is not None
-    assert persisted.status == "deadline_exceeded"
+    assert persisted.status == "running"
     assert persisted.answer_started_at is None
 
 
@@ -1293,33 +1287,23 @@ async def test_run_agent_answer_publishes_completed_terminal_after_commit(
 
 
 @pytest.mark.asyncio
-async def test_completion_deadline_publishes_after_commit_and_survives_publish_failure(
+async def test_completion_after_recovery_deadline_leaves_run_without_terminal(
     session_factory: async_sessionmaker[AsyncSession],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """回収期限を過ぎた完了は回答を保存せず、Runを閉じず終了も通知しない。"""
     async with session_factory() as session:
         _thread, _message, run = await _create_thread_message_run(session)
     fake_agent = FakeAgent(_direct_result())
     FakeLiveStreamPublisher.instances = []
     monkeypatch.setattr(answer_timing, "ANSWER_GENERATION_TIMEOUT_SECONDS", 0)
     monkeypatch.setattr(answer_timing, "ANSWER_GENERATION_RECOVERY_GRACE_SECONDS", 0)
-    monkeypatch.setattr(FakeLiveStreamPublisher, "raise_on_publish", True)
-
-    class CommitCheckingPublisher(FakeLiveStreamPublisher):
-        async def publish(self, event: object) -> str | None:
-            if isinstance(event, AgentRunLiveStreamTerminalEvent):
-                async with session_factory() as session:
-                    persisted = await session.get(AgentRun, run.id)
-                    assert persisted is not None
-                    assert persisted.status == "deadline_exceeded"
-                    assert persisted.assistant_message_id is None
-            return await super().publish(event)
 
     _patch_worker_execution(monkeypatch, lambda **_kwargs: fake_agent)
     monkeypatch.setattr(
         run_execution,
         "AgentRunLiveStreamPublisher",
-        CommitCheckingPublisher,
+        FakeLiveStreamPublisher,
     )
 
     await agent_run_tasks.run_agent_answer(
@@ -1332,11 +1316,11 @@ async def test_completion_deadline_publishes_after_commit_and_survives_publish_f
         for event in FakeLiveStreamPublisher.instances[0].published
         if isinstance(event, AgentRunLiveStreamTerminalEvent)
     ]
-    assert terminal == [AgentRunLiveStreamTerminalEvent(status="deadline_exceeded")]
+    assert terminal == []
     async with session_factory() as session:
         persisted = await session.get(AgentRun, run.id)
         assert persisted is not None
-        assert persisted.status == "deadline_exceeded"
+        assert persisted.status == "running"
         assert persisted.assistant_message_id is None
 
 
@@ -1409,7 +1393,7 @@ async def test_generation_stopped_is_routine_return_without_run_transition(
             self, input: RunInput, *, identity: RunIdentity
         ) -> RunResult | CannotContinue:
             del input, identity
-            return AttemptSuperseded()
+            return CannotContinue()
 
     class ObservingStateService(AgentRunStateService):
         async def complete(
@@ -1420,7 +1404,7 @@ async def test_generation_stopped_is_routine_return_without_run_transition(
             research_handoff: dict[str, Any] | None,
         ) -> RunCompleted | CannotContinue:
             complete_calls.append((attempt.run_id, attempt.epoch))
-            return AttemptSuperseded()
+            return CannotContinue()
 
         async def record_failure(
             self,
@@ -1430,7 +1414,7 @@ async def test_generation_stopped_is_routine_return_without_run_transition(
         ) -> FailureRecorded | CannotContinue:
             assert error_code == AgentRunErrorCode.INTERNAL_ERROR
             mark_failed_calls.append((attempt.run_id, attempt.epoch))
-            return AttemptSuperseded()
+            return CannotContinue()
 
     FakeLiveStreamPublisher.instances = []
     monkeypatch.setattr(FakeLiveStreamPublisher, "publish_outcomes", [])
@@ -1519,7 +1503,7 @@ async def test_epoch_advance_before_answer_start_stops_old_worker_at_next_stage(
             )
             assert attempt_epoch == 2
             stopped = await gate.enter("evidence_collection")
-            assert stopped == AttemptSuperseded()
+            assert stopped == CannotContinue()
             return stopped
 
     def build_runner(**kwargs: object) -> EpochAdvancingRunner:
@@ -1534,7 +1518,7 @@ async def test_epoch_advance_before_answer_start_stops_old_worker_at_next_stage(
             research_handoff: dict[str, Any] | None,
         ) -> RunCompleted | CannotContinue:
             complete_calls.append((attempt.run_id, attempt.epoch))
-            return AttemptSuperseded()
+            return CannotContinue()
 
         async def record_failure(
             self,
@@ -1544,7 +1528,7 @@ async def test_epoch_advance_before_answer_start_stops_old_worker_at_next_stage(
         ) -> FailureRecorded | CannotContinue:
             assert error_code == AgentRunErrorCode.INTERNAL_ERROR
             mark_failed_calls.append((attempt.run_id, attempt.epoch))
-            return AttemptSuperseded()
+            return CannotContinue()
 
     FakeLiveStreamPublisher.instances = []
     monkeypatch.setattr(FakeLiveStreamPublisher, "publish_outcomes", [])
@@ -1606,11 +1590,11 @@ async def test_epoch_advance_before_answer_start_stops_old_worker_at_next_stage(
 
 
 @pytest.mark.asyncio
-async def test_deadline_stop_publishes_terminal_without_mark_failed(
+async def test_deadline_stop_leaves_run_without_mark_failed_or_terminal(
     session_factory: async_sessionmaker[AsyncSession],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """工程に入る口で期限切れになったRunは失敗を記録せず終了を通知し、利用枠を返さない。"""
+    """工程に入る口で受理期限を過ぎていたRunのtaskは、失敗を記録せず終了も通知せず、Runと利用枠を変えない。"""
     usage_date = date(2026, 9, 2)
     async with session_factory() as session:
         _thread, _message, run = await _create_thread_message_run(
@@ -1642,7 +1626,7 @@ async def test_deadline_stop_publishes_terminal_without_mark_failed(
                     assert persisted is not None
                     persisted.deadline_at = datetime.now(UTC) - timedelta(seconds=1)
             stopped = await cast(Any, self._stage_gate).enter("evidence_collection")
-            assert stopped == DeadlineExceeded()
+            assert stopped == CannotContinue()
             return stopped
 
     def build_runner(**kwargs: object) -> DeadlineExpiringRunner:
@@ -1656,7 +1640,7 @@ async def test_deadline_stop_publishes_terminal_without_mark_failed(
             error_code: AgentRunErrorCode,
         ) -> FailureRecorded | CannotContinue:
             mark_failed_calls.append((attempt.run_id, attempt.epoch))
-            return DeadlineExceeded()
+            return CannotContinue()
 
     FakeLiveStreamPublisher.instances = []
     monkeypatch.setattr(FakeLiveStreamPublisher, "publish_outcomes", [])
@@ -1681,9 +1665,7 @@ async def test_deadline_stop_publishes_terminal_without_mark_failed(
         for event in FakeLiveStreamPublisher.instances[0].published
         if isinstance(event, AgentRunLiveStreamTerminalEvent)
     ]
-    assert terminal == [
-        AgentRunLiveStreamTerminalEvent(status="deadline_exceeded"),
-    ]
+    assert terminal == []
     async with session_factory() as session:
         persisted = await session.get(AgentRun, run.id)
         used_count = await session.scalar(
@@ -1693,7 +1675,7 @@ async def test_deadline_stop_publishes_terminal_without_mark_failed(
             )
         )
     assert persisted is not None
-    assert persisted.status == "deadline_exceeded"
+    assert persisted.status == "running"
     assert persisted.attempt_epoch == 1
     assert persisted.error_code is None
     assert used_count == 1
@@ -1959,7 +1941,7 @@ async def test_completion_loser_with_existing_delta_has_no_terminal_or_assistant
                 fake_agent.result,
                 1,
             )
-            return RunAlreadyCancelled()
+            return CannotContinue()
 
     _patch_delta_worker(monkeypatch, build_agent)
     monkeypatch.setattr(
@@ -2057,14 +2039,8 @@ async def test_completion_failure_publishes_failed_terminal(
     ]
 
 
-@pytest.mark.parametrize(
-    "rejection",
-    [RunNotFound(), RunAlreadyCancelled(), AttemptSuperseded()],
-    ids=("run-not-found", "run-already-cancelled", "attempt-superseded"),
-)
 @pytest.mark.asyncio
 async def test_completion_skip_does_not_publish_terminal(
-    rejection: CannotContinue,
     session_factory: async_sessionmaker[AsyncSession],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -2087,7 +2063,7 @@ async def test_completion_skip_does_not_publish_terminal(
                 fake_agent.result,
                 1,
             )
-            return rejection
+            return CannotContinue()
 
     _patch_worker_execution(monkeypatch, lambda **_kwargs: fake_agent)
     monkeypatch.setattr(
@@ -2144,7 +2120,7 @@ async def test_failed_transition_loser_does_not_publish_terminal(
                 AgentRunErrorCode.GENERATION_UNAVAILABLE,
                 1,
             )
-            return AttemptSuperseded()
+            return CannotContinue()
 
     _patch_worker_execution(monkeypatch, lambda **_kwargs: fake_agent)
     monkeypatch.setattr(
@@ -2867,11 +2843,11 @@ async def test_completion_rolls_back_written_artifacts(
 
 
 @pytest.mark.asyncio
-async def test_start_after_deadline_notifies_redelivered_attempt_of_deadline(
+async def test_start_after_deadline_leaves_redelivered_run_without_notifying(
     session_factory: async_sessionmaker[AsyncSession],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """受理期限後に再配信されたrunningのRunは、元の世代のストリームへ期限切れを通知して終わる。"""
+    """受理期限後に再配信されたrunningのRunは開始せず、Runを変えず通知もしない。"""
     async with session_factory() as session:
         _thread, _message, run = await _create_thread_message_run(
             session,
@@ -2900,8 +2876,8 @@ async def test_start_after_deadline_notifies_redelivered_attempt_of_deadline(
         ],
         (persisted.status, persisted.attempt_epoch),
     ) == (
-        [(3, [AgentRunLiveStreamTerminalEvent(status="deadline_exceeded")])],
-        ("deadline_exceeded", 3),
+        [],
+        ("running", 3),
     )
 
 
@@ -2979,11 +2955,11 @@ class _DeadlinePassingAnsweringRunner:
 
 
 @pytest.mark.asyncio
-async def test_failure_after_deadline_notifies_deadline_instead_of_failure(
+async def test_failure_after_deadline_leaves_run_without_terminal(
     session_factory: async_sessionmaker[AsyncSession],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """回答前に期限を過ぎてから生成に失敗したRunは、失敗ではなく期限切れで終わり、そのとおり通知する。"""
+    """回答前に期限を過ぎてから生成に失敗したRunは、失敗を記録できず、Runを閉じず終了も通知しない。"""
     async with session_factory() as session:
         _thread, _message, run = await _create_thread_message_run(session)
     monkeypatch.setattr(FakeLiveStreamPublisher, "instances", [])
@@ -3010,6 +2986,6 @@ async def test_failure_after_deadline_notifies_deadline_instead_of_failure(
         if isinstance(event, AgentRunLiveStreamTerminalEvent)
     ]
     assert (terminal, (persisted.status, persisted.error_code)) == (
-        [AgentRunLiveStreamTerminalEvent(status="deadline_exceeded")],
-        ("deadline_exceeded", None),
+        [],
+        ("running", None),
     )

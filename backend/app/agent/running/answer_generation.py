@@ -49,4 +49,4 @@ class AgentRunAnswerGenerationGate:
                 return stopped
 
     async def regenerate(self) -> CanContinue | CannotContinue:
-        return await self._state_service.authorize_answer_regeneration(self._attempt)
+        return await self._state_service.authorize_continuation(self._attempt)

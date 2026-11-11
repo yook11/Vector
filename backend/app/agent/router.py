@@ -56,14 +56,9 @@ from app.agent.running.deadline.scheduling import (
     get_agent_deadline_scheduler,
 )
 from app.agent.running.state import (
-    AttemptAlreadyStarted,
     CancelledByUser,
-    DeadlineExceeded,
+    CannotContinue,
     FailureRecorded,
-    RunAlreadyCancelled,
-    RunAlreadyCompleted,
-    RunAlreadyDeadlineExceeded,
-    RunAlreadyFailed,
     RunNotFound,
     has_attempt_started,
     is_finished,
@@ -245,35 +240,16 @@ async def create_research_response(
         match recorded:
             case FailureRecorded():
                 pass
-            case AttemptAlreadyStarted():
-                _log_enqueue_failure_skipped(created.run_id, "attempt_already_started")
-            case DeadlineExceeded():
-                _log_enqueue_failure_skipped(created.run_id, "deadline_exceeded")
-            case RunAlreadyCancelled():
-                _log_enqueue_failure_skipped(created.run_id, "run_already_cancelled")
-            case RunAlreadyDeadlineExceeded():
-                _log_enqueue_failure_skipped(
-                    created.run_id, "run_already_deadline_exceeded"
+            case CannotContinue():
+                logger.info(
+                    "agent_run_enqueue_failed_mark_failed_skipped",
+                    run_id=str(created.run_id),
                 )
-            case RunAlreadyCompleted():
-                _log_enqueue_failure_skipped(created.run_id, "run_already_completed")
-            case RunAlreadyFailed():
-                _log_enqueue_failure_skipped(created.run_id, "run_already_failed")
-            case RunNotFound():
-                _log_enqueue_failure_skipped(created.run_id, "run_not_found")
 
     background_tasks.add_task(
         deadline_scheduler.reserve, created.run_id, created.deadline_at
     )
     return ResearchRunStartResponse(thread_id=created.thread_id, run_id=created.run_id)
-
-
-def _log_enqueue_failure_skipped(run_id: UUID, reason: str) -> None:
-    logger.info(
-        "agent_run_enqueue_failed_mark_failed_skipped",
-        run_id=str(run_id),
-        reason=reason,
-    )
 
 
 @router.get(
@@ -359,14 +335,7 @@ async def cancel_research_run(
     match await state_service.cancel_for_user(run_id, user_id=user.id):
         case RunNotFound():
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
-        case (
-            CancelledByUser()
-            | DeadlineExceeded()
-            | RunAlreadyCompleted()
-            | RunAlreadyFailed()
-            | RunAlreadyCancelled()
-            | RunAlreadyDeadlineExceeded()
-        ):
+        case CancelledByUser() | CannotContinue():
             return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 

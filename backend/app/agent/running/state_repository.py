@@ -1,33 +1,23 @@
-"""Runの状態を変える操作が使う、続けてよいかの確認とRunの行への書き込み。"""
+"""Runの状態を変える操作が使う、条件を満たすRunへの書き込みと読み取り。"""
 
 from __future__ import annotations
 
 import uuid as uuid_mod
-from collections.abc import Collection
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import date, datetime
 from typing import Any
 
-from sqlalchemy import func, select, update
+from sqlalchemy import and_, func, literal, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.sql.elements import ColumnElement
 
+from app.agent.answering import timing as answer_timing
 from app.agent.contract import AnswerQuestionResult
 from app.agent.running.daily_quota.release import (
     DailyQuotaReleaseOutcome,
     release_daily_quota,
 )
-from app.agent.running.deadline.deadline_exceeded import database_now
-from app.agent.running.state import (
-    AttemptAlreadyStarted,
-    CanContinue,
-    CannotContinue,
-    DeadlineExceeded,
-    RunAlreadyEnded,
-    RunNotFound,
-    RunPhase,
-    RunState,
-    active_run_state,
-)
+from app.agent.running.state import ACTIVE_STATUSES
 from app.agent.running.types import AgentRunErrorCode, AgentRunStatus, RunAttempt
 from app.agent.threads.result_mapper import (
     build_assistant_message_for_result,
@@ -37,187 +27,280 @@ from app.models.agent_message import AgentMessage
 from app.models.agent_run import AgentRun
 from app.models.agent_thread import AgentThread
 
-__all__ = ["AgentRunStateRepository", "CurrentRun"]
+__all__ = ["AgentRunStateRepository", "ClosedRunFacts"]
 
 _LOCK_TIMEOUT = "3s"
 
 
-@dataclass(frozen=True, slots=True)
-class CurrentRun:
-    """ロックした時点のRunの状態と時刻で、同じ操作の中で書き込んでも変わらない。"""
+def _recovery_deadline() -> ColumnElement[datetime]:
+    """Runを続けてよい期限(回収期限)で、回答を始める前は受付時に決めた受理期限、始めた後は回答開始から数えた期限になる。"""
+    return func.coalesce(
+        AgentRun.answer_started_at + answer_timing.answer_generation_recovery_window(),
+        AgentRun.deadline_at,
+    )
 
-    state: RunState
-    now: datetime
+
+def _is_current_attempt(attempt: RunAttempt) -> ColumnElement[bool]:
+    """Runが実行中で、実行世代がこの試行のものと合っている。"""
+    return and_(
+        AgentRun.id == attempt.run_id,
+        AgentRun.status == AgentRunStatus.RUNNING.value,
+        AgentRun.attempt_epoch == attempt.epoch,
+    )
+
+
+def _is_before_answer(now: ColumnElement[datetime]) -> ColumnElement[bool]:
+    """回答をまだ始めておらず、受理期限を過ぎていない。"""
+    return and_(AgentRun.answer_started_at.is_(None), AgentRun.deadline_at > now)
+
+
+def _is_answering(now: ColumnElement[datetime]) -> ColumnElement[bool]:
+    """回答を始めていて、回答開始から数えた期限を過ぎていない。"""
+    return and_(AgentRun.answer_started_at.is_not(None), _recovery_deadline() > now)
+
+
+@dataclass(frozen=True, slots=True)
+class ClosedRunFacts:
+    """取り消しか投入の失敗で終了させたRunについて、利用枠を返すか、実行中だった試行の画面へ終了を知らせるために使う値。"""
+
+    was_queued: bool
+    attempt_epoch: int
+    user_id: uuid_mod.UUID
+    quota_usage_date: date | None
 
 
 class AgentRunStateRepository:
-    """トランザクションは呼び出し元が所有し、確認でロックして読んだRunとそのthreadへ書き、nowを渡すとDBの時刻の代わりに使う。"""
+    """トランザクションは呼び出し元が所有し、条件を満たすRunにだけ書き、nowを渡すとDBの時刻の代わりに使う。"""
 
     def __init__(self, session: AsyncSession, *, now: datetime | None = None) -> None:
         self._session = session
-        self._now = now
-        self._locked_rows: tuple[AgentRun, AgentThread] | None = None
-        self._current_run: CurrentRun | None = None
+        # 期限を過ぎていないかの判定は行をロックする前に行うので、
+        # ロックを待った時間は判定に入らないことがある。
+        self._now: ColumnElement[datetime] = (
+            literal(now) if now is not None else func.clock_timestamp()
+        )
 
-    @property
-    def current_run(self) -> CurrentRun:
-        if self._current_run is None:
-            raise RuntimeError("the run must be checked before it is read")
-        return self._current_run
+    async def start_attempt(self, run_id: uuid_mod.UUID) -> RunAttempt | None:
+        """Runに新しい実行世代を割り当てて、実行を始める。
 
-    async def check_start(self, run_id: uuid_mod.UUID) -> CanContinue | CannotContinue:
-        match await self._lock_and_read(run_id):
-            case CurrentRun() as current_run:
-                return current_run.state.check_start(now=current_run.now)
-            case CannotContinue() as stopped:
-                return stopped
+        次をすべて満たすRunだけが対象で、満たさなければ何も書かずNoneを返す。
+        - まだ終わっていない(待機中か実行中)。
+        - 回答を始めていない。
+        - 受理期限(受付時に決めたdeadline_at)を過ぎていない。
+        """
+        await self._limit_lock_wait()
+        epoch = await self._session.scalar(
+            update(AgentRun)
+            .where(
+                AgentRun.id == run_id,
+                AgentRun.status.in_(ACTIVE_STATUSES),
+                _is_before_answer(self._now),
+            )
+            .values(
+                status=AgentRunStatus.RUNNING.value,
+                attempt_epoch=AgentRun.attempt_epoch + 1,
+            )
+            .returning(AgentRun.attempt_epoch)
+            .execution_options(synchronize_session=False)
+        )
+        return None if epoch is None else RunAttempt(run_id=run_id, epoch=epoch)
 
-    async def check_attempt(
+    async def can_continue(self, attempt: RunAttempt) -> bool:
+        """回答以外の工程を始める前と、回答を再生成する前に、この試行が続けてよいかを確かめる。
+
+        次をすべて満たせばTrueを返す。
+        - Runが実行中で、実行世代がこの試行のものと合っている。
+        - 回収期限(回答前は受理期限、回答中は回答開始から数えた期限)を過ぎていない。
+        """
+        found_run_id = await self._session.scalar(
+            select(AgentRun.id).where(
+                _is_current_attempt(attempt), _recovery_deadline() > self._now
+            )
+        )
+        return found_run_id is not None
+
+    async def start_answer(self, attempt: RunAttempt) -> datetime | None:
+        """回答を始めた時刻を記録して、その時刻を返す。
+
+        次をすべて満たすRunだけが対象で、満たさなければ何も書かずNoneを返す。
+        - Runが実行中で、実行世代がこの試行のものと合っている。
+        - 回答をまだ始めていない。
+        - 受理期限(受付時に決めたdeadline_at)を過ぎていない。
+        """
+        await self._limit_lock_wait()
+        return await self._session.scalar(
+            update(AgentRun)
+            .where(_is_current_attempt(attempt), _is_before_answer(self._now))
+            .values(answer_started_at=self._now)
+            .returning(AgentRun.answer_started_at)
+            .execution_options(synchronize_session=False)
+        )
+
+    async def complete(
         self,
         attempt: RunAttempt,
         *,
-        phases: Collection[RunPhase],
-        lock_thread: bool = False,
-    ) -> CanContinue | CannotContinue:
-        match await self._lock_and_read(attempt.run_id, lock_thread=lock_thread):
-            case CurrentRun() as current_run:
-                return current_run.state.check_attempt(
-                    attempt_epoch=attempt.epoch, phases=phases, now=current_run.now
-                )
-            case CannotContinue() as stopped:
-                return stopped
+        result: AnswerQuestionResult,
+        research_handoff: dict[str, Any] | None,
+    ) -> bool:
+        """回答を保存してRunを完了にし、保存できたかを返す。
 
-    async def check_cancel(
-        self, run_id: uuid_mod.UUID, *, owner_id: uuid_mod.UUID
-    ) -> CanContinue | DeadlineExceeded | RunAlreadyEnded | RunNotFound:
-        match await self._lock_and_read(run_id, owner_id=owner_id):
-            case CurrentRun() as current_run:
-                return current_run.state.check_cancel(now=current_run.now)
-            case CannotContinue() as stopped:
-                return stopped
-
-    async def check_enqueue_failure(
-        self, run_id: uuid_mod.UUID
-    ) -> (
-        CanContinue
-        | AttemptAlreadyStarted
-        | DeadlineExceeded
-        | RunAlreadyEnded
-        | RunNotFound
-    ):
-        match await self._lock_and_read(run_id):
-            case CurrentRun() as current_run:
-                return current_run.state.check_enqueue_failure(now=current_run.now)
-            case CannotContinue() as stopped:
-                return stopped
-
-    async def _lock_and_read(
-        self,
-        run_id: uuid_mod.UUID,
-        *,
-        owner_id: uuid_mod.UUID | None = None,
-        lock_thread: bool = False,
-    ) -> CurrentRun | RunNotFound | RunAlreadyEnded:
-        await self._session.execute(
-            select(func.set_config("lock_timeout", _LOCK_TIMEOUT, True))
-        )
-        query = (
-            select(AgentRun, AgentThread)
+        次をすべて満たすRunだけが対象で、満たさなければ何も書かずFalseを返す。
+        - Runが実行中で、実行世代がこの試行のものと合っている。
+        - 回答を始めていて、回答開始から数えた期限を過ぎていない。
+        """
+        await self._limit_lock_wait()
+        # メッセージを先に保存するので、条件に合うRunとthreadを先にロックする。
+        thread_id = await self._session.scalar(
+            select(AgentRun.thread_id)
             .join(AgentThread, AgentRun.thread_id == AgentThread.id)
-            .where(AgentRun.id == run_id)
-            .with_for_update(of=(AgentRun, AgentThread) if lock_thread else AgentRun)
-            .execution_options(populate_existing=True)
+            .where(_is_current_attempt(attempt), _is_answering(self._now))
+            .with_for_update(of=(AgentRun, AgentThread))
         )
-        if owner_id is not None:
-            query = query.where(AgentThread.user_id == owner_id)
-        row = (await self._session.execute(query)).one_or_none()
-        if row is None:
-            return RunNotFound()
-        run, thread = row
-        match active_run_state(
-            status=AgentRunStatus(run.status),
-            error_code=(
-                None if run.error_code is None else AgentRunErrorCode(run.error_code)
-            ),
-            attempt_epoch=run.attempt_epoch,
-            deadline_at=run.deadline_at,
-            answer_started_at=run.answer_started_at,
-        ):
-            case RunState() as state:
-                self._locked_rows = (run, thread)
-                # ロック待ちの間に期限を越えうるため、時刻はロックを取った後に読む。
-                locked_now = await database_now(self._session, self._now)
-                self._current_run = CurrentRun(state=state, now=locked_now)
-                return self._current_run
-            case CannotContinue() as ended:
-                return ended
-
-    async def mark_attempt_started(self, *, attempt_epoch: int) -> None:
-        await self._update_run(
-            status=AgentRunStatus.RUNNING.value,
-            attempt_epoch=attempt_epoch,
-        )
-
-    async def mark_answer_started(self, *, answer_started_at: datetime) -> None:
-        await self._update_run(answer_started_at=answer_started_at)
-
-    async def close(
-        self,
-        *,
-        status: AgentRunStatus,
-        error_code: AgentRunErrorCode | None = None,
-        assistant_message_id: uuid_mod.UUID | None = None,
-    ) -> None:
-        # APIロールが更新できる列はstatusとerror_codeだけなので、変わる列だけを書く。
-        values: dict[str, object] = {"status": status.value}
-        if error_code is not None:
-            values["error_code"] = error_code.value
-        if assistant_message_id is not None:
-            values["assistant_message_id"] = assistant_message_id
-        await self._update_run(**values)
-
-    async def release_daily_quota(self) -> DailyQuotaReleaseOutcome:
-        run, thread = self._rows()
-        return await release_daily_quota(
-            self._session, user_id=thread.user_id, usage_date=run.quota_usage_date
-        )
-
-    async def add_assistant_message(
-        self, *, result: AnswerQuestionResult
-    ) -> uuid_mod.UUID:
-        _, thread = self._rows()
+        if thread_id is None:
+            return False
         assistant_message = build_assistant_message_for_result(
-            thread_id=thread.id,
-            seq=await self._next_message_seq(thread.id),
+            thread_id=thread_id,
+            seq=await self._next_message_seq(thread_id),
             result=result,
         )
         self._session.add(assistant_message)
         await self._session.flush()
         self._session.add_all(build_source_rows_for_message(assistant_message, result))
         await self._session.flush()
-        return assistant_message.id
-
-    def touch_thread(self, *, updated_at: datetime) -> None:
-        _, thread = self._rows()
-        thread.updated_at = updated_at
-
-    def replace_research_handoff(self, research_handoff: dict[str, Any]) -> None:
-        _, thread = self._rows()
-        thread.research_handoff = research_handoff
-
-    async def _update_run(self, **values: object) -> None:
-        run, _ = self._rows()
         await self._session.execute(
             update(AgentRun)
-            .where(AgentRun.id == run.id)
-            .values(**values)
+            .where(AgentRun.id == attempt.run_id)
+            .values(
+                status=AgentRunStatus.COMPLETED.value,
+                assistant_message_id=assistant_message.id,
+            )
             .execution_options(synchronize_session=False)
         )
+        thread_update = (
+            update(AgentThread)
+            .where(AgentThread.id == thread_id)
+            .values(updated_at=self._now)
+            .execution_options(synchronize_session=False)
+        )
+        # research_handoffが今回生成されていれば置き換え、無ければthreadのものを残す。
+        if research_handoff is not None:
+            thread_update = thread_update.values(research_handoff=research_handoff)
+        await self._session.execute(thread_update)
+        return True
 
-    def _rows(self) -> tuple[AgentRun, AgentThread]:
-        if self._locked_rows is None:
-            raise RuntimeError("the run must be checked before it is written")
-        return self._locked_rows
+    async def fail_attempt(
+        self, attempt: RunAttempt, *, error_code: AgentRunErrorCode
+    ) -> bool:
+        """Runを失敗で終了させ、書けたかを返す。
+
+        次をすべて満たすRunだけが対象で、満たさなければ何も書かずFalseを返す。
+        - Runが実行中で、実行世代がこの試行のものと合っている。
+        - 回収期限(回答前は受理期限、回答中は回答開始から数えた期限)を過ぎていない。
+        """
+        await self._limit_lock_wait()
+        failed_run_id = await self._session.scalar(
+            update(AgentRun)
+            .where(_is_current_attempt(attempt), _recovery_deadline() > self._now)
+            .values(status=AgentRunStatus.FAILED.value, error_code=error_code.value)
+            .returning(AgentRun.id)
+            .execution_options(synchronize_session=False)
+        )
+        return failed_run_id is not None
+
+    async def cancel(
+        self, run_id: uuid_mod.UUID, *, owner_id: uuid_mod.UUID
+    ) -> ClosedRunFacts | None:
+        """ユーザーのキャンセルでRunを終了させる。
+
+        次をすべて満たすRunだけが対象で、満たさなければ何も書かずNoneを返す。
+        - キャンセルを実行したユーザーのRunである。
+        - まだ終わっていない(待機中か実行中)。
+        - 回収期限(回答前は受理期限、回答中は回答開始から数えた期限)を過ぎていない。
+        """
+        # 終了させる前に待機中だったかは、書いた後の行から読めないので、分けて書く。
+        for status in ACTIVE_STATUSES:
+            closed = await self._close(
+                AgentRun.id == run_id,
+                AgentThread.user_id == owner_id,
+                _recovery_deadline() > self._now,
+                status=status,
+                error_code=AgentRunErrorCode.CANCELLED,
+            )
+            if closed is not None:
+                return closed
+        return None
+
+    async def fail_queued(self, run_id: uuid_mod.UUID) -> ClosedRunFacts | None:
+        """キューへの投入に失敗したRunを、失敗で終了させる。
+
+        次をすべて満たすRunだけが対象で、満たさなければ何も書かずNoneを返す。
+        - 待機中のままである。
+        - 受理期限(受付時に決めたdeadline_at)を過ぎていない。
+        """
+        return await self._close(
+            AgentRun.id == run_id,
+            _is_before_answer(self._now),
+            status=AgentRunStatus.QUEUED,
+            error_code=AgentRunErrorCode.ENQUEUE_FAILED,
+        )
+
+    async def release_daily_quota(
+        self, *, user_id: uuid_mod.UUID, usage_date: date | None
+    ) -> DailyQuotaReleaseOutcome:
+        return await release_daily_quota(
+            self._session, user_id=user_id, usage_date=usage_date
+        )
+
+    async def exists_for_owner(
+        self, run_id: uuid_mod.UUID, *, owner_id: uuid_mod.UUID
+    ) -> bool:
+        found_run_id = await self._session.scalar(
+            select(AgentRun.id)
+            .join(AgentThread, AgentRun.thread_id == AgentThread.id)
+            .where(AgentRun.id == run_id, AgentThread.user_id == owner_id)
+        )
+        return found_run_id is not None
+
+    async def _close(
+        self,
+        *conditions: ColumnElement[bool],
+        status: AgentRunStatus,
+        error_code: AgentRunErrorCode,
+    ) -> ClosedRunFacts | None:
+        await self._limit_lock_wait()
+        # APIロールが更新できる列はstatusとerror_codeだけなので、この2列だけを書く。
+        row = (
+            await self._session.execute(
+                update(AgentRun)
+                .where(
+                    AgentRun.thread_id == AgentThread.id,
+                    AgentRun.status == status.value,
+                    *conditions,
+                )
+                .values(status=AgentRunStatus.FAILED.value, error_code=error_code.value)
+                .returning(
+                    AgentRun.attempt_epoch,
+                    AgentThread.user_id,
+                    AgentRun.quota_usage_date,
+                )
+                .execution_options(synchronize_session=False)
+            )
+        ).one_or_none()
+        if row is None:
+            return None
+        return ClosedRunFacts(
+            was_queued=status is AgentRunStatus.QUEUED,
+            attempt_epoch=row.attempt_epoch,
+            user_id=row.user_id,
+            quota_usage_date=row.quota_usage_date,
+        )
+
+    async def _limit_lock_wait(self) -> None:
+        """他の処理が同じ行を書き換え中のときに待つ時間を、このトランザクションだけ3秒までにする。"""
+        await self._session.execute(
+            select(func.set_config("lock_timeout", _LOCK_TIMEOUT, True))
+        )
 
     async def _next_message_seq(self, thread_id: uuid_mod.UUID) -> int:
         value = (

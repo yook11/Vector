@@ -35,8 +35,6 @@ RESEARCH_LOG_RULES = RESEARCH_POLICY.extend(
             "count",
             "run_count",
             "query_count",
-            "marker_without_source_refs",
-            "source_without_marker_refs",
             "model",
         }
     ),
