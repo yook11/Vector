@@ -14,17 +14,16 @@ from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.agent.contract import AnswerQuestionResult
+from app.agent.live_updates.stream import (
+    AgentRunLiveStreamPublisher,
+    AgentRunLiveStreamTerminalEvent,
+)
 from app.agent.running.daily_quota import observability as daily_quota_observability
 from app.agent.running.deadline.deadline_exceeded import (
     DeadlineRunSweepResult,
     check_agent_run_deadline,
     sweep_deadline_exceeded_runs,
     sweep_deadline_exceeded_runs_for_thread,
-)
-from app.agent.running.finish_notice import (
-    ClosedRunningRun,
-    LivePublisherFor,
-    notify_closed_run,
 )
 from app.agent.running.state import (
     AnswerGenerationStarted,
@@ -40,8 +39,12 @@ from app.agent.running.state_repository import AgentRunStateRepository
 from app.agent.running.types import AgentRunErrorCode, AgentRunStatus, RunAttempt
 from app.db.retry_prospect import is_resolvable_by_retry
 from app.db.translate import translate_database_error
+from app.log_policy.policies.research import RESEARCH_LOG_RULES
+from app.log_policy.runtime import create_policy_json_logger
 
 __all__ = ["AgentRunStateService"]
+
+logger = create_policy_json_logger(__name__, RESEARCH_LOG_RULES)
 
 # 一時的なDBの失敗だけを、受理期限と回答の時間枠を食わない範囲でやり直す。
 _MAX_TRANSACTION_ATTEMPTS = 3
@@ -74,7 +77,7 @@ class AgentRunStateService:
         self,
         *,
         session_factory: async_sessionmaker[AsyncSession],
-        publisher_for: LivePublisherFor,
+        publisher_for: Callable[[RunAttempt], AgentRunLiveStreamPublisher],
         now: datetime | None = None,
     ) -> None:
         self._session_factory = session_factory
@@ -126,12 +129,7 @@ class AgentRunStateService:
             )
         if not completed:
             return CannotContinue()
-        await notify_closed_run(
-            ClosedRunningRun(
-                attempt=attempt, status=AgentRunStatus.COMPLETED, error_code=None
-            ),
-            publisher_for=self._publisher_for,
-        )
+        await self._notify_run_ended(attempt, status=AgentRunStatus.COMPLETED)
         return RunCompleted()
 
     @_retry_transient_database_failure
@@ -144,11 +142,8 @@ class AgentRunStateService:
             )
         if not failed:
             return CannotContinue()
-        await notify_closed_run(
-            ClosedRunningRun(
-                attempt=attempt, status=AgentRunStatus.FAILED, error_code=error_code
-            ),
-            publisher_for=self._publisher_for,
+        await self._notify_run_ended(
+            attempt, status=AgentRunStatus.FAILED, error_code=error_code
         )
         return RunFailed()
 
@@ -164,13 +159,10 @@ class AgentRunStateService:
                     return RunNotFound()
                 return CannotContinue()
         if cancelled.running_attempt is not None:
-            await notify_closed_run(
-                ClosedRunningRun(
-                    attempt=cancelled.running_attempt,
-                    status=AgentRunStatus.FAILED,
-                    error_code=AgentRunErrorCode.CANCELLED,
-                ),
-                publisher_for=self._publisher_for,
+            await self._notify_run_ended(
+                cancelled.running_attempt,
+                status=AgentRunStatus.FAILED,
+                error_code=AgentRunErrorCode.CANCELLED,
             )
         return CancelledByUser()
 
@@ -229,11 +221,26 @@ class AgentRunStateService:
             running_count=result.running_quota_reservation_count,
         )
         for attempt in result.running_terminal_runs:
-            await notify_closed_run(
-                ClosedRunningRun(
-                    attempt=attempt,
-                    status=AgentRunStatus.DEADLINE_EXCEEDED,
-                    error_code=None,
-                ),
-                publisher_for=self._publisher_for,
+            await self._notify_run_ended(
+                attempt, status=AgentRunStatus.DEADLINE_EXCEEDED
+            )
+
+    async def _notify_run_ended(
+        self,
+        attempt: RunAttempt,
+        *,
+        status: AgentRunStatus,
+        error_code: AgentRunErrorCode | None = None,
+    ) -> None:
+        """commitの後に呼び、実行中だった試行の画面へ終了を通知する。"""
+        event = AgentRunLiveStreamTerminalEvent.model_validate(
+            {"status": status.value, "errorCode": error_code}
+        )
+        try:
+            await self._publisher_for(attempt).publish(event)
+        except Exception:
+            logger.warning(
+                "agent_run_live_stream_terminal_publish_failed",
+                run_id=str(attempt.run_id),
+                terminal_status=event.status,
             )

@@ -10,16 +10,25 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.agent.live_updates.stream import AgentRunLiveStreamTerminalEvent
-from app.agent.running.finish_notice import ClosedRunningRun
 from app.agent.running.state_service import AgentRunStateService
-from app.agent.running.types import AgentRunStatus, RunAttempt
+from app.agent.running.types import AgentRunErrorCode, AgentRunStatus, RunAttempt
 
 __all__ = [
     "ClosedRunNotices",
+    "ClosedRunningRun",
     "CommitGate",
     "state_service",
     "wait_until_lock_waiting",
 ]
+
+
+@dataclass(frozen=True, slots=True)
+class ClosedRunningRun:
+    """実行中だった試行へ届いた終了通知1件を、テストが期待値と比べるための値。"""
+
+    attempt: RunAttempt
+    status: AgentRunStatus
+    error_code: AgentRunErrorCode | None
 
 
 @dataclass

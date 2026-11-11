@@ -22,7 +22,6 @@ from app.agent.research_handoff import (
     ResearchRunRecord,
     ResearchTaskRecord,
 )
-from app.agent.running.finish_notice import ClosedRunningRun
 from app.agent.running.question_reading import AgentRunQuestionRepository
 from app.agent.running.state import (
     AttemptStarted,
@@ -46,6 +45,7 @@ from tests.agent.running._seed import (
 )
 from tests.agent.running._start_run_outcomes import started_attempt_epoch
 from tests.agent.running._state_service import (
+    ClosedRunningRun,
     ClosedRunNotices,
     CommitGate,
     state_service,

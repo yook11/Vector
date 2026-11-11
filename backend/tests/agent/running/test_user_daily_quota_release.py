@@ -20,9 +20,6 @@ from app.agent.running.daily_quota.reservation import (
     _build_daily_quota_reservation_statement,
 )
 from app.agent.running.deadline.policy import RUN_DEADLINE_SECONDS
-from app.agent.running.finish_notice import (
-    ClosedRunningRun,
-)
 from app.agent.running.state import (
     CancelledByUser,
     CannotContinue,
@@ -38,6 +35,7 @@ from app.models.agent_user_daily_quota import AgentUserDailyQuota
 from tests.agent.run_deadline.clock import sweep_deadline_exceeded_runs_at
 from tests.agent.running._start_run_outcomes import started_attempt_epoch
 from tests.agent.running._state_service import (
+    ClosedRunningRun,
     ClosedRunNotices,
     CommitGate,
     state_service,
