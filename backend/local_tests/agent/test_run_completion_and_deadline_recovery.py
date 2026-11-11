@@ -10,7 +10,7 @@ from app.agent.contract import (
     AnswerQuestionResult,
     ExternalUrlSource,
 )
-from app.agent.running.state import DeadlineExceeded, RunCompleted
+from app.agent.running.state import CannotContinue, RunCompleted
 from local_tests.agent.deadline_race_support import (
     pending_answer_completion,
     pending_deadline_recovery,
@@ -126,8 +126,12 @@ async def test_deadline_recovery_wins_race_and_rejects_answer(
     ) as recovering:
         recovery = await recovering.wait_for_result()
 
+        # 期限ちょうどの完了は待たずに止まるので、直前に始めた完了に回収を待たせる。
         async with pending_answer_completion(
-            session_factory, run=run, answer=answer_result, at=recovery_deadline
+            session_factory,
+            run=run,
+            answer=answer_result,
+            at=recovery_deadline - timedelta(microseconds=1),
         ) as completing:
             await completing.wait_until_blocked_by(recovering)
             await recovering.finish()
@@ -138,7 +142,7 @@ async def test_deadline_recovery_wins_race_and_rejects_answer(
     )
 
     assert recovery.total_count == 1
-    assert completion == DeadlineExceeded()
+    assert completion == CannotContinue()
     assert {
         "status": result_after_save_attempt.run["status"],
         "assistant_message_id": result_after_save_attempt.run["assistant_message_id"],

@@ -30,11 +30,7 @@ from app.agent.recording.evidence_answer import (
     EvidenceAnswerStopped,
     EvidenceAnswerSucceeded,
 )
-from app.agent.running.state import (
-    AttemptSuperseded,
-    CannotContinue,
-    DeadlineExceeded,
-)
+from app.agent.running.state import CannotContinue
 from app.agent.threads.contracts import ThreadMessageSnapshot
 from app.ai_providers.errors import (
     AIProviderResultError,
@@ -893,7 +889,7 @@ async def test_provider_error_closes_stream_without_retry(
         await _answer(
             generator,
             delta_reporter=reporter,
-            gate=ScriptedAnswerGenerationGate(regenerations=(AttemptSuperseded(),)),
+            gate=ScriptedAnswerGenerationGate(regenerations=(CannotContinue(),)),
         )
 
     assert generator.streams[0].closed is True
@@ -1057,19 +1053,19 @@ async def test_retry_exhaustion_records_second_attempt_failure() -> None:
 
 
 @pytest.mark.asyncio
-async def test_regeneration_stop_returns_reason_and_records_stopped_outcome() -> None:
-    """書き直す前にRunが止まると、止まった理由を返し、記録係へ止まった結論を渡す。"""
+async def test_regeneration_stop_is_returned_and_records_stopped_outcome() -> None:
+    """書き直す前にRunが止まると、続けられないと返し、記録係へ止まった結論を渡す。"""
 
     recorder = RecordingEvidenceAnswerRecorder()
     generator = FakeGenerator([" "])
 
     result = await _answer(
         generator,
-        gate=ScriptedAnswerGenerationGate(regenerations=(AttemptSuperseded(),)),
+        gate=ScriptedAnswerGenerationGate(regenerations=(CannotContinue(),)),
         recorder=recorder,
     )
 
-    assert result == AttemptSuperseded()
+    assert result == CannotContinue()
     _assert_recorded(recorder, outcome=EvidenceAnswerStopped())
 
 
@@ -1094,7 +1090,7 @@ async def test_provider_error_records_failure_without_fallback() -> None:
     with pytest.raises(EvidenceAnswerError) as exc_info:
         await _answer(
             generator,
-            gate=ScriptedAnswerGenerationGate(regenerations=(AttemptSuperseded(),)),
+            gate=ScriptedAnswerGenerationGate(regenerations=(CannotContinue(),)),
             recorder=recorder,
         )
 
@@ -1156,11 +1152,9 @@ async def test_generation_starts_only_after_the_gate_allows_the_start() -> None:
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("stopped", [DeadlineExceeded(), AttemptSuperseded()])
-async def test_start_stop_returns_reason_without_generating_or_recording(
-    stopped: CannotContinue,
-) -> None:
-    """開始の前にRunが止まると、止まった理由を返し、生成も記録係も開かない。"""
+async def test_start_stop_is_returned_without_generating_or_recording() -> None:
+    """開始の前にRunが止まると、続けられないと返し、生成も記録係も開かない。"""
+    stopped = CannotContinue()
     generator = FakeGenerator(["呼ばれない"])
     gate = ScriptedAnswerGenerationGate(start=stopped)
     recorder = RecordingEvidenceAnswerRecorder()
@@ -1198,14 +1192,14 @@ async def test_start_failure_propagates_without_generating_or_recording() -> Non
 
 @pytest.mark.asyncio
 async def test_regeneration_stop_does_not_start_second_generation() -> None:
-    """書き直す前にRunが止まると、止まった理由を返し、下書きを消さず2回目の生成を始めない。"""
+    """書き直す前にRunが止まると、続けられないと返し、下書きを消さず2回目の生成を始めない。"""
     generator = FakeGenerator(["引用がありません。", "呼ばれない[[1]]"])
-    gate = ScriptedAnswerGenerationGate(regenerations=(DeadlineExceeded(),))
+    gate = ScriptedAnswerGenerationGate(regenerations=(CannotContinue(),))
     reporter = RecordingDeltaReporter()
 
     result = await _answer(generator, gate=gate, delta_reporter=reporter)
 
-    assert result == DeadlineExceeded()
+    assert result == CannotContinue()
     assert [call["attempt_number"] for call in generator.calls] == [1]
     assert gate.regenerate_calls == 1
     assert reporter.reset_generations == []

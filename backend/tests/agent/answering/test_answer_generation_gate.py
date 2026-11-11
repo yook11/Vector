@@ -53,9 +53,7 @@ async def test_start_and_regenerate_ask_the_state_service_every_time(
         return CanContinue()
 
     monkeypatch.setattr(AgentRunStateService, "start_answer_generation", start_once)
-    monkeypatch.setattr(
-        AgentRunStateService, "authorize_answer_regeneration", authorize_once
-    )
+    monkeypatch.setattr(AgentRunStateService, "authorize_continuation", authorize_once)
     gate = AgentRunAnswerGenerationGate(
         AgentRunStateService(
             session_factory=_unused_session_factory,  # type: ignore[arg-type]

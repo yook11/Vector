@@ -1,7 +1,7 @@
 """日次quotaの返却契約。
 
 実DBに seed した Run と利用枠に対して AgentRunStateService の操作で確かめる。
-競合は行ロックの待ちと commit の足止めで再現し、返却の観測は記録に差し替える。
+競合は行ロックの待ちと commit の足止めで再現し、終了通知は記録する偽物で受ける。
 """
 
 from __future__ import annotations
@@ -16,23 +16,18 @@ from sqlalchemy import DateTime, Select, literal, select, text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.agent.contract import AnswerPlanSummary, AnswerQuestionResult
-from app.agent.running.daily_quota.release import DailyQuotaReleaseOutcome
 from app.agent.running.daily_quota.reservation import (
     _build_daily_quota_reservation_statement,
 )
 from app.agent.running.deadline.policy import RUN_DEADLINE_SECONDS
 from app.agent.running.finish_notice import (
-    ClosedQueuedRun,
-    ClosedRun,
     ClosedRunningRun,
 )
 from app.agent.running.state import (
     CancelledByUser,
-    DeadlineExceeded,
-    FailureRecorded,
-    RunAlreadyCompleted,
-    RunAlreadyFailed,
+    CannotContinue,
     RunCompleted,
+    RunFailed,
     RunNotFound,
 )
 from app.agent.running.types import AgentRunErrorCode, AgentRunStatus, RunAttempt
@@ -43,8 +38,8 @@ from app.models.agent_user_daily_quota import AgentUserDailyQuota
 from tests.agent.run_deadline.clock import sweep_deadline_exceeded_runs_at
 from tests.agent.running._start_run_outcomes import started_attempt_epoch
 from tests.agent.running._state_service import (
+    ClosedRunNotices,
     CommitGate,
-    record_closed_runs,
     state_service,
     wait_until_lock_waiting,
 )
@@ -195,31 +190,16 @@ async def _read_counter(
 async def _cancel(
     session_factory: async_sessionmaker[AsyncSession],
     seeded: _SeededRun,
-    monkeypatch: pytest.MonkeyPatch,
     *,
     user_id: uuid.UUID | None = None,
-) -> tuple[object, list[ClosedRun]]:
-    """キャンセルの結果と、そのキャンセルが閉じたRunの記録を返す。"""
-    notices = record_closed_runs(monkeypatch)
+) -> tuple[object, list[ClosedRunningRun]]:
+    """キャンセルの結果と、そのキャンセルが実行中だった試行へ送った終了通知を返す。"""
+    notices = ClosedRunNotices()
     result = await state_service(session_factory, notices=notices).cancel_for_user(
         seeded.run_id,
         user_id=user_id or seeded.user_id,
     )
     return result, notices.closed_runs
-
-
-def _queued_closed(
-    seeded: _SeededRun, outcome: DailyQuotaReleaseOutcome
-) -> list[ClosedRun]:
-    return [ClosedQueuedRun(run_id=seeded.run_id, quota_release_outcome=outcome)]
-
-
-async def _lock_run_row(session: AsyncSession, run_id: uuid.UUID) -> None:
-    result = await session.execute(
-        text("UPDATE agent_runs SET status = status WHERE id = :run_id"),
-        {"run_id": run_id},
-    )
-    assert result.rowcount == 1
 
 
 async def _wait_until_blocked(observer: AsyncSession, backend_pid: int) -> None:
@@ -264,12 +244,11 @@ def _completed_result() -> AnswerQuestionResult:
 @pytest.mark.asyncio
 async def test_quota_queued_cancel_releases_to_zero_and_keeps_marker_and_row(
     session_factory: async_sessionmaker[AsyncSession],
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """queuedのRunのキャンセルは利用枠を0まで返し、Runの利用日と枠の行は残す。"""
     seeded = await _seed_run(session_factory)
 
-    result = await _cancel(session_factory, seeded, monkeypatch)
+    result = await _cancel(session_factory, seeded)
 
     async with session_factory() as session:
         run = await session.get(AgentRun, seeded.run_id)
@@ -289,20 +268,19 @@ async def test_quota_queued_cancel_releases_to_zero_and_keeps_marker_and_row(
         )
     assert result == (
         CancelledByUser(),
-        _queued_closed(seeded, DailyQuotaReleaseOutcome.RELEASED),
+        [],
     )
 
 
 @pytest.mark.asyncio
-async def test_double_cancel_refunds_once_and_second_result_is_not_release_event(
+async def test_double_cancel_refunds_once_and_second_cancel_changes_nothing(
     session_factory: async_sessionmaker[AsyncSession],
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """同じRunを2回キャンセルしても返却は1回だけで、2回目は停止済みと返り何も閉じない。"""
+    """同じRunを2回キャンセルしても返却は1回だけで、2回目は続けられないと返り何も閉じない。"""
     seeded = await _seed_run(session_factory, counter_count=2)
 
-    first = await _cancel(session_factory, seeded, monkeypatch)
-    second = await _cancel(session_factory, seeded, monkeypatch)
+    first = await _cancel(session_factory, seeded)
+    second = await _cancel(session_factory, seeded)
 
     assert (
         await _read_counter(
@@ -314,20 +292,19 @@ async def test_double_cancel_refunds_once_and_second_result_is_not_release_event
     )
     assert first == (
         CancelledByUser(),
-        _queued_closed(seeded, DailyQuotaReleaseOutcome.RELEASED),
+        [],
     )
-    assert second == (CancelledByUser(), [])
+    assert second == (CannotContinue(), [])
 
 
 @pytest.mark.asyncio
 async def test_running_quota_cancel_is_not_eligible_and_returns_execution_epoch(
     session_factory: async_sessionmaker[AsyncSession],
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """runningのRunのキャンセルは利用枠を返さず、終了通知の送り先になる実行世代を記録する。"""
     seeded = await _seed_run(session_factory, status="running", attempt_epoch=1)
 
-    result = await _cancel(session_factory, seeded, monkeypatch)
+    result = await _cancel(session_factory, seeded)
 
     assert (
         await _read_counter(
@@ -350,10 +327,10 @@ async def test_running_quota_cancel_is_not_eligible_and_returns_execution_epoch(
 
 
 @pytest.mark.asyncio
-async def test_quota_queued_deadline_exceeded_releases_to_zero(
+async def test_quota_queued_start_at_deadline_keeps_reservation(
     session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
-    """受理期限ちょうどに開始しようとしたqueuedのRunは、期限切れで終えて利用枠を0まで返す。"""
+    """受理期限ちょうどに開始しようとしたqueuedのRunは開始せず、利用枠を返さない。"""
     seeded = await _seed_run(
         session_factory,
         created_at=_NOW,
@@ -370,15 +347,15 @@ async def test_quota_queued_deadline_exceeded_releases_to_zero(
             user_id=_USER_ID,
             usage_date=_USAGE_DATE,
         )
-        == 0
+        == 1
     )
 
 
 @pytest.mark.asyncio
-async def test_quota_running_deadline_exceeded_keeps_reservation(
+async def test_quota_running_start_at_deadline_keeps_reservation(
     session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
-    """受理期限ちょうどに再配信されたrunningのRunは、期限切れで終えても利用枠を返さない。"""
+    """受理期限ちょうどに再配信されたrunningのRunは開始せず、利用枠を返さない。"""
     seeded = await _seed_run(
         session_factory,
         status="running",
@@ -402,36 +379,34 @@ async def test_quota_running_deadline_exceeded_keeps_reservation(
 
 
 @pytest.mark.asyncio
-async def test_legacy_queued_cancel_is_not_eligible_without_counter(
+async def test_legacy_queued_cancel_returns_no_quota_without_counter(
     session_factory: async_sessionmaker[AsyncSession],
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """利用日を持たない旧来のqueuedのRunは、キャンセルしても返却の対象外になる。"""
+    """利用日を持たない旧来のqueuedのRunは、キャンセルしても利用枠を返却しない。"""
     seeded = await _seed_run(
         session_factory,
         quota_usage_date=None,
         counter_count=None,
     )
 
-    result = await _cancel(session_factory, seeded, monkeypatch)
+    result = await _cancel(session_factory, seeded)
 
     assert result == (
         CancelledByUser(),
-        _queued_closed(seeded, DailyQuotaReleaseOutcome.NOT_ELIGIBLE),
+        [],
     )
 
 
 @pytest.mark.parametrize("counter_count", [None, 0])
 @pytest.mark.asyncio
-async def test_missing_or_zero_counter_cancels_without_underflow_as_inconsistent(
+async def test_missing_or_zero_counter_cancels_without_underflow(
     session_factory: async_sessionmaker[AsyncSession],
     counter_count: int | None,
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """利用枠の行が無いか0のときは、キャンセルしても負にせず不整合として返す。"""
+    """利用枠の行が無いか0のときは、キャンセルは成立し、利用回数を負にしない。"""
     seeded = await _seed_run(session_factory, counter_count=counter_count)
 
-    result = await _cancel(session_factory, seeded, monkeypatch)
+    result = await _cancel(session_factory, seeded)
 
     assert (
         await _read_counter(
@@ -443,14 +418,13 @@ async def test_missing_or_zero_counter_cancels_without_underflow_as_inconsistent
     )
     assert result == (
         CancelledByUser(),
-        _queued_closed(seeded, DailyQuotaReleaseOutcome.INCONSISTENT),
+        [],
     )
 
 
 @pytest.mark.asyncio
 async def test_other_user_cannot_cancel_and_owner_releases_only_original_date(
     session_factory: async_sessionmaker[AsyncSession],
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """他のユーザーはキャンセルできず、持ち主のキャンセルはRunの利用日の枠だけを返す。"""
     seeded = await _seed_run(session_factory, counter_count=2)
@@ -464,8 +438,8 @@ async def test_other_user_cannot_cancel_and_owner_releases_only_original_date(
         )
         await setup.commit()
 
-    denied = await _cancel(session_factory, seeded, monkeypatch, user_id=_ADMIN_ID)
-    released = await _cancel(session_factory, seeded, monkeypatch)
+    denied = await _cancel(session_factory, seeded, user_id=_ADMIN_ID)
+    released = await _cancel(session_factory, seeded)
 
     assert denied == (RunNotFound(), [])
     assert (
@@ -486,18 +460,17 @@ async def test_other_user_cannot_cancel_and_owner_releases_only_original_date(
     )
     assert released == (
         CancelledByUser(),
-        _queued_closed(seeded, DailyQuotaReleaseOutcome.RELEASED),
+        [],
     )
 
 
 @pytest.mark.asyncio
 async def test_cancel_winner_refunds_before_waiting_start_loses(
     session_factory: async_sessionmaker[AsyncSession],
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """先にロックを取ったキャンセルが利用枠を返し、ロックを待っていた開始は停止済みを見て開始しない。"""
+    """先にロックを取ったキャンセルが利用枠を返し、ロックを待っていた開始は書き換え後のRunを見て開始しない。"""
     seeded = await _seed_run(session_factory)
-    notices = record_closed_runs(monkeypatch)
+    notices = ClosedRunNotices()
     cancel_gate = CommitGate(session_factory)
 
     async with session_factory() as observer:
@@ -532,7 +505,7 @@ async def test_cancel_winner_refunds_before_waiting_start_loses(
             if observer.in_transaction():
                 await observer.rollback()
 
-    assert start_result == CancelledByUser()
+    assert start_result == CannotContinue()
     assert (
         await _read_counter(
             session_factory,
@@ -543,18 +516,17 @@ async def test_cancel_winner_refunds_before_waiting_start_loses(
     )
     assert (cancel_result, notices.closed_runs) == (
         CancelledByUser(),
-        _queued_closed(seeded, DailyQuotaReleaseOutcome.RELEASED),
+        [],
     )
 
 
 @pytest.mark.asyncio
 async def test_cancel_waiting_on_run_lock_uses_winning_status_update_for_release(
     session_factory: async_sessionmaker[AsyncSession],
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """ロックを待つ間にRunが開始されたら、キャンセルはロック後のrunningとして終え利用枠を返さない。"""
     seeded = await _seed_run(session_factory)
-    notices = record_closed_runs(monkeypatch)
+    notices = ClosedRunNotices()
     start_gate = CommitGate(session_factory)
 
     async with session_factory() as observer:
@@ -621,36 +593,24 @@ async def test_cancel_waiting_on_run_lock_uses_winning_status_update_for_release
     )
 
 
-@pytest.mark.parametrize("terminalizer", ["cancel", "expired_start"])
 @pytest.mark.asyncio
-async def test_waiting_deadline_sweep_does_not_overwrite_cancel_or_expired_start(
+async def test_waiting_deadline_sweep_does_not_overwrite_cancel(
     session_factory: async_sessionmaker[AsyncSession],
-    monkeypatch: pytest.MonkeyPatch,
-    terminalizer: str,
 ) -> None:
-    """回収がロックを待つ間に先に終えたキャンセルや開始時の期限切れを、回収は上書きせず二重に返さない。"""
+    """回収がロックを待つ間に先に終えたキャンセルを、回収は上書きせず二重に返さない。"""
     seeded = await _seed_run(
         session_factory,
         created_at=_NOW - timedelta(seconds=61),
         deadline_at=_NOW - timedelta(seconds=1),
     )
-    notices = record_closed_runs(monkeypatch)
+    notices = ClosedRunNotices()
     winner_gate = CommitGate(session_factory)
-    if terminalizer == "cancel":
-        # 期限を過ぎたキャンセルは期限切れで終えるため、受理期限の前に行う。
-        winner = state_service(
-            winner_gate,  # type: ignore[arg-type]
-            notices=notices,
-            now=_NOW - timedelta(seconds=2),
-        ).cancel_for_user(seeded.run_id, user_id=_USER_ID)
-        expected_winner_result: object = CancelledByUser()
-    else:
-        winner = state_service(
-            winner_gate,  # type: ignore[arg-type]
-            notices=notices,
-            now=_NOW,
-        ).start_attempt(seeded.run_id)
-        expected_winner_result = DeadlineExceeded()
+    # 期限を過ぎたキャンセルは書かずに止まるため、受理期限の前に行う。
+    winner = state_service(
+        winner_gate,  # type: ignore[arg-type]
+        notices=notices,
+        now=_NOW - timedelta(seconds=2),
+    ).cancel_for_user(seeded.run_id, user_id=_USER_ID)
 
     async with (
         session_factory() as sweep_session,
@@ -686,8 +646,8 @@ async def test_waiting_deadline_sweep_does_not_overwrite_cancel_or_expired_start
                     await session.rollback()
 
     assert (winner_result, notices.closed_runs) == (
-        expected_winner_result,
-        _queued_closed(seeded, DailyQuotaReleaseOutcome.RELEASED),
+        CancelledByUser(),
+        [],
     )
     assert sweep_result.queued_terminal_count == 0
     assert sweep_result.queued_quota_released_count == 0
@@ -698,34 +658,24 @@ async def test_waiting_deadline_sweep_does_not_overwrite_cancel_or_expired_start
     async with session_factory() as verification:
         run = await verification.get(AgentRun, seeded.run_id)
         assert run is not None
-        if terminalizer == "cancel":
-            assert (run.status, run.error_code, run.attempt_epoch) == (
-                "failed",
-                "cancelled",
-                0,
-            )
-            expected_counter = 0
-        else:
-            assert (run.status, run.error_code, run.attempt_epoch) == (
-                "deadline_exceeded",
-                None,
-                0,
-            )
-            expected_counter = 0
+        assert (run.status, run.error_code, run.attempt_epoch) == (
+            "failed",
+            "cancelled",
+            0,
+        )
     assert (
         await _read_counter(
             session_factory,
             user_id=_USER_ID,
             usage_date=_USAGE_DATE,
         )
-        == expected_counter
+        == 0
     )
 
 
 @pytest.mark.asyncio
 async def test_record_failure_never_refunds(
     session_factory: async_sessionmaker[AsyncSession],
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """runningのRunの失敗記録は利用枠を返さず、その後のキャンセルも失敗済みと返り何も閉じない。"""
     seeded = await _seed_run(
@@ -733,16 +683,16 @@ async def test_record_failure_never_refunds(
         status="running",
         attempt_epoch=3,
     )
-    transition_notices = record_closed_runs(monkeypatch)
+    transition_notices = ClosedRunNotices()
 
     recorded = await state_service(
         session_factory, notices=transition_notices
-    ).record_failure(
+    ).end_run_after_attempt_failure(
         RunAttempt(run_id=seeded.run_id, epoch=3),
         error_code=AgentRunErrorCode.INTERNAL_ERROR,
     )
     assert (recorded, transition_notices.closed_runs) == (
-        FailureRecorded(),
+        RunFailed(),
         [
             ClosedRunningRun(
                 attempt=RunAttempt(run_id=seeded.run_id, epoch=3),
@@ -752,7 +702,7 @@ async def test_record_failure_never_refunds(
         ],
     )
 
-    result = await _cancel(session_factory, seeded, monkeypatch)
+    result = await _cancel(session_factory, seeded)
 
     assert (
         await _read_counter(
@@ -762,60 +712,44 @@ async def test_record_failure_never_refunds(
         )
         == 1
     )
-    assert result == (RunAlreadyFailed(), [])
+    assert result == (CannotContinue(), [])
 
 
 @pytest.mark.parametrize(
-    ("transition", "status", "attempt_epoch", "expected_outcome", "expected_counter"),
+    ("transition", "status", "attempt_epoch", "expected_counter"),
     [
-        ("enqueue_failed", "queued", 0, RunAlreadyFailed(), 0),
-        ("deadline_sweep", "queued", 0, DeadlineExceeded(), 0),
-        ("complete", "running", 1, RunAlreadyCompleted(), 1),
+        ("enqueue_failed", "queued", 0, 0),
+        ("complete", "running", 1, 1),
     ],
 )
 @pytest.mark.asyncio
 async def test_competing_terminal_transition_wins_without_refund(
     session_factory: async_sessionmaker[AsyncSession],
-    monkeypatch: pytest.MonkeyPatch,
     transition: str,
     status: str,
     attempt_epoch: int,
-    expected_outcome: object,
     expected_counter: int,
 ) -> None:
-    """待っていたキャンセルより先に別の操作がRunを終えたら、キャンセルは先の終わり方を返し返却は先の操作の分だけになる。"""
+    """待っていたキャンセルより先に別の操作がRunを終えたら、キャンセルは続けられないと返し、返却は先の操作の分だけになる。"""
     seeded = await _seed_run(
         session_factory,
         status=status,
         attempt_epoch=attempt_epoch,
-        created_at=(
-            _NOW - timedelta(seconds=61) if transition == "deadline_sweep" else None
-        ),
-        deadline_at=(
-            _NOW - timedelta(seconds=1) if transition == "deadline_sweep" else None
-        ),
         answer_started_at=_NOW if transition == "complete" else None,
     )
-    notices = record_closed_runs(monkeypatch)
+    notices = ClosedRunNotices()
     transition_gate = CommitGate(session_factory)
 
-    async with (
-        session_factory() as locker,
-        session_factory() as observer,
-    ):
+    async with session_factory() as observer:
         transition_task = None
         cancel_task = None
         try:
-            # 回収は操作ではないので、テストのセッションで行ロックを握ってから回収する。
-            if transition == "deadline_sweep":
-                await locker.begin()
-                await _lock_run_row(locker, seeded.run_id)
-            elif transition == "enqueue_failed":
+            if transition == "enqueue_failed":
                 transition_task = asyncio.create_task(
                     state_service(
                         transition_gate,  # type: ignore[arg-type]
                         notices=notices,
-                    ).record_enqueue_failure(seeded.run_id)
+                    ).end_run_after_enqueue_failure(seeded.run_id)
                 )
                 await asyncio.wait_for(transition_gate.reached.wait(), timeout=5)
             else:
@@ -832,11 +766,11 @@ async def test_competing_terminal_transition_wins_without_refund(
                 )
                 await asyncio.wait_for(transition_gate.reached.wait(), timeout=5)
 
+            # 条件を満たさないキャンセルは待たないので、先の操作と同じ時刻で呼ぶ。
             cancel_task = asyncio.create_task(
-                state_service(session_factory, notices=notices).cancel_for_user(
-                    seeded.run_id,
-                    user_id=_USER_ID,
-                )
+                state_service(
+                    session_factory, notices=notices, now=_NOW
+                ).cancel_for_user(seeded.run_id, user_id=_USER_ID)
             )
             await wait_until_lock_waiting(observer)
 
@@ -845,19 +779,7 @@ async def test_competing_terminal_transition_wins_without_refund(
                 transition_gate.open()
                 async with asyncio.timeout(5):
                     recorded = await transition_task
-                assert recorded == FailureRecorded()
-                expected_closed = _queued_closed(
-                    seeded, DailyQuotaReleaseOutcome.RELEASED
-                )
-            elif transition == "deadline_sweep":
-                sweep_result = await sweep_deadline_exceeded_runs_at(locker, at=_NOW)
-                assert sweep_result.queued_terminal_count == 1
-                assert sweep_result.queued_quota_released_count == 1
-                assert sweep_result.queued_quota_not_eligible_count == 0
-                assert sweep_result.queued_quota_inconsistent_count == 0
-                assert sweep_result.running_terminal_runs == ()
-                assert sweep_result.running_quota_reservation_count == 0
-                await locker.commit()
+                assert recorded == RunFailed()
                 expected_closed = []
             else:
                 assert transition_task is not None
@@ -881,9 +803,8 @@ async def test_competing_terminal_transition_wins_without_refund(
                     if not task.done():
                         task.cancel()
                     await asyncio.gather(task, return_exceptions=True)
-            for session in (locker, observer):
-                if session.in_transaction():
-                    await session.rollback()
+            if observer.in_transaction():
+                await observer.rollback()
 
     assert (
         await _read_counter(
@@ -893,27 +814,19 @@ async def test_competing_terminal_transition_wins_without_refund(
         )
         == expected_counter
     )
-    assert (cancel_result, notices.closed_runs) == (expected_outcome, expected_closed)
+    assert (cancel_result, notices.closed_runs) == (CannotContinue(), expected_closed)
 
 
-@pytest.mark.parametrize(
-    ("status", "outcome"),
-    [
-        ("completed", RunAlreadyCompleted()),
-        ("failed", RunAlreadyFailed()),
-    ],
-)
+@pytest.mark.parametrize("status", ["completed", "failed"])
 @pytest.mark.asyncio
-async def test_terminal_cancel_is_not_a_release_event(
+async def test_terminal_cancel_returns_no_quota(
     session_factory: async_sessionmaker[AsyncSession],
     status: str,
-    outcome: object,
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """終了済みのRunのキャンセルは終わり方を返すだけで何も閉じず、利用枠を返さない。"""
+    """終了済みのRunのキャンセルは続けられないと返すだけで何も閉じず、利用枠を返さない。"""
     seeded = await _seed_run(session_factory, status=status)
 
-    result = await _cancel(session_factory, seeded, monkeypatch)
+    result = await _cancel(session_factory, seeded)
 
     assert (
         await _read_counter(
@@ -923,19 +836,18 @@ async def test_terminal_cancel_is_not_a_release_event(
         )
         == 1
     )
-    assert result == (outcome, [])
+    assert result == (CannotContinue(), [])
 
 
 @pytest.mark.parametrize("first_winner", ["release", "reserve_rejection"])
 @pytest.mark.asyncio
 async def test_release_and_reserve_linearize_in_quota_row_lock_order(
     session_factory: async_sessionmaker[AsyncSession],
-    monkeypatch: pytest.MonkeyPatch,
     first_winner: str,
 ) -> None:
     """キャンセルによる返却と予約は利用枠の行ロックの順に直列化され、後の側は先の側の結果を見る。"""
     seeded = await _seed_run(session_factory, counter_count=10)
-    notices = record_closed_runs(monkeypatch)
+    notices = ClosedRunNotices()
     release_gate = CommitGate(session_factory)
 
     async with (
@@ -1019,5 +931,5 @@ async def test_release_and_reserve_linearize_in_quota_row_lock_order(
     )
     assert (release_result, notices.closed_runs) == (
         CancelledByUser(),
-        _queued_closed(seeded, DailyQuotaReleaseOutcome.RELEASED),
+        [],
     )

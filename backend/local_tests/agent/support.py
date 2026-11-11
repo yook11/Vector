@@ -20,10 +20,7 @@ from app.agent.running.creation import AgentRunCreationRepository
 from app.agent.running.state import (
     AnswerGenerationStarted,
     AttemptStarted,
-    AttemptSuperseded,
-    CancelledByUser,
-    DeadlineExceeded,
-    RunNotFound,
+    CannotContinue,
 )
 from app.agent.running.state_service import AgentRunStateService
 from app.agent.running.types import RunAttempt
@@ -167,9 +164,7 @@ async def create_answering_run(
     ):
         case AnswerGenerationStarted(answer_started_at=answer_started_at):
             pass
-        case (
-            CancelledByUser() | DeadlineExceeded() | AttemptSuperseded() | RunNotFound()
-        ) as stopped:
+        case CannotContinue() as stopped:
             raise RuntimeError(
                 f"テスト用ランの回答生成を開始できませんでした: {stopped}"
             )

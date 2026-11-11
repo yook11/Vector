@@ -69,13 +69,7 @@ from app.agent.research_handoff.agent import RESEARCH_HANDOFF_AGENT
 from app.agent.research_handoff.handoff import ResearchHandoff
 from app.agent.research_handoff.handoff_input import ResearchHandoffInput
 from app.agent.research_handoff.service import ResearchHandoffService
-from app.agent.running.state import (
-    AttemptSuperseded,
-    CancelledByUser,
-    CanContinue,
-    DeadlineExceeded,
-    RunNotFound,
-)
+from app.agent.running.state import CanContinue, CannotContinue
 from app.config import settings
 from app.db.engine import create_cli_engine
 from app.db.session import caller_managed_session_factory
@@ -325,18 +319,12 @@ async def _probe_direct(*, question: str) -> None:
 
 
 def _final_output(
-    outcome: RunResult
-    | CancelledByUser
-    | DeadlineExceeded
-    | AttemptSuperseded
-    | RunNotFound,
+    outcome: RunResult | CannotContinue,
 ) -> AnswerQuestionResult:
     match outcome:
         case RunResult(final_output=result):
             return result
-        case (
-            CancelledByUser() | DeadlineExceeded() | AttemptSuperseded() | RunNotFound()
-        ) as stopped:
+        case CannotContinue() as stopped:
             raise SystemExit(f"probe run stopped: {type(stopped).__name__}")
 
 

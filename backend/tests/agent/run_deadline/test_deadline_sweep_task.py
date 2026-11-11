@@ -4,12 +4,11 @@ from __future__ import annotations
 
 from datetime import UTC, date, datetime, timedelta
 from types import SimpleNamespace
-from typing import Any, cast
+from typing import cast
 from unittest.mock import AsyncMock, MagicMock
 from uuid import UUID
 
 import pytest
-from logfire.testing import CaptureLogfire
 from sqlalchemy import event as sa_event
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -30,7 +29,6 @@ from tests.agent.running._seed import (
     create_thread_message_run as _create_thread_message_run,
 )
 from tests.conftest import TEST_USER_ID
-from tests.logfire._metric_helpers import collected_metrics
 
 
 class FakeLiveStreamPublisher:
@@ -74,20 +72,6 @@ def _ctx(session_factory: async_sessionmaker[AsyncSession]) -> SimpleNamespace:
     )
 
 
-def _quota_stale_metric_points(capfire: CaptureLogfire) -> list[dict[str, Any]]:
-    metric = next(
-        (
-            item
-            for item in collected_metrics(capfire)
-            if item["name"] == "agent_user_daily_quota_stale_reservations_total"
-        ),
-        None,
-    )
-    if metric is None:
-        return []
-    return list(metric["data"]["data_points"])
-
-
 @pytest.mark.integration
 @pytest.mark.asyncio
 async def test_sweep_task_observes_queued_release_and_running_reservation_after_commit(
@@ -128,22 +112,13 @@ async def test_sweep_task_observes_queued_release_and_running_reservation_after_
             deadline_at=deadline_at,
         )
 
-    release_metrics: list[dict[str, object]] = []
     reservations: list[dict[str, int]] = []
-
-    def record_release(**kwargs: object) -> None:
-        release_metrics.append(kwargs)
 
     def observe_stale_reservations(*, queued_count: int, running_count: int) -> None:
         reservations.append(
             {"queued_count": queued_count, "running_count": running_count}
         )
 
-    monkeypatch.setattr(
-        daily_quota_observability,
-        "record_daily_quota_release",
-        record_release,
-    )
     monkeypatch.setattr(
         daily_quota_observability,
         "observe_stale_reservations",
@@ -173,10 +148,6 @@ async def test_sweep_task_observes_queued_release_and_running_reservation_after_
             "quota_inconsistent_count": 0,
         }
     ]
-    assert release_metrics == [
-        {"result": "released", "count": 1},
-        {"result": "not_eligible", "count": 1},
-    ]
     assert reservations == [{"queued_count": 0, "running_count": 1}]
     assert "sensitive" not in str(logs)
 
@@ -200,10 +171,9 @@ async def test_sweep_task_observes_queued_release_and_running_reservation_after_
 
 
 @pytest.mark.asyncio
-async def test_sweep_task_legacy_deadline_batch_emits_no_quota_alert_or_metric(
+async def test_sweep_task_legacy_deadline_batch_emits_no_quota_alert(
     read_logs,
     session_factory: async_sessionmaker[AsyncSession],
-    capfire: CaptureLogfire,
 ) -> None:
     deadline_at = datetime.now(UTC) - timedelta(seconds=1)
     async with session_factory() as session:
@@ -232,7 +202,6 @@ async def test_sweep_task_legacy_deadline_batch_emits_no_quota_alert_or_metric(
         for entry in logs
         if entry.get("event") == "agent_user_daily_quota_stale_reservations_retained"
     ]
-    assert _quota_stale_metric_points(capfire) == []
 
     async with session_factory() as session:
         swept = await session.get(AgentRun, legacy.id)
@@ -240,10 +209,9 @@ async def test_sweep_task_legacy_deadline_batch_emits_no_quota_alert_or_metric(
 
 
 @pytest.mark.asyncio
-async def test_empty_sweep_emits_total_only_without_quota_alert_or_metric(
+async def test_empty_sweep_emits_total_only_without_quota_alert(
     read_logs,
     session_factory: async_sessionmaker[AsyncSession],
-    capfire: CaptureLogfire,
 ) -> None:
     await agent_run_tasks.sweep_deadline_exceeded_agent_runs(ctx=_ctx(session_factory))
     logs = read_logs()
@@ -263,7 +231,6 @@ async def test_empty_sweep_emits_total_only_without_quota_alert_or_metric(
         for entry in logs
         if entry.get("event") == "agent_user_daily_quota_stale_reservations_retained"
     ]
-    assert _quota_stale_metric_points(capfire) == []
 
 
 @pytest.mark.asyncio
@@ -345,15 +312,11 @@ async def test_sweep_task_does_not_observe_quota_results_when_transaction_rolls_
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("failing_sink", ["log", "queued_metric", "running_metric"])
-async def test_sweep_task_telemetry_sink_failure_keeps_committed_sweep_and_other_sinks(
+async def test_sweep_task_log_output_failure_keeps_committed_sweep(
     request: pytest.FixtureRequest,
-    read_logs,
     session_factory: async_sessionmaker[AsyncSession],
-    monkeypatch: pytest.MonkeyPatch,
-    failing_sink: str,
 ) -> None:
-    """ログやメトリクスの一つが失敗しても、確定したsweepと残りの送り先は変わらない。"""
+    """ログの出力が失敗しても、確定した回収は変わらない。"""
     deadline_at = datetime.now(UTC) - timedelta(seconds=1)
     usage_date = date(2026, 7, 20)
     async with session_factory() as setup_session:
@@ -372,30 +335,10 @@ async def test_sweep_task_telemetry_sink_failure_keeps_committed_sweep_and_other
             deadline_at=deadline_at,
             quota_usage_date=usage_date,
         )
-    attempts: list[str] = []
-
-    def record_stale_reservation(*, previous_status: str, count: int = 1) -> None:
-        assert count == 1
-        attempts.append(f"{previous_status}_metric")
-        if failing_sink == f"{previous_status}_metric":
-            raise RuntimeError("quota stale metric sink unavailable")
-
-    monkeypatch.setattr(
-        daily_quota_observability,
-        "record_daily_quota_stale_reservation",
-        record_stale_reservation,
-    )
-    if failing_sink == "log":
-        request.getfixturevalue("broken_output")
+    request.getfixturevalue("broken_output")
 
     await agent_run_tasks.sweep_deadline_exceeded_agent_runs(ctx=_ctx(session_factory))
 
-    assert set(attempts) == {"queued_metric", "running_metric"}
-    if failing_sink != "log":
-        assert {entry["event"] for entry in read_logs()} >= {
-            "agent_runs_deadline_swept",
-            "agent_user_daily_quota_stale_reservations_retained",
-        }
     async with session_factory() as verification:
         persisted = [
             await verification.get(AgentRun, run_id)
@@ -409,7 +352,7 @@ async def test_sweep_task_telemetry_sink_failure_keeps_committed_sweep_and_other
 
 @pytest.mark.integration
 @pytest.mark.asyncio
-async def test_sweep_task_batches_queued_quota_observability_after_commit(
+async def test_sweep_task_reports_queued_quota_counts_in_one_log_after_commit(
     read_logs,
     session_factory: async_sessionmaker[AsyncSession],
     monkeypatch: pytest.MonkeyPatch,
@@ -455,16 +398,6 @@ async def test_sweep_task_batches_queued_quota_observability_after_commit(
             )
         )[2]
 
-    metric_calls: list[dict[str, object]] = []
-
-    def record_release(**kwargs: object) -> None:
-        metric_calls.append(kwargs)
-
-    monkeypatch.setattr(
-        daily_quota_observability,
-        "record_daily_quota_release",
-        record_release,
-    )
     FakeLiveStreamPublisher.instances = []
     monkeypatch.setattr(
         deadline_recovery,
@@ -490,11 +423,6 @@ async def test_sweep_task_batches_queued_quota_observability_after_commit(
             "quota_not_eligible_count": 1,
             "quota_inconsistent_count": 1,
         }
-    ]
-    assert metric_calls == [
-        {"result": "released", "count": 2},
-        {"result": "not_eligible", "count": 1},
-        {"result": "inconsistent", "count": 1},
     ]
     assert FakeLiveStreamPublisher.instances == []
     assert "sensitive" not in str(logs)
@@ -644,9 +572,8 @@ async def _persisted_run_for_sweep_test(
 async def test_sweep_task_emits_no_queued_result_or_event_when_commit_rolls_back(
     read_logs,
     session_factory: async_sessionmaker[AsyncSession],
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """回収のcommitが秘匿値つきのDB例外で落ちると、taskは例外を出さずログに秘匿値を残さず、待機中のRunの回収結果も利用枠の指標も出さない。"""
+    """回収のcommitが秘匿値つきのDB例外で落ちると、taskは例外を出さずログに秘匿値を残さず、待機中のRunの回収結果のログも出さない。"""
     deadline_at = datetime.now(UTC) - timedelta(seconds=1)
     usage_date = date(2026, 7, 22)
     async with session_factory() as setup_session:
@@ -666,25 +593,16 @@ async def test_sweep_task_emits_no_queued_result_or_event_when_commit_rolls_back
         )
         await setup_session.commit()
 
-    metric_calls: list[dict[str, object]] = []
     failing_session = session_factory()
 
     def fail_commit(_session: object) -> None:
         raise SensitivePersistenceFailure
-
-    def record_release(**kwargs: object) -> None:
-        metric_calls.append(kwargs)
 
     sa_event.listen(
         failing_session.sync_session,
         "before_commit",
         fail_commit,
         once=True,
-    )
-    monkeypatch.setattr(
-        daily_quota_observability,
-        "record_daily_quota_release",
-        record_release,
     )
 
     def failing_session_factory() -> AsyncSession:
@@ -704,7 +622,6 @@ async def test_sweep_task_emits_no_queued_result_or_event_when_commit_rolls_back
     logs = read_logs()
 
     assert_no_sensitive_marker(logs)
-    assert metric_calls == []
     assert not [
         entry
         for entry in logs

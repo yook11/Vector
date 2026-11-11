@@ -34,12 +34,8 @@ from app.agent.running.question_reading import (
 from app.agent.running.stage_gate import AgentRunStageGate
 from app.agent.running.state import (
     AttemptStarted,
-    AttemptSuperseded,
-    CancelledByUser,
     CannotContinue,
-    DeadlineExceeded,
     RunCompleted,
-    RunNotFound,
 )
 from app.agent.running.state_service import AgentRunStateService
 from app.agent.running.types import AgentRunErrorCode, RunAttempt
@@ -74,11 +70,8 @@ async def execute_run_attempt(
     match await state_service.start_attempt(run_id):
         case AttemptStarted(attempt=attempt):
             pass
-        case DeadlineExceeded():
-            logger.info("agent_run_start_deadline_exceeded")
-            return
-        case CannotContinue() as stopped:
-            logger.info("agent_run_not_started", reason=_stop_reason(stopped))
+        case CannotContinue():
+            logger.info("agent_run_not_started")
             return
     stream_events = publisher_for(attempt)
 
@@ -169,12 +162,8 @@ async def execute_run_attempt(
     match run_outcome:
         case RunResult(final_output=result, research_handoff=research_handoff):
             pass
-        case CannotContinue() as stopped:
-            logger.info(
-                "agent_run_generation_stopped",
-                run_id=str(run_id),
-                reason=_stop_reason(stopped),
-            )
+        case CannotContinue():
+            logger.info("agent_run_generation_stopped", run_id=str(run_id))
             return
 
     serialized_research_handoff = _serialize_research_handoff(
@@ -197,29 +186,8 @@ async def execute_run_attempt(
     match completion:
         case RunCompleted():
             return
-        case CannotContinue() as stopped:
-            logger.info(
-                "agent_run_completion_rejected",
-                run_id=str(run_id),
-                reason=_stop_reason(stopped),
-            )
-
-
-def _stop_reason(stopped: CannotContinue) -> str:
-    match stopped:
-        case CancelledByUser():
-            return "cancelled_by_user"
-        case DeadlineExceeded():
-            return "deadline_exceeded"
-        case AttemptSuperseded():
-            return "attempt_superseded"
-        case RunNotFound():
-            return "run_not_found"
-        # 基底の子は閉じられないので、名前を決めていない理由は誤りとして止める。
-        case _:
-            raise AssertionError(
-                f"unreachable: stop reason {type(stopped).__name__} has no log name"
-            )
+        case CannotContinue():
+            logger.info("agent_run_completion_rejected", run_id=str(run_id))
 
 
 def _serialize_research_handoff(
@@ -299,4 +267,4 @@ async def _mark_failed(
     error_code: AgentRunErrorCode,
 ) -> None:
     # 既に止まっていたRunには書かず、閉じたときの通知は操作が送る。
-    await state_service.record_failure(attempt, error_code=error_code)
+    await state_service.end_run_after_attempt_failure(attempt, error_code=error_code)

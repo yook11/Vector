@@ -18,13 +18,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from app.agent.live_updates.reporters import AgentRunLiveStageReporter
 from app.agent.live_updates.stream import AgentRunLiveStreamEvent
 from app.agent.running.stage_gate import AgentRunStageGate
-from app.agent.running.state import (
-    AttemptSuperseded,
-    CancelledByUser,
-    CanContinue,
-    CannotContinue,
-    DeadlineExceeded,
-)
+from app.agent.running.state import CancelledByUser, CanContinue, CannotContinue
 from app.agent.running.state_service import AgentRunStateService
 from app.agent.running.types import RunAttempt
 from app.db.errors import DatabaseConnectionError, DatabaseConnectionErrorReason
@@ -108,7 +102,7 @@ def _patch_checks(
             raise item
         return item
 
-    monkeypatch.setattr(AgentRunStateService, "authorize_stage_entry", check)
+    monkeypatch.setattr(AgentRunStateService, "authorize_continuation", check)
     return calls
 
 
@@ -117,9 +111,7 @@ async def test_each_enter_asks_again_without_remembering_earlier_results(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """続けてよい結果も止まった結果も覚えず、工程に入るたびに確認し、続けてよいときだけ段階を通知する。"""
-    calls = _patch_checks(
-        monkeypatch, [CanContinue(), AttemptSuperseded(), CanContinue()]
-    )
+    calls = _patch_checks(monkeypatch, [CanContinue(), CannotContinue(), CanContinue()])
     publisher = RecordingPublisher()
     gate = _new_gate(_unused_session_factory, publisher)
 
@@ -130,7 +122,7 @@ async def test_each_enter_asks_again_without_remembering_earlier_results(
     ]
 
     assert (results, len(calls), publisher.published()) == (
-        [CanContinue(), AttemptSuperseded(), CanContinue()],
+        [CanContinue(), CannotContinue(), CanContinue()],
         3,
         [
             (RUN_ID, ATTEMPT_EPOCH, {"type": "stage", "stage": "planning"}),
@@ -195,7 +187,7 @@ async def test_current_attempt_continues_and_notifies_stage_once(
 async def test_committed_cancel_stops_next_stage_without_notifying(
     session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
-    """利用者の停止がcommitされると、次の工程に入るときに止めたことを返し、その段階を通知しない。"""
+    """利用者の停止がcommitされると、次の工程に入るときに続けられないと返し、その段階を通知しない。"""
     run_id = await _seed_running_run(session_factory)
     publisher = RecordingPublisher()
     gate = _new_gate(session_factory, publisher, run_id=run_id, attempt_epoch=1)
@@ -210,7 +202,7 @@ async def test_committed_cancel_stops_next_stage_without_notifying(
     result = await gate.enter("evidence_collection")
 
     assert (result, publisher.published()) == (
-        CancelledByUser(),
+        CannotContinue(),
         [(run_id, 1, {"type": "stage", "stage": "planning"})],
     )
 
@@ -220,7 +212,7 @@ async def test_committed_cancel_stops_next_stage_without_notifying(
 async def test_restart_stops_old_attempt_at_next_stage_without_notifying(
     session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
-    """再配信で次の世代が始まると、古い世代は次の工程に入るときに別の試行が担当していると返し、その段階を通知しない。"""
+    """再配信で次の世代が始まると、古い世代は次の工程に入るときに続けられないと返し、その段階を通知しない。"""
     run_id = await _seed_running_run(session_factory)
     publisher = RecordingPublisher()
     gate = _new_gate(session_factory, publisher, run_id=run_id, attempt_epoch=1)
@@ -234,17 +226,17 @@ async def test_restart_stops_old_attempt_at_next_stage_without_notifying(
     result = await gate.enter("evidence_collection")
 
     assert (result, publisher.published()) == (
-        AttemptSuperseded(),
+        CannotContinue(),
         [(run_id, 1, {"type": "stage", "stage": "planning"})],
     )
 
 
 @pytest.mark.integration
 @pytest.mark.asyncio
-async def test_expired_deadline_closes_run_once_and_notifies_only_terminal(
+async def test_expired_deadline_stops_stage_without_closing_or_notifying(
     session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
-    """受理期限を過ぎたRunは工程に入るときに一度だけ期限切れで閉じて終了だけを通知し、以後も期限切れを返す。"""
+    """受理期限を過ぎたRunは工程に入れず、Runを閉じることも段階や終了を通知することもしない。"""
     run_id = await _seed_running_run(
         session_factory,
         deadline_at=datetime.now(UTC) - timedelta(seconds=1),
@@ -258,17 +250,11 @@ async def test_expired_deadline_closes_run_once_and_notifies_only_terminal(
         persisted = await session.get(AgentRun, run_id)
     assert persisted is not None
     assert (results, publisher.published()) == (
-        [DeadlineExceeded(), DeadlineExceeded()],
-        [
-            (
-                run_id,
-                1,
-                {"type": "terminal", "status": "deadline_exceeded", "errorCode": None},
-            )
-        ],
+        [CannotContinue(), CannotContinue()],
+        [],
     )
     assert (persisted.status, persisted.attempt_epoch, persisted.error_code) == (
-        "deadline_exceeded",
+        "running",
         1,
         None,
     )

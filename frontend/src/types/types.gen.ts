@@ -1651,10 +1651,6 @@ export type CancelResearchRunErrors = {
      */
     404: unknown;
     /**
-     * Run already completed
-     */
-    409: unknown;
-    /**
      * Validation Error
      */
     422: HttpValidationError;

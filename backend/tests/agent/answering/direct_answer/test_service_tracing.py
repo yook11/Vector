@@ -23,7 +23,7 @@ from app.agent.answering.direct_answer.failure import DirectAnswerError
 from app.agent.answering.direct_answer.service import DirectAnswerService
 from app.agent.llm_call.caller import LlmTextStreamer
 from app.agent.llm_call.gemini import GeminiLlmCaller
-from app.agent.running.state import AttemptSuperseded
+from app.agent.running.state import CannotContinue
 from app.logfire.redaction import install_exception_redaction
 from tests.agent.answering._fakes import ScriptedAnswerGenerationGate
 from tests.agent.llm_call._helpers import FakeGeminiClient
@@ -296,13 +296,13 @@ async def test_start_rejection_does_not_open_phase_or_attempt(
     service = DirectAnswerService(
         agent=DIRECT_ANSWER_AGENT,
         llm_text_streamer_scope_factory=streamer_scope,
-        gate=ScriptedAnswerGenerationGate(start=AttemptSuperseded()),
+        gate=ScriptedAnswerGenerationGate(start=CannotContinue()),
     )
 
     result = await service.answer(_input())
 
     spans = capfire.exporter.exported_spans
-    assert result == AttemptSuperseded()
+    assert result == CannotContinue()
     assert not any(
         span.name in ("agent_phase", "agent_provider_call") for span in spans
     )

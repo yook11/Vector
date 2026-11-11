@@ -1,12 +1,12 @@
-"""Runの状態を変える操作を、1回のトランザクションでロック・判定・書き込みし、commit後に閉じたRunを通知する。"""
+"""Runの状態を変える操作を、条件を満たすRunにだけ1回のトランザクションで書き、commit後に閉じたRunを通知する。"""
 
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Awaitable, Callable
-from contextlib import suppress
-from dataclasses import dataclass
+from collections.abc import AsyncIterator, Callable, Coroutine
+from contextlib import asynccontextmanager
 from datetime import datetime
+from functools import wraps
 from typing import Any
 from uuid import UUID
 
@@ -15,7 +15,6 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.agent.contract import AnswerQuestionResult
 from app.agent.running.daily_quota import observability as daily_quota_observability
-from app.agent.running.daily_quota.observability import DailyQuotaReleaseResult
 from app.agent.running.deadline.deadline_exceeded import (
     DeadlineRunSweepResult,
     check_agent_run_deadline,
@@ -23,30 +22,22 @@ from app.agent.running.deadline.deadline_exceeded import (
     sweep_deadline_exceeded_runs_for_thread,
 )
 from app.agent.running.finish_notice import (
-    ClosedQueuedRun,
-    ClosedRun,
     ClosedRunningRun,
     LivePublisherFor,
     notify_closed_run,
 )
 from app.agent.running.state import (
     AnswerGenerationStarted,
-    AttemptAlreadyStarted,
     AttemptStarted,
     CancelledByUser,
     CanContinue,
     CannotContinue,
-    DeadlineExceeded,
-    FailureRecorded,
-    RunAlreadyCompleted,
-    RunAlreadyFailed,
     RunCompleted,
+    RunFailed,
     RunNotFound,
-    RunPhase,
 )
-from app.agent.running.state_repository import AgentRunStateRepository, CurrentRun
+from app.agent.running.state_repository import AgentRunStateRepository
 from app.agent.running.types import AgentRunErrorCode, AgentRunStatus, RunAttempt
-from app.agent.threads.citation_integrity import warn_on_citation_source_mismatch
 from app.db.retry_prospect import is_resolvable_by_retry
 from app.db.translate import translate_database_error
 
@@ -55,6 +46,27 @@ __all__ = ["AgentRunStateService"]
 # 一時的なDBの失敗だけを、受理期限と回答の時間枠を食わない範囲でやり直す。
 _MAX_TRANSACTION_ATTEMPTS = 3
 _RETRY_DELAY_SECONDS = 0.2
+
+
+def _retry_transient_database_failure[**P, R](
+    operation: Callable[P, Coroutine[Any, Any, R]],
+) -> Callable[P, Coroutine[Any, Any, R]]:
+    """一時的なDBの失敗だけを、操作の最初からやり直す。"""
+
+    @wraps(operation)
+    async def retrying(*args: P.args, **kwargs: P.kwargs) -> R:
+        for attempt_number in range(1, _MAX_TRANSACTION_ATTEMPTS + 1):
+            try:
+                return await operation(*args, **kwargs)
+            except SQLAlchemyError as exc:
+                error = translate_database_error(exc)
+                is_last_attempt = attempt_number == _MAX_TRANSACTION_ATTEMPTS
+                if is_last_attempt or not is_resolvable_by_retry(error):
+                    raise error from exc
+            # 操作を抜けてsessionを閉じ、接続を返してから待つ。
+            await asyncio.sleep(_RETRY_DELAY_SECONDS * attempt_number)
+
+    return retrying
 
 
 class AgentRunStateService:
@@ -70,75 +82,37 @@ class AgentRunStateService:
         # テストでDBの時刻の代わりに使う。
         self._now = now
 
+    @_retry_transient_database_failure
     async def start_attempt(self, run_id: UUID) -> AttemptStarted | CannotContinue:
-        async def on_locked_run(operation: _RunOperation, current_run: CurrentRun):
-            decision = current_run.state.check_start(now=current_run.now)
-            await operation.close_if_expired(current_run, decision)
-            match decision:
-                case CanContinue():
-                    attempt = RunAttempt(
-                        run_id=run_id, epoch=current_run.state.attempt_epoch + 1
-                    )
-                    await operation.repository.mark_attempt_started(
-                        attempt_epoch=attempt.epoch
-                    )
-                    return AttemptStarted(attempt=attempt)
-                case CannotContinue() as stopped:
-                    return stopped
+        async with self._transaction() as session:
+            attempt = await self._repository(session).start_attempt(run_id)
+        if attempt is None:
+            return CannotContinue()
+        return AttemptStarted(attempt=attempt)
 
-        return await self._with_locked_run(run_id, on_locked_run)
-
-    async def authorize_stage_entry(
+    @_retry_transient_database_failure
+    async def authorize_continuation(
         self, attempt: RunAttempt
     ) -> CanContinue | CannotContinue:
-        async def on_locked_run(operation: _RunOperation, current_run: CurrentRun):
-            decision = current_run.state.check_attempt(
-                attempt_epoch=attempt.epoch,
-                phases={RunPhase.PREPARING},
-                now=current_run.now,
-            )
-            await operation.close_if_expired(current_run, decision)
-            return decision
+        async with self._transaction() as session:
+            can_continue = await self._repository(session).can_continue(attempt)
+        if not can_continue:
+            return CannotContinue()
+        return CanContinue()
 
-        return await self._with_locked_run(attempt.run_id, on_locked_run)
-
+    @_retry_transient_database_failure
     async def start_answer_generation(
         self, attempt: RunAttempt
     ) -> AnswerGenerationStarted | CannotContinue:
-        async def on_locked_run(operation: _RunOperation, current_run: CurrentRun):
-            decision = current_run.state.check_attempt(
-                attempt_epoch=attempt.epoch,
-                phases={RunPhase.PREPARING},
-                now=current_run.now,
-            )
-            await operation.close_if_expired(current_run, decision)
-            match decision:
-                case CanContinue():
-                    await operation.repository.mark_answer_started(
-                        answer_started_at=current_run.now
-                    )
-                    return AnswerGenerationStarted(
-                        run_id=attempt.run_id, answer_started_at=current_run.now
-                    )
-                case CannotContinue() as stopped:
-                    return stopped
+        async with self._transaction() as session:
+            answer_started_at = await self._repository(session).start_answer(attempt)
+        if answer_started_at is None:
+            return CannotContinue()
+        return AnswerGenerationStarted(
+            run_id=attempt.run_id, answer_started_at=answer_started_at
+        )
 
-        return await self._with_locked_run(attempt.run_id, on_locked_run)
-
-    async def authorize_answer_regeneration(
-        self, attempt: RunAttempt
-    ) -> CanContinue | CannotContinue:
-        async def on_locked_run(operation: _RunOperation, current_run: CurrentRun):
-            decision = current_run.state.check_attempt(
-                attempt_epoch=attempt.epoch,
-                phases={RunPhase.ANSWERING},
-                now=current_run.now,
-            )
-            await operation.close_if_expired(current_run, decision)
-            return decision
-
-        return await self._with_locked_run(attempt.run_id, on_locked_run)
-
+    @_retry_transient_database_failure
     async def complete(
         self,
         attempt: RunAttempt,
@@ -146,199 +120,114 @@ class AgentRunStateService:
         result: AnswerQuestionResult,
         research_handoff: dict[str, Any] | None,
     ) -> RunCompleted | CannotContinue:
-        async def on_locked_run(operation: _RunOperation, current_run: CurrentRun):
-            decision = current_run.state.check_attempt(
-                attempt_epoch=attempt.epoch,
-                phases={RunPhase.ANSWERING},
-                now=current_run.now,
+        async with self._transaction() as session:
+            completed = await self._repository(session).complete(
+                attempt, result=result, research_handoff=research_handoff
             )
-            await operation.close_if_expired(current_run, decision)
-            match decision:
-                case CanContinue():
-                    pass
-                case CannotContinue() as stopped:
-                    return stopped
-
-            repository = operation.repository
-            warn_on_citation_source_mismatch(
-                run_id=attempt.run_id,
-                answer=result.answer,
-                source_refs=[source.source_ref for source in result.sources],
-            )
-            assistant_message_id = await repository.add_assistant_message(result=result)
-            await operation.close(
-                current_run,
-                status=AgentRunStatus.COMPLETED,
-                assistant_message_id=assistant_message_id,
-            )
-            repository.touch_thread(updated_at=current_run.now)
-            # Noneは「記録を追加しなかったRun」であり、既存handoffを消さない。
-            if research_handoff is not None:
-                repository.replace_research_handoff(research_handoff)
-            return RunCompleted()
-
-        return await self._with_locked_run(
-            attempt.run_id, on_locked_run, lock_thread=True
+        if not completed:
+            return CannotContinue()
+        await notify_closed_run(
+            ClosedRunningRun(
+                attempt=attempt, status=AgentRunStatus.COMPLETED, error_code=None
+            ),
+            publisher_for=self._publisher_for,
         )
+        return RunCompleted()
 
-    async def record_failure(
+    @_retry_transient_database_failure
+    async def end_run_after_attempt_failure(
         self, attempt: RunAttempt, *, error_code: AgentRunErrorCode
-    ) -> FailureRecorded | CannotContinue:
-        async def on_locked_run(operation: _RunOperation, current_run: CurrentRun):
-            decision = current_run.state.check_attempt(
-                attempt_epoch=attempt.epoch,
-                phases={RunPhase.PREPARING, RunPhase.ANSWERING},
-                now=current_run.now,
+    ) -> RunFailed | CannotContinue:
+        async with self._transaction() as session:
+            failed = await self._repository(session).end_run_of_attempt(
+                attempt, error_code=error_code
             )
-            await operation.close_if_expired(current_run, decision)
-            match decision:
-                case CanContinue():
-                    await operation.close(
-                        current_run, status=AgentRunStatus.FAILED, error_code=error_code
-                    )
-                    return FailureRecorded()
-                case CannotContinue() as stopped:
-                    return stopped
+        if not failed:
+            return CannotContinue()
+        await notify_closed_run(
+            ClosedRunningRun(
+                attempt=attempt, status=AgentRunStatus.FAILED, error_code=error_code
+            ),
+            publisher_for=self._publisher_for,
+        )
+        return RunFailed()
 
-        return await self._with_locked_run(attempt.run_id, on_locked_run)
-
+    @_retry_transient_database_failure
     async def cancel_for_user(
         self, run_id: UUID, *, user_id: UUID
-    ) -> (
-        CancelledByUser
-        | DeadlineExceeded
-        | RunAlreadyCompleted
-        | RunAlreadyFailed
-        | RunNotFound
-    ):
-        async def on_locked_run(operation: _RunOperation, current_run: CurrentRun):
-            decision = current_run.state.check_cancel(now=current_run.now)
-            await operation.close_if_expired(current_run, decision)
-            match decision:
-                case CanContinue():
-                    await operation.close(
-                        current_run,
-                        status=AgentRunStatus.FAILED,
-                        error_code=AgentRunErrorCode.CANCELLED,
-                    )
-                    return CancelledByUser()
-                case (
-                    CancelledByUser()
-                    | DeadlineExceeded()
-                    | RunAlreadyCompleted()
-                    | RunAlreadyFailed()
-                ) as ended:
-                    return ended
+    ) -> CancelledByUser | CannotContinue | RunNotFound:
+        async with self._transaction() as session:
+            repository = self._repository(session)
+            cancelled = await repository.cancel(run_id, owner_id=user_id)
+            if cancelled is None:
+                if not await repository.exists_for_owner(run_id, owner_id=user_id):
+                    return RunNotFound()
+                return CannotContinue()
+        if cancelled.running_attempt is not None:
+            await notify_closed_run(
+                ClosedRunningRun(
+                    attempt=cancelled.running_attempt,
+                    status=AgentRunStatus.FAILED,
+                    error_code=AgentRunErrorCode.CANCELLED,
+                ),
+                publisher_for=self._publisher_for,
+            )
+        return CancelledByUser()
 
-        return await self._with_locked_run(run_id, on_locked_run, owner_id=user_id)
-
-    async def record_enqueue_failure(
+    @_retry_transient_database_failure
+    async def end_run_after_enqueue_failure(
         self, run_id: UUID
-    ) -> (
-        FailureRecorded
-        | AttemptAlreadyStarted
-        | CancelledByUser
-        | DeadlineExceeded
-        | RunAlreadyCompleted
-        | RunAlreadyFailed
-        | RunNotFound
-    ):
-        async def on_locked_run(operation: _RunOperation, current_run: CurrentRun):
-            decision = current_run.state.check_enqueue_failure(now=current_run.now)
-            await operation.close_if_expired(current_run, decision)
-            match decision:
-                case CanContinue():
-                    await operation.close(
-                        current_run,
-                        status=AgentRunStatus.FAILED,
-                        error_code=AgentRunErrorCode.ENQUEUE_FAILED,
-                    )
-                    return FailureRecorded()
-                case (
-                    AttemptAlreadyStarted()
-                    | CancelledByUser()
-                    | DeadlineExceeded()
-                    | RunAlreadyCompleted()
-                    | RunAlreadyFailed()
-                ) as skipped:
-                    return skipped
+    ) -> RunFailed | CannotContinue:
+        async with self._transaction() as session:
+            failed = await self._repository(session).end_queued_run(run_id)
+        if not failed:
+            return CannotContinue()
+        return RunFailed()
 
-        return await self._with_locked_run(run_id, on_locked_run)
-
+    @_retry_transient_database_failure
     async def sweep_deadline_exceeded_runs(self) -> DeadlineRunSweepResult:
-        result = await self._in_transaction(sweep_deadline_exceeded_runs)
+        async with self._transaction() as session:
+            result = await sweep_deadline_exceeded_runs(session)
         await self._notify_swept(result)
         return result
 
+    @_retry_transient_database_failure
     async def sweep_deadline_exceeded_runs_for_thread(
         self, *, thread_id: UUID, user_id: UUID
     ) -> DeadlineRunSweepResult:
-        result = await self._in_transaction(
-            lambda session: sweep_deadline_exceeded_runs_for_thread(
+        async with self._transaction() as session:
+            result = await sweep_deadline_exceeded_runs_for_thread(
                 session, thread_id=thread_id, user_id=user_id
             )
-        )
         await self._notify_swept(result)
         return result
 
+    @_retry_transient_database_failure
     async def check_run_deadline(self, run_id: UUID) -> DeadlineRunSweepResult:
-        result = await self._in_transaction(
-            lambda session: check_agent_run_deadline(session, run_id=run_id)
-        )
+        async with self._transaction() as session:
+            result = await check_agent_run_deadline(session, run_id=run_id)
         await self._notify_swept(result)
         return result
 
-    async def _with_locked_run[Result](
-        self,
-        run_id: UUID,
-        on_locked_run: Callable[[_RunOperation, CurrentRun], Awaitable[Result]],
-        *,
-        owner_id: UUID | None = None,
-        lock_thread: bool = False,
-    ) -> Result | RunNotFound:
-        """on_locked_runは一時的なDBの失敗で最初から呼び直すので、閉じたRunの通知はcommitの後にここで行う。"""
+    def _repository(self, session: AsyncSession) -> AgentRunStateRepository:
+        return AgentRunStateRepository(session, now=self._now)
 
-        async def work(
-            session: AsyncSession,
-        ) -> tuple[Result | RunNotFound, ClosedRun | None]:
-            operation = _RunOperation(
-                run_id=run_id,
-                repository=AgentRunStateRepository(session, now=self._now),
-            )
-            match await operation.repository.lock(
-                run_id, owner_id=owner_id, lock_thread=lock_thread
-            ):
-                case RunNotFound() as missing:
-                    return missing, None
-                case CurrentRun() as current_run:
-                    return (
-                        await on_locked_run(operation, current_run),
-                        operation.closed_run,
-                    )
-
-        result, closed_run = await self._in_transaction(work)
-        if closed_run is not None:
-            await notify_closed_run(closed_run, publisher_for=self._publisher_for)
-        return result
+    @asynccontextmanager
+    async def _transaction(self) -> AsyncIterator[AsyncSession]:
+        async with self._session_factory() as session:
+            await session.begin()
+            yield session
+            try:
+                await session.commit()
+            except SQLAlchemyError as exc:
+                # commit中の失敗は書けたか分からないので、やり直さない。
+                raise translate_database_error(exc) from exc
 
     async def _notify_swept(self, result: DeadlineRunSweepResult) -> None:
-        released: tuple[tuple[DailyQuotaReleaseResult, int], ...] = (
-            ("released", result.queued_quota_released_count),
-            ("not_eligible", result.queued_quota_not_eligible_count),
-            ("inconsistent", result.queued_quota_inconsistent_count),
+        daily_quota_observability.observe_stale_reservations(
+            queued_count=result.queued_quota_inconsistent_count,
+            running_count=result.running_quota_reservation_count,
         )
-        for quota_result, count in released:
-            if count > 0:
-                with suppress(Exception):
-                    daily_quota_observability.record_daily_quota_release(
-                        result=quota_result,
-                        count=count,
-                    )
-        with suppress(Exception):
-            daily_quota_observability.observe_stale_reservations(
-                queued_count=result.queued_quota_inconsistent_count,
-                running_count=result.running_quota_reservation_count,
-            )
         for attempt in result.running_terminal_runs:
             await notify_closed_run(
                 ClosedRunningRun(
@@ -348,70 +237,3 @@ class AgentRunStateService:
                 ),
                 publisher_for=self._publisher_for,
             )
-
-    async def _in_transaction[Result](
-        self, work: Callable[[AsyncSession], Awaitable[Result]]
-    ) -> Result:
-        for attempt_number in range(1, _MAX_TRANSACTION_ATTEMPTS + 1):
-            async with self._session_factory() as session:
-                await session.begin()
-                try:
-                    result = await work(session)
-                except SQLAlchemyError as exc:
-                    error = translate_database_error(exc)
-                    is_last_attempt = attempt_number == _MAX_TRANSACTION_ATTEMPTS
-                    if is_last_attempt or not is_resolvable_by_retry(error):
-                        raise error from exc
-                else:
-                    try:
-                        await session.commit()
-                    except SQLAlchemyError as exc:
-                        # commit中の失敗は書けたか分からないので、やり直さない。
-                        raise translate_database_error(exc) from exc
-                    return result
-            # sessionを閉じて接続を返してから待つ。
-            await asyncio.sleep(_RETRY_DELAY_SECONDS * attempt_number)
-
-
-@dataclass(slots=True)
-class _RunOperation:
-    """1回の操作の間だけ使う、書き込みの口と、commit後に通知する閉じたRun。"""
-
-    run_id: UUID
-    repository: AgentRunStateRepository
-    closed_run: ClosedRun | None = None
-
-    async def close_if_expired(self, current_run: CurrentRun, decision: object) -> None:
-        """期限切れの判定は既に閉じたRunにも返るので、まだ終わっていないRunだけを閉じる。"""
-        match decision:
-            case DeadlineExceeded() if current_run.state.phase is not RunPhase.FINISHED:
-                await self.close(current_run, status=AgentRunStatus.DEADLINE_EXCEEDED)
-
-    async def close(
-        self,
-        current_run: CurrentRun,
-        *,
-        status: AgentRunStatus,
-        error_code: AgentRunErrorCode | None = None,
-        assistant_message_id: UUID | None = None,
-    ) -> None:
-        was_queued = current_run.state.phase is RunPhase.QUEUED
-        await self.repository.close(
-            status=status,
-            error_code=error_code,
-            assistant_message_id=assistant_message_id,
-        )
-        # 待機中のまま閉じたRunは、受付で予約した利用枠を返す。
-        if was_queued:
-            self.closed_run = ClosedQueuedRun(
-                run_id=self.run_id,
-                quota_release_outcome=await self.repository.release_daily_quota(),
-            )
-            return
-        self.closed_run = ClosedRunningRun(
-            attempt=RunAttempt(
-                run_id=self.run_id, epoch=current_run.state.attempt_epoch
-            ),
-            status=status,
-            error_code=error_code,
-        )

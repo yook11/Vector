@@ -50,7 +50,7 @@ from app.agent.planning.contract import (
     TargetTimeWindow,
 )
 from app.agent.research_handoff import ResearchHandoff, ResearchHandoffInput
-from app.agent.running.state import AttemptSuperseded, CannotContinue
+from app.agent.running.state import CannotContinue
 from tests.agent.answering_runner._harness import (
     PassThroughOrganizer,
     RecordingStageGate,
@@ -347,14 +347,14 @@ async def test_builder_exception_yields_none_handoff_and_continues_answering(
 
 
 class _StoppingEvidenceAnswerer:
-    """並行taskへ一度制御を渡してから、Runが止まった理由を返す回答工程。"""
+    """並行taskへ一度制御を渡してから、Runを続けられないと返す回答工程。"""
 
     async def answer(
         self, input: EvidenceAnswerInput
     ) -> EvidenceAnswerDraft | CannotContinue:
         del input
         await asyncio.sleep(0)
-        return AttemptSuperseded()
+        return CannotContinue()
 
 
 class _FailingEvidenceAnswerer:
@@ -467,7 +467,7 @@ async def test_an_organizer_that_never_finishes_is_cut_off_and_the_ledger_surviv
 
 
 async def test_stopping_the_answer_cancels_the_organizer_and_writes_nothing() -> None:
-    """回答工程が止まった理由を返すと、整理をcancelして合流してから同じ理由を返す。"""
+    """回答工程が続けられないと返すと、整理をcancelして合流してから同じ答えを返す。"""
     organizer = _NeverFinishingOrganizer()
     runner = _search_runner(
         plan=_plan(research_goal="調査目標"),
@@ -482,7 +482,7 @@ async def test_stopping_the_answer_cancels_the_organizer_and_writes_nothing() ->
 
     outcome = await _run(runner)
 
-    assert (outcome, organizer.cancelled.is_set()) == (AttemptSuperseded(), True)
+    assert (outcome, organizer.cancelled.is_set()) == (CannotContinue(), True)
 
 
 async def test_a_failed_answer_cancels_the_organizer_and_fails_the_run() -> None:

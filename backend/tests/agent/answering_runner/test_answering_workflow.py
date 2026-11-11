@@ -37,7 +37,7 @@ from app.agent.planning.contract import (
     ResearchTask,
     SearchPlan,
 )
-from app.agent.running.state import DeadlineExceeded, RunNotFound
+from app.agent.running.state import CannotContinue
 from tests.agent.answering_runner._harness import (
     PassThroughOrganizer,
     RecordingStageGate,
@@ -245,11 +245,11 @@ async def test_search_workflow_starts_both_retrieval_ports() -> None:
     assert result.final_output.status == "insufficient"
 
 
-async def test_stop_before_collection_returns_the_reason_without_collecting() -> None:
-    """収集に入る問い合わせで止まると、収集も回答も呼ばずに止まった理由を返す。"""
+async def test_stop_before_collection_is_returned_without_collecting() -> None:
+    """収集に入る問い合わせで止まると、収集も回答も呼ばずに続けられないと返す。"""
     timeline: list[str] = []
     gate = RecordingStageGate(
-        timeline=timeline, stop_at="evidence_collection", stopped=DeadlineExceeded()
+        timeline=timeline, stop_at="evidence_collection", stopped=CannotContinue()
     )
     runner, _, internal_search, _, evidence_answerer = _runner(
         plan=_search_plan(), timeline=timeline, stage_gate=gate
@@ -261,18 +261,18 @@ async def test_stop_before_collection_returns_the_reason_without_collecting() ->
     )
 
     assert (outcome, timeline, internal_search.calls, evidence_answerer.calls) == (
-        DeadlineExceeded(),
+        CannotContinue(),
         ["phases_factory", "enter:planning", "planner", "enter:evidence_collection"],
         [],
         [],
     )
 
 
-async def test_stop_before_review_returns_the_reason_without_reviewing() -> None:
-    """ヒットがあって精査に入る問い合わせで止まると、精査も回答も呼ばずに止まった理由を返す。"""
+async def test_stop_before_review_is_returned_without_reviewing() -> None:
+    """ヒットがあって精査に入る問い合わせで止まると、精査も回答も呼ばずに続けられないと返す。"""
     timeline: list[str] = []
     gate = RecordingStageGate(
-        timeline=timeline, stop_at="evidence_review", stopped=RunNotFound()
+        timeline=timeline, stop_at="evidence_review", stopped=CannotContinue()
     )
     runner, _, _, _, evidence_answerer = _runner(
         plan=_search_plan(),
@@ -288,7 +288,7 @@ async def test_stop_before_review_returns_the_reason_without_reviewing() -> None
 
     assert set(timeline[4:6]) == {"internal_search", "external_search_scope"}
     assert (outcome, timeline[:4], timeline[6:], evidence_answerer.calls) == (
-        RunNotFound(),
+        CannotContinue(),
         ["phases_factory", "enter:planning", "planner", "enter:evidence_collection"],
         ["enter:evidence_review"],
         [],

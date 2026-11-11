@@ -56,12 +56,9 @@ from app.agent.running.deadline.scheduling import (
     get_agent_deadline_scheduler,
 )
 from app.agent.running.state import (
-    AttemptAlreadyStarted,
     CancelledByUser,
-    DeadlineExceeded,
-    FailureRecorded,
-    RunAlreadyCompleted,
-    RunAlreadyFailed,
+    CannotContinue,
+    RunFailed,
     RunNotFound,
     has_attempt_started,
     is_finished,
@@ -95,7 +92,6 @@ router = APIRouter(
 logger = create_policy_json_logger(__name__, RESEARCH_LOG_RULES)
 
 _ACTIVE_RUN_DETAIL = "A run is already in progress for this thread"
-_RUN_ALREADY_COMPLETED_DETAIL = "Run already completed"
 _THREAD_NOT_FOUND_DETAIL = "Research thread not found"
 _RUN_NOT_FOUND_DETAIL = "Research run not found"
 _SSE_RETRY_AFTER_SECONDS = 5
@@ -231,7 +227,7 @@ async def create_research_response(
             run_id=str(created.run_id),
         )
         try:
-            recorded = await state_service.record_enqueue_failure(created.run_id)
+            recorded = await state_service.end_run_after_enqueue_failure(created.run_id)
         except Exception as update_exc:
             logger.exception(
                 "agent_run_enqueue_failed_mark_failed_failed",
@@ -242,33 +238,18 @@ async def create_research_response(
                 detail="Failed to enqueue research run",
             ) from update_exc
         match recorded:
-            case FailureRecorded():
+            case RunFailed():
                 pass
-            case AttemptAlreadyStarted():
-                _log_enqueue_failure_skipped(created.run_id, "attempt_already_started")
-            case CancelledByUser():
-                _log_enqueue_failure_skipped(created.run_id, "cancelled_by_user")
-            case DeadlineExceeded():
-                _log_enqueue_failure_skipped(created.run_id, "deadline_exceeded")
-            case RunAlreadyCompleted():
-                _log_enqueue_failure_skipped(created.run_id, "run_already_completed")
-            case RunAlreadyFailed():
-                _log_enqueue_failure_skipped(created.run_id, "run_already_failed")
-            case RunNotFound():
-                _log_enqueue_failure_skipped(created.run_id, "run_not_found")
+            case CannotContinue():
+                logger.info(
+                    "agent_run_enqueue_failed_mark_failed_skipped",
+                    run_id=str(created.run_id),
+                )
 
     background_tasks.add_task(
         deadline_scheduler.reserve, created.run_id, created.deadline_at
     )
     return ResearchRunStartResponse(thread_id=created.thread_id, run_id=created.run_id)
-
-
-def _log_enqueue_failure_skipped(run_id: UUID, reason: str) -> None:
-    logger.info(
-        "agent_run_enqueue_failed_mark_failed_skipped",
-        run_id=str(run_id),
-        reason=reason,
-    )
 
 
 @router.get(
@@ -342,7 +323,6 @@ async def delete_research_thread(
     status_code=status.HTTP_204_NO_CONTENT,
     responses={
         status.HTTP_404_NOT_FOUND: {"description": _RUN_NOT_FOUND_DETAIL},
-        status.HTTP_409_CONFLICT: {"description": _RUN_ALREADY_COMPLETED_DETAIL},
     },
 )
 async def cancel_research_run(
@@ -355,12 +335,7 @@ async def cancel_research_run(
     match await state_service.cancel_for_user(run_id, user_id=user.id):
         case RunNotFound():
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
-        case RunAlreadyCompleted():
-            raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail=_RUN_ALREADY_COMPLETED_DETAIL,
-            )
-        case CancelledByUser() | DeadlineExceeded() | RunAlreadyFailed():
+        case CancelledByUser() | CannotContinue():
             return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 

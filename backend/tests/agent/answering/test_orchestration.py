@@ -55,13 +55,7 @@ from app.agent.planning.contract import (
     SearchPlan,
     TargetTimeWindow,
 )
-from app.agent.running.state import (
-    AttemptSuperseded,
-    CancelledByUser,
-    CanContinue,
-    DeadlineExceeded,
-    RunNotFound,
-)
+from app.agent.running.state import CanContinue, CannotContinue
 from app.agent.threads.contracts import ThreadMessageSnapshot
 from app.ai_providers.errors import AIProviderResultError, AIProviderResultReason
 from app.analysis.analyzed_article import InScopeAnalyzedArticle
@@ -610,12 +604,7 @@ class _WorkflowHarness:
         ):
             case RunResult(final_output=final_output):
                 return final_output
-            case (
-                CancelledByUser()
-                | DeadlineExceeded()
-                | AttemptSuperseded()
-                | RunNotFound()
-            ) as stopped:
+            case CannotContinue() as stopped:
                 raise AssertionError(f"run must not stop: {stopped}")
 
 
