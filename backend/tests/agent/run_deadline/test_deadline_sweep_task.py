@@ -17,7 +17,6 @@ import app.agent.running.deadline.recovery as deadline_recovery
 import app.queue.tasks.agent_run as agent_run_tasks
 from app.agent.live_updates.stream import AgentRunLiveStreamTerminalEvent
 from app.agent.run_enqueuer import AgentRunTrigger
-from app.agent.running.daily_quota import observability as daily_quota_observability
 from app.agent.running.types import RunAttempt
 from app.models.agent_run import AgentRun
 from app.models.agent_user_daily_quota import AgentUserDailyQuota
@@ -74,11 +73,12 @@ def _ctx(session_factory: async_sessionmaker[AsyncSession]) -> SimpleNamespace:
 
 @pytest.mark.integration
 @pytest.mark.asyncio
-async def test_sweep_task_observes_queued_release_and_running_reservation_after_commit(
+async def test_sweep_task_ends_expired_runs_and_notifies_only_running_attempt(
     read_logs,
     session_factory: async_sessionmaker[AsyncSession],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """待機中2件と実行中1件が期限切れになると、3件とも時間切れにし、利用枠の日付を持つ待機中の1件分だけ返却し、実行中だった試行にだけ終了を通知する。"""
     deadline_at = datetime.now(UTC) - timedelta(seconds=1)
     usage_date = date(2026, 7, 20)
     async with session_factory() as session:
@@ -112,18 +112,7 @@ async def test_sweep_task_observes_queued_release_and_running_reservation_after_
             deadline_at=deadline_at,
         )
 
-    reservations: list[dict[str, int]] = []
-
-    def observe_stale_reservations(*, queued_count: int, running_count: int) -> None:
-        reservations.append(
-            {"queued_count": queued_count, "running_count": running_count}
-        )
-
-    monkeypatch.setattr(
-        daily_quota_observability,
-        "observe_stale_reservations",
-        observe_stale_reservations,
-    )
+    FakeLiveStreamPublisher.instances = []
     monkeypatch.setattr(
         deadline_recovery,
         "AgentRunLiveStreamPublisher",
@@ -133,23 +122,11 @@ async def test_sweep_task_observes_queued_release_and_running_reservation_after_
     await agent_run_tasks.sweep_deadline_exceeded_agent_runs(ctx=_ctx(session_factory))
     logs = read_logs()
 
-    assert [
-        entry
-        for entry in logs
-        if entry.get("event") == "agent_runs_queued_deadline_swept"
-    ] == [
-        {
-            "event": "agent_runs_queued_deadline_swept",
-            "level": "info",
-            "log_policy": "research",
-            "run_count": 2,
-            "quota_released_count": 1,
-            "quota_not_eligible_count": 1,
-            "quota_inconsistent_count": 0,
-        }
-    ]
-    assert reservations == [{"queued_count": 0, "running_count": 1}]
     assert "sensitive" not in str(logs)
+    assert [
+        (publisher.run_id, publisher.attempt_epoch)
+        for publisher in FakeLiveStreamPublisher.instances
+    ] == [(old_running.id, 2)]
 
     async with session_factory() as session:
         counter = await session.scalar(
@@ -170,106 +147,38 @@ async def test_sweep_task_observes_queued_release_and_running_reservation_after_
     ]
 
 
+@pytest.mark.integration
 @pytest.mark.asyncio
-async def test_sweep_task_legacy_deadline_batch_emits_no_quota_alert(
-    read_logs,
-    session_factory: async_sessionmaker[AsyncSession],
-) -> None:
-    deadline_at = datetime.now(UTC) - timedelta(seconds=1)
-    async with session_factory() as session:
-        _thread, _message, legacy = await _create_thread_message_run(
-            session,
-            question="sensitive legacy-only question",
-            created_at=deadline_at - timedelta(seconds=60),
-            deadline_at=deadline_at,
-        )
-
-    await agent_run_tasks.sweep_deadline_exceeded_agent_runs(ctx=_ctx(session_factory))
-    logs = read_logs()
-
-    assert [
-        entry for entry in logs if entry.get("event") == "agent_runs_deadline_swept"
-    ] == [
-        {
-            "count": 1,
-            "event": "agent_runs_deadline_swept",
-            "level": "info",
-            "log_policy": "research",
-        }
-    ]
-    assert not [
-        entry
-        for entry in logs
-        if entry.get("event") == "agent_user_daily_quota_stale_reservations_retained"
-    ]
-
-    async with session_factory() as session:
-        swept = await session.get(AgentRun, legacy.id)
-    assert swept is not None and swept.status == "deadline_exceeded"
-
-
-@pytest.mark.asyncio
-async def test_empty_sweep_emits_total_only_without_quota_alert(
-    read_logs,
-    session_factory: async_sessionmaker[AsyncSession],
-) -> None:
-    await agent_run_tasks.sweep_deadline_exceeded_agent_runs(ctx=_ctx(session_factory))
-    logs = read_logs()
-
-    assert [
-        entry for entry in logs if entry.get("event") == "agent_runs_deadline_swept"
-    ] == [
-        {
-            "count": 0,
-            "event": "agent_runs_deadline_swept",
-            "level": "info",
-            "log_policy": "research",
-        }
-    ]
-    assert not [
-        entry
-        for entry in logs
-        if entry.get("event") == "agent_user_daily_quota_stale_reservations_retained"
-    ]
-
-
-@pytest.mark.asyncio
-async def test_sweep_task_does_not_observe_quota_results_when_transaction_rolls_back(
+async def test_sweep_task_emits_no_log_or_notice_when_commit_fails(
     read_logs,
     session_factory: async_sessionmaker[AsyncSession],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """回収のcommitが秘匿値つきのDB例外で落ちると、taskは例外を出さずログに秘匿値を残さず、利用枠の観測も回収のログも出さない。"""
+    """回収のcommitが秘匿値つきのDB例外で落ちると、taskは例外を出さずログに秘匿値を残さず、回収のログも終了の通知も出さず、Runは元の状態のまま残る。"""
     deadline_at = datetime.now(UTC) - timedelta(seconds=1)
     async with session_factory() as setup_session:
-        _thread, _message, expired_run = await _create_thread_message_run(
+        _queued_thread, _queued_message, queued = await _create_thread_message_run(
             setup_session,
+            question="sensitive rollback queued",
             created_at=deadline_at - timedelta(seconds=60),
             deadline_at=deadline_at,
-            quota_usage_date=date(2026, 7, 20),
+        )
+        _running_thread, _running_message, running = await _create_thread_message_run(
+            setup_session,
+            question="sensitive rollback running",
+            status="running",
+            created_at=deadline_at - timedelta(seconds=60),
+            deadline_at=deadline_at,
+            attempt_epoch=2,
         )
 
-    calls: list[dict[str, int]] = []
     commit_attempted = False
-
-    def observe_stale_reservations(*, queued_count: int, running_count: int) -> None:
-        calls.append(
-            {
-                "queued_count": queued_count,
-                "running_count": running_count,
-            }
-        )
 
     def fail_commit(_session: object) -> None:
         nonlocal commit_attempted
         commit_attempted = True
         raise SensitivePersistenceFailure
 
-    monkeypatch.setattr(
-        daily_quota_observability,
-        "observe_stale_reservations",
-        observe_stale_reservations,
-    )
     failing_session = session_factory()
     sa_event.listen(
         failing_session.sync_session,
@@ -281,40 +190,50 @@ async def test_sweep_task_does_not_observe_quota_results_when_transaction_rolls_
     def failing_session_factory() -> AsyncSession:
         return failing_session
 
-    await agent_run_tasks.sweep_deadline_exceeded_agent_runs(
-        ctx=_ctx(
-            cast(
-                async_sessionmaker[AsyncSession],
-                failing_session_factory,
+    FakeLiveStreamPublisher.instances = []
+    monkeypatch.setattr(
+        deadline_recovery,
+        "AgentRunLiveStreamPublisher",
+        FakeLiveStreamPublisher,
+    )
+
+    try:
+        await agent_run_tasks.sweep_deadline_exceeded_agent_runs(
+            ctx=_ctx(
+                cast(
+                    async_sessionmaker[AsyncSession],
+                    failing_session_factory,
+                )
             )
         )
-    )
+    finally:
+        await failing_session.close()
     logs = read_logs()
 
     assert_no_sensitive_marker(logs)
     assert commit_attempted is True
-    assert calls == []
     assert not [
         entry
         for entry in logs
-        if entry.get("event")
-        in {
-            "agent_runs_deadline_swept",
-            "agent_user_daily_quota_stale_reservations_retained",
-        }
+        if entry.get("event") == "running_deadline_exceeded_swept"
     ]
-
+    assert FakeLiveStreamPublisher.instances == []
     async with session_factory() as verification:
-        persisted = await verification.get(AgentRun, expired_run.id)
-    assert persisted is not None
-    assert persisted.status == "queued"
-    assert persisted.error_code is None
+        persisted = [
+            await verification.get(AgentRun, run_id)
+            for run_id in (queued.id, running.id)
+        ]
+    assert [run.status if run is not None else None for run in persisted] == [
+        "queued",
+        "running",
+    ]
 
 
 @pytest.mark.asyncio
 async def test_sweep_task_log_output_failure_keeps_committed_sweep(
     request: pytest.FixtureRequest,
     session_factory: async_sessionmaker[AsyncSession],
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """ログの出力が失敗しても、確定した回収は変わらない。"""
     deadline_at = datetime.now(UTC) - timedelta(seconds=1)
@@ -333,8 +252,14 @@ async def test_sweep_task_log_output_failure_keeps_committed_sweep(
             status="running",
             created_at=deadline_at - timedelta(seconds=60),
             deadline_at=deadline_at,
+            attempt_epoch=1,
             quota_usage_date=usage_date,
         )
+    monkeypatch.setattr(
+        deadline_recovery,
+        "AgentRunLiveStreamPublisher",
+        FakeLiveStreamPublisher,
+    )
     request.getfixturevalue("broken_output")
 
     await agent_run_tasks.sweep_deadline_exceeded_agent_runs(ctx=_ctx(session_factory))
@@ -348,104 +273,6 @@ async def test_sweep_task_log_output_failure_keeps_committed_sweep(
         "deadline_exceeded",
         "deadline_exceeded",
     ]
-
-
-@pytest.mark.integration
-@pytest.mark.asyncio
-async def test_sweep_task_reports_queued_quota_counts_in_one_log_after_commit(
-    read_logs,
-    session_factory: async_sessionmaker[AsyncSession],
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    usage_date = date(2026, 7, 22)
-    missing_counter_date = date(2026, 7, 21)
-    deadline_at = datetime.now(UTC) - timedelta(seconds=1)
-    async with session_factory() as session:
-        session.add(
-            AgentUserDailyQuota(
-                user_id=UUID(TEST_USER_ID),
-                usage_date=usage_date,
-                used_count=2,
-            )
-        )
-        released_runs = [
-            (
-                await _create_thread_message_run(
-                    session,
-                    question=f"sensitive released queued {index}",
-                    created_at=deadline_at - timedelta(seconds=60),
-                    deadline_at=deadline_at,
-                    quota_usage_date=usage_date,
-                )
-            )[2]
-            for index in range(2)
-        ]
-        legacy = (
-            await _create_thread_message_run(
-                session,
-                question="sensitive legacy queued",
-                created_at=deadline_at - timedelta(seconds=60),
-                deadline_at=deadline_at,
-            )
-        )[2]
-        inconsistent = (
-            await _create_thread_message_run(
-                session,
-                question="sensitive inconsistent queued",
-                created_at=deadline_at - timedelta(seconds=60),
-                deadline_at=deadline_at,
-                quota_usage_date=missing_counter_date,
-            )
-        )[2]
-
-    FakeLiveStreamPublisher.instances = []
-    monkeypatch.setattr(
-        deadline_recovery,
-        "AgentRunLiveStreamPublisher",
-        FakeLiveStreamPublisher,
-    )
-
-    await agent_run_tasks.sweep_deadline_exceeded_agent_runs(ctx=_ctx(session_factory))
-    logs = read_logs()
-
-    batch_logs = [
-        entry
-        for entry in logs
-        if entry.get("event") == "agent_runs_queued_deadline_swept"
-    ]
-    assert batch_logs == [
-        {
-            "event": "agent_runs_queued_deadline_swept",
-            "level": "info",
-            "log_policy": "research",
-            "run_count": 4,
-            "quota_released_count": 2,
-            "quota_not_eligible_count": 1,
-            "quota_inconsistent_count": 1,
-        }
-    ]
-    assert FakeLiveStreamPublisher.instances == []
-    assert "sensitive" not in str(logs)
-    async with session_factory() as session:
-        counter = await session.scalar(
-            select(AgentUserDailyQuota.used_count).where(
-                AgentUserDailyQuota.user_id == UUID(TEST_USER_ID),
-                AgentUserDailyQuota.usage_date == usage_date,
-            )
-        )
-        statuses = [
-            await session.get(AgentRun, run_id)
-            for run_id in (
-                *(run.id for run in released_runs),
-                legacy.id,
-                inconsistent.id,
-            )
-        ]
-    assert counter == 0
-    for persisted in statuses:
-        assert persisted is not None
-        assert persisted.status == "deadline_exceeded"
-        assert persisted.error_code is None
 
 
 @pytest.mark.integration
@@ -565,75 +392,6 @@ async def _persisted_run_for_sweep_test(
         run = await session.get(AgentRun, run_id)
     assert run is not None
     return run
-
-
-@pytest.mark.integration
-@pytest.mark.asyncio
-async def test_sweep_task_emits_no_queued_result_or_event_when_commit_rolls_back(
-    read_logs,
-    session_factory: async_sessionmaker[AsyncSession],
-) -> None:
-    """回収のcommitが秘匿値つきのDB例外で落ちると、taskは例外を出さずログに秘匿値を残さず、待機中のRunの回収結果のログも出さない。"""
-    deadline_at = datetime.now(UTC) - timedelta(seconds=1)
-    usage_date = date(2026, 7, 22)
-    async with session_factory() as setup_session:
-        _thread, _message, run = await _create_thread_message_run(
-            setup_session,
-            question="sensitive rollback queued",
-            created_at=deadline_at - timedelta(seconds=60),
-            deadline_at=deadline_at,
-            quota_usage_date=usage_date,
-        )
-        setup_session.add(
-            AgentUserDailyQuota(
-                user_id=UUID(TEST_USER_ID),
-                usage_date=usage_date,
-                used_count=1,
-            )
-        )
-        await setup_session.commit()
-
-    failing_session = session_factory()
-
-    def fail_commit(_session: object) -> None:
-        raise SensitivePersistenceFailure
-
-    sa_event.listen(
-        failing_session.sync_session,
-        "before_commit",
-        fail_commit,
-        once=True,
-    )
-
-    def failing_session_factory() -> AsyncSession:
-        return failing_session
-
-    try:
-        await agent_run_tasks.sweep_deadline_exceeded_agent_runs(
-            ctx=_ctx(
-                cast(
-                    async_sessionmaker[AsyncSession],
-                    failing_session_factory,
-                )
-            )
-        )
-    finally:
-        await failing_session.close()
-    logs = read_logs()
-
-    assert_no_sensitive_marker(logs)
-    assert not [
-        entry
-        for entry in logs
-        if entry.get("event")
-        in {
-            "agent_runs_queued_deadline_swept",
-            "running_deadline_exceeded_swept",
-        }
-    ]
-    persisted = await _persisted_run_for_sweep_test(session_factory, run.id)
-    assert persisted.status == "queued"
-    assert persisted.error_code is None
 
 
 @pytest.mark.asyncio

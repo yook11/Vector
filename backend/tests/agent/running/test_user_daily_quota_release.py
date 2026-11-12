@@ -27,12 +27,12 @@ from app.agent.running.state import (
     RunFailed,
     RunNotFound,
 )
+from app.agent.running.state_repository import AgentRunStateRepository
 from app.agent.running.types import AgentRunErrorCode, AgentRunStatus, RunAttempt
 from app.models.agent_message import AgentMessage
 from app.models.agent_run import AgentRun
 from app.models.agent_thread import AgentThread
 from app.models.agent_user_daily_quota import AgentUserDailyQuota
-from tests.agent.run_deadline.clock import sweep_deadline_exceeded_runs_at
 from tests.agent.running._start_run_outcomes import started_attempt_epoch
 from tests.agent.running._state_service import (
     ClosedRunningRun,
@@ -624,7 +624,9 @@ async def test_waiting_deadline_sweep_does_not_overwrite_cancel(
             sweep_pid = await sweep_session.scalar(text("SELECT pg_backend_pid()"))
             assert isinstance(sweep_pid, int)
             sweep_task = asyncio.create_task(
-                sweep_deadline_exceeded_runs_at(sweep_session, at=_NOW)
+                AgentRunStateRepository(
+                    sweep_session, now=_NOW
+                ).end_runs_past_deadline()
             )
             await _wait_until_blocked(observer, sweep_pid)
 
@@ -647,12 +649,7 @@ async def test_waiting_deadline_sweep_does_not_overwrite_cancel(
         CancelledByUser(),
         [],
     )
-    assert sweep_result.queued_terminal_count == 0
-    assert sweep_result.queued_quota_released_count == 0
-    assert sweep_result.queued_quota_not_eligible_count == 0
-    assert sweep_result.queued_quota_inconsistent_count == 0
-    assert sweep_result.running_terminal_runs == ()
-    assert sweep_result.running_quota_reservation_count == 0
+    assert sweep_result == ()
     async with session_factory() as verification:
         run = await verification.get(AgentRun, seeded.run_id)
         assert run is not None

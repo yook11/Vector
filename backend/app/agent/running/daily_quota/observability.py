@@ -33,13 +33,3 @@ def observe_admission_rejected(*, usage_date: date) -> None:
         usage_date=usage_date.isoformat(),
         limit=DAILY_REQUEST_LIMIT,
     )
-
-
-def observe_stale_reservations(*, queued_count: int, running_count: int) -> None:
-    if queued_count + running_count <= 0:
-        return
-    logger.warning(
-        "agent_user_daily_quota_stale_reservations_retained",
-        queued_count=queued_count,
-        running_count=running_count,
-    )

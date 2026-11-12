@@ -4,10 +4,10 @@ import asyncio
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 
-from sqlalchemy import func, literal, select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.agent.running.deadline.deadline_exceeded import _recover_deadline_exceeded_runs
+from app.agent.running.state_repository import AgentRunStateRepository
 from app.agent.running.types import RunAttempt
 from app.db.session import SessionFactory
 from app.models.agent_message import AgentMessage, AgentMessageSource
@@ -204,7 +204,7 @@ async def pending_answer_completion(session_factory, *, run, answer, at):
 def pending_deadline_recovery(session_factory, *, run_id, at):
     return _pending_transaction(
         session_factory,
-        lambda session: _recover_deadline_exceeded_runs(
-            session, thread_id=None, run_id=run_id, clock=literal(at)
+        lambda session: AgentRunStateRepository(session, now=at).end_runs_past_deadline(
+            run_id=run_id
         ),
     )

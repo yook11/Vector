@@ -8,8 +8,8 @@ import redis.asyncio as aioredis
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.agent.live_updates.stream import AgentRunLiveStreamPublisher
-from app.agent.running.deadline.deadline_exceeded import DeadlineRunSweepResult
 from app.agent.running.state_service import AgentRunStateService
+from app.agent.running.types import RunAttempt
 from app.log_policy.policies.research import RESEARCH_LOG_RULES
 from app.log_policy.runtime import create_policy_json_logger
 
@@ -21,10 +21,10 @@ async def sweep_and_report_deadline_exceeded_runs(
     session_factory: async_sessionmaker[AsyncSession],
     live_redis: aioredis.Redis,
 ) -> None:
-    result = await _state_service(
+    running_attempts = await _state_service(
         session_factory, live_redis
-    ).sweep_deadline_exceeded_runs()
-    _report_deadline_recovery(result)
+    ).end_runs_past_deadline()
+    _report_deadline_recovery(running_attempts)
 
 
 async def check_and_report_run_deadline(
@@ -33,10 +33,10 @@ async def check_and_report_run_deadline(
     session_factory: async_sessionmaker[AsyncSession],
     live_redis: aioredis.Redis,
 ) -> None:
-    result = await _state_service(session_factory, live_redis).check_run_deadline(
-        run_id
-    )
-    _report_deadline_recovery(result)
+    running_attempts = await _state_service(
+        session_factory, live_redis
+    ).end_runs_past_deadline(run_id=run_id)
+    _report_deadline_recovery(running_attempts)
 
 
 def _state_service(
@@ -49,18 +49,6 @@ def _state_service(
     )
 
 
-def _report_deadline_recovery(result: DeadlineRunSweepResult) -> None:
-    logger.info("agent_runs_deadline_swept", count=result.total_count)
-    if result.queued_terminal_count > 0:
-        logger.info(
-            "agent_runs_queued_deadline_swept",
-            run_count=result.queued_terminal_count,
-            quota_released_count=result.queued_quota_released_count,
-            quota_not_eligible_count=result.queued_quota_not_eligible_count,
-            quota_inconsistent_count=result.queued_quota_inconsistent_count,
-        )
-    if result.running_terminal_runs:
-        logger.info(
-            "running_deadline_exceeded_swept",
-            count=len(result.running_terminal_runs),
-        )
+def _report_deadline_recovery(running_attempts: tuple[RunAttempt, ...]) -> None:
+    if running_attempts:
+        logger.info("running_deadline_exceeded_swept", count=len(running_attempts))

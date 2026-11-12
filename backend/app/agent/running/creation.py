@@ -5,11 +5,10 @@ from dataclasses import dataclass
 from datetime import date, datetime
 from uuid import UUID
 
-from sqlalchemy import func, select
+from sqlalchemy import func, literal, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.agent.running.daily_quota.reservation import reserve_daily_quota
-from app.agent.running.deadline.deadline_exceeded import database_now
 from app.agent.running.deadline.policy import deadline_for_run
 from app.agent.running.state import ACTIVE_STATUSES
 from app.agent.running.types import AgentRunStatus
@@ -76,7 +75,7 @@ class AgentRunCreationRepository:
             self._session,
             user_id=user_id,
         )
-        created_at = await database_now(self._session, now)
+        created_at = await _database_now(self._session, now)
         deadline_at = deadline_for_run(created_at)
         thread.updated_at = created_at
 
@@ -129,3 +128,11 @@ class AgentRunCreationRepository:
             )
         ).scalar_one()
         return int(value)
+
+
+async def _database_now(session: AsyncSession, injected: datetime | None) -> datetime:
+    expression = literal(injected) if injected is not None else func.clock_timestamp()
+    value = await session.scalar(select(expression))
+    if not isinstance(value, datetime):
+        raise RuntimeError("database clock did not return a datetime")
+    return value

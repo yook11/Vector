@@ -18,13 +18,6 @@ from app.agent.live_updates.stream import (
     AgentRunLiveStreamPublisher,
     AgentRunLiveStreamTerminalEvent,
 )
-from app.agent.running.daily_quota import observability as daily_quota_observability
-from app.agent.running.deadline.deadline_exceeded import (
-    DeadlineRunSweepResult,
-    check_agent_run_deadline,
-    sweep_deadline_exceeded_runs,
-    sweep_deadline_exceeded_runs_for_thread,
-)
 from app.agent.running.state import (
     AnswerGenerationStarted,
     AttemptStarted,
@@ -177,29 +170,22 @@ class AgentRunStateService:
         return RunFailed()
 
     @_retry_transient_database_failure
-    async def sweep_deadline_exceeded_runs(self) -> DeadlineRunSweepResult:
+    async def end_runs_past_deadline(
+        self,
+        *,
+        run_id: UUID | None = None,
+        thread_id: UUID | None = None,
+        user_id: UUID | None = None,
+    ) -> tuple[RunAttempt, ...]:
         async with self._transaction() as session:
-            result = await sweep_deadline_exceeded_runs(session)
-        await self._notify_swept(result)
-        return result
-
-    @_retry_transient_database_failure
-    async def sweep_deadline_exceeded_runs_for_thread(
-        self, *, thread_id: UUID, user_id: UUID
-    ) -> DeadlineRunSweepResult:
-        async with self._transaction() as session:
-            result = await sweep_deadline_exceeded_runs_for_thread(
-                session, thread_id=thread_id, user_id=user_id
+            running_attempts = await self._repository(session).end_runs_past_deadline(
+                run_id=run_id, thread_id=thread_id, owner_id=user_id
             )
-        await self._notify_swept(result)
-        return result
-
-    @_retry_transient_database_failure
-    async def check_run_deadline(self, run_id: UUID) -> DeadlineRunSweepResult:
-        async with self._transaction() as session:
-            result = await check_agent_run_deadline(session, run_id=run_id)
-        await self._notify_swept(result)
-        return result
+        for attempt in running_attempts:
+            await self._notify_run_ended(
+                attempt, status=AgentRunStatus.DEADLINE_EXCEEDED
+            )
+        return running_attempts
 
     def _repository(self, session: AsyncSession) -> AgentRunStateRepository:
         return AgentRunStateRepository(session, now=self._now)
@@ -214,16 +200,6 @@ class AgentRunStateService:
             except SQLAlchemyError as exc:
                 # commit中の失敗は書けたか分からないので、やり直さない。
                 raise translate_database_error(exc) from exc
-
-    async def _notify_swept(self, result: DeadlineRunSweepResult) -> None:
-        daily_quota_observability.observe_stale_reservations(
-            queued_count=result.queued_quota_inconsistent_count,
-            running_count=result.running_quota_reservation_count,
-        )
-        for attempt in result.running_terminal_runs:
-            await self._notify_run_ended(
-                attempt, status=AgentRunStatus.DEADLINE_EXCEEDED
-            )
 
     async def _notify_run_ended(
         self,

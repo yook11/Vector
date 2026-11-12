@@ -24,6 +24,7 @@ from app.agent.running.state import (
     CanContinue,
     CannotContinue,
 )
+from app.agent.running.state_repository import AgentRunStateRepository
 from app.agent.running.state_service import AgentRunStateService
 from app.agent.running.types import RunAttempt
 from app.models.agent_run import AgentRun
@@ -582,7 +583,6 @@ async def test_gate_start_reservation_recovers_after_original_deadline(
 ) -> None:
     """受理期限の直前に回答を始めたRunは、口が予約した時刻まで回収されず、その時刻に回収される。"""
     from app.agent.running.deadline.scheduling import AgentDeadlineScheduler
-    from tests.agent.run_deadline.clock import sweep_deadline_exceeded_runs_at
     from tests.agent.run_deadline.test_scheduling import RecordingSource
 
     deadline_at = await _database_time(session_factory) + timedelta(seconds=5)
@@ -608,10 +608,13 @@ async def test_gate_start_reservation_recovers_after_original_deadline(
 
     [schedule] = source.schedules
     assert schedule.args == [{"run_id": str(run_id)}]
-    recovered_counts = []
+    recovered = []
     for at in (deadline_at, schedule.time):
         async with session_factory() as session:
             async with session.begin():
-                recovered = await sweep_deadline_exceeded_runs_at(session, at=at)
-        recovered_counts.append(recovered.total_count)
-    assert recovered_counts == [0, 1]
+                recovered.append(
+                    await AgentRunStateRepository(
+                        session, now=at
+                    ).end_runs_past_deadline()
+                )
+    assert recovered == [(), (attempt,)]

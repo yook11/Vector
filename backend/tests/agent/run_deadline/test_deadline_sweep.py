@@ -9,23 +9,19 @@ import asyncio
 from collections.abc import Coroutine
 from datetime import UTC, date, datetime, timedelta
 from typing import Any
-from uuid import UUID
+from uuid import UUID, uuid4
 
 import pytest
-from sqlalchemy import literal, select, text
+from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from app.agent.running.deadline.deadline_exceeded import _recover_deadline_exceeded_runs
 from app.agent.running.state import CancelledByUser, RunFailed
+from app.agent.running.state_repository import AgentRunStateRepository
 from app.agent.running.types import AgentRunErrorCode, AgentRunStatus, RunAttempt
 from app.models.agent_message import AgentMessage
 from app.models.agent_run import AgentRun
 from app.models.agent_thread import AgentThread
 from app.models.agent_user_daily_quota import AgentUserDailyQuota
-from tests.agent.run_deadline.clock import (
-    sweep_deadline_exceeded_runs_at,
-    sweep_deadline_exceeded_runs_for_thread_at,
-)
 from tests.agent.running._state_service import (
     ClosedRunningRun,
     ClosedRunNotices,
@@ -125,7 +121,7 @@ async def test_sweep_leaves_run_unchanged_before_deadline(
         )
         await session.commit()
 
-        await sweep_deadline_exceeded_runs_at(session, at=now)
+        await AgentRunStateRepository(session, now=now).end_runs_past_deadline()
         await session.commit()
 
     async with session_factory() as observer:
@@ -165,7 +161,7 @@ async def test_sweep_marks_run_deadline_exceeded_at_or_after_deadline(
         )
         await session.commit()
 
-        await sweep_deadline_exceeded_runs_at(session, at=now)
+        await AgentRunStateRepository(session, now=now).end_runs_past_deadline()
         await session.commit()
 
     async with session_factory() as observer:
@@ -216,13 +212,17 @@ async def test_started_running_uses_answer_recovery_deadline(
         )
         await session.commit()
 
-        result = await sweep_deadline_exceeded_runs_at(
-            session, at=answer_started_at + elapsed
-        )
+        result = await AgentRunStateRepository(
+            session, now=answer_started_at + elapsed
+        ).end_runs_past_deadline()
         await session.commit()
 
     persisted = await _persisted_run(session_factory, run.id)
-    assert result.total_count == (1 if expected_status == "deadline_exceeded" else 0)
+    assert result == (
+        (RunAttempt(run_id=run.id, epoch=attempt_epoch),)
+        if expected_status == "deadline_exceeded"
+        else ()
+    )
     assert persisted.status == expected_status
     assert persisted.answer_started_at == answer_started_at
     assert persisted.deadline_at == deadline_at
@@ -255,9 +255,9 @@ async def test_started_running_recovery_does_not_refund_quota(
         await session.commit()
 
         async with session.begin():
-            result = await sweep_deadline_exceeded_runs_at(
-                session, at=answer_started_at + timedelta(seconds=45)
-            )
+            await AgentRunStateRepository(
+                session, now=answer_started_at + timedelta(seconds=45)
+            ).end_runs_past_deadline()
 
     async with session_factory() as session:
         persisted = await session.get(AgentRun, run.id)
@@ -267,7 +267,6 @@ async def test_started_running_recovery_does_not_refund_quota(
                 AgentUserDailyQuota.usage_date == usage_date,
             )
         )
-    assert result.running_quota_reservation_count == 1
     assert persisted is not None
     assert persisted.status == "deadline_exceeded"
     assert used_count == 1
@@ -330,12 +329,9 @@ async def test_sweep_rechecks_recovery_deadline_after_answer_start_wins_lock(
             sweep_pid = await sweep_session.scalar(text("SELECT pg_backend_pid()"))
             assert isinstance(sweep_pid, int)
             sweep_task = asyncio.create_task(
-                _recover_deadline_exceeded_runs(
-                    sweep_session,
-                    thread_id=None,
-                    run_id=run.id if single_run else None,
-                    clock=literal(sweep_time),
-                )
+                AgentRunStateRepository(
+                    sweep_session, now=sweep_time
+                ).end_runs_past_deadline(run_id=run.id if single_run else None)
             )
             await _wait_until_blocked(observer, sweep_pid)
 
@@ -352,7 +348,7 @@ async def test_sweep_rechecks_recovery_deadline_after_answer_start_wins_lock(
                     await session.rollback()
 
     persisted = await _persisted_run(session_factory, run.id)
-    assert result.total_count == 0
+    assert result == ()
     assert persisted.status == "running"
     assert persisted.answer_started_at == answer_started_at
 
@@ -437,12 +433,9 @@ async def test_sweep_preserves_failure_or_cancellation_that_wins_run_lock(
             sweep_pid = await sweep_session.scalar(text("SELECT pg_backend_pid()"))
             assert isinstance(sweep_pid, int)
             sweep_task = asyncio.create_task(
-                _recover_deadline_exceeded_runs(
-                    sweep_session,
-                    thread_id=None,
-                    run_id=run.id if single_run else None,
-                    clock=literal(sweep_time),
-                )
+                AgentRunStateRepository(
+                    sweep_session, now=sweep_time
+                ).end_runs_past_deadline(run_id=run.id if single_run else None)
             )
             await _wait_until_blocked(observer, sweep_pid)
 
@@ -463,7 +456,7 @@ async def test_sweep_preserves_failure_or_cancellation_that_wins_run_lock(
     assert (terminal_result, notices.closed_runs) == expected_terminal
 
     persisted = await _persisted_run(session_factory, run.id)
-    assert sweep_result.total_count == 0
+    assert sweep_result == ()
     assert persisted.status == expected_status
     assert persisted.answer_started_at == answer_started_at
 
@@ -506,10 +499,11 @@ async def test_sweep_releases_queued_quota_once_without_running_refund(
 
     async with session_factory() as session:
         async with session.begin():
-            result = await sweep_deadline_exceeded_runs_at(session, at=now)
+            result = await AgentRunStateRepository(
+                session, now=now
+            ).end_runs_past_deadline()
 
-    assert result.queued_quota_released_count == len(queued_runs)
-    assert result.running_quota_reservation_count == 1
+    assert result == (RunAttempt(run_id=running.id, epoch=4),)
     for original in (*queued_runs, running):
         persisted = await _persisted_run(session_factory, original.id)
         assert persisted.status == "deadline_exceeded"
@@ -519,11 +513,11 @@ async def test_sweep_releases_queued_quota_once_without_running_refund(
 
     async with session_factory() as session:
         async with session.begin():
-            repeated = await sweep_deadline_exceeded_runs_at(
-                session, at=now + timedelta(seconds=1)
-            )
+            repeated = await AgentRunStateRepository(
+                session, now=now + timedelta(seconds=1)
+            ).end_runs_past_deadline()
 
-    assert repeated.total_count == 0
+    assert repeated == ()
     async with session_factory() as session:
         counter = await session.scalar(
             select(AgentUserDailyQuota.used_count).where(
@@ -542,7 +536,7 @@ async def test_sweep_releases_queued_quota_once_without_running_refund(
 async def test_sweep_terminalizes_when_queued_quota_is_ineligible_or_inconsistent(
     session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
-    """予約情報やカウンターが不整合でも時間切れを確定し、quotaを過剰に減算しない。"""
+    """利用枠の日付や利用回数が合わない待機中のRunも時間切れにし、利用回数を0未満にしない。"""
     now = datetime(2026, 7, 22, 12, 0, tzinfo=UTC)
     deadline_at = now - timedelta(microseconds=1)
     underflow_date = date(2026, 7, 21)
@@ -579,12 +573,12 @@ async def test_sweep_terminalizes_when_queued_quota_is_ineligible_or_inconsisten
             deadline_at=deadline_at,
         )
 
-        result = await sweep_deadline_exceeded_runs_at(session, at=now)
+        result = await AgentRunStateRepository(
+            session, now=now
+        ).end_runs_past_deadline()
         await session.commit()
 
-    assert result.queued_quota_released_count == 0
-    assert result.queued_quota_not_eligible_count == 1
-    assert result.queued_quota_inconsistent_count == 3
+    assert result == ()
     async with session_factory() as session:
         counter = await session.scalar(
             select(AgentUserDailyQuota.used_count).where(
@@ -592,7 +586,8 @@ async def test_sweep_terminalizes_when_queued_quota_is_ineligible_or_inconsisten
                 AgentUserDailyQuota.usage_date == underflow_date,
             )
         )
-    assert counter == 1
+    # 利用回数1に対して2件が期限切れになるので、1件分だけ返り、0未満にはならない。
+    assert counter == 0
     for original in (*underflow_runs, missing_counter, legacy):
         persisted = await _persisted_run(session_factory, original.id)
         assert persisted.status == "deadline_exceeded"
@@ -622,18 +617,41 @@ async def test_sweep_for_thread_leaves_other_thread_unchanged(
         )
         await session.commit()
 
-        result = await sweep_deadline_exceeded_runs_for_thread_at(
-            session,
-            thread_id=target.thread_id,
-            at=now,
+        result = await AgentRunStateRepository(session, now=now).end_runs_past_deadline(
+            thread_id=target.thread_id, owner_id=_USER_ID
         )
         await session.commit()
 
-    assert result.total_count == 1
+    assert result == ()
     persisted_target = await _persisted_run(session_factory, target.id)
     persisted_other = await _persisted_run(session_factory, other.id)
     assert persisted_target.status == "deadline_exceeded"
     assert persisted_other.status == "queued"
+
+
+@pytest.mark.asyncio
+async def test_sweep_for_thread_leaves_run_unchanged_for_other_owner(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    """threadの持ち主でないユーザーを添えると、期限を過ぎたRunでも終了させない。"""
+    now = datetime(2026, 7, 22, 12, 0, tzinfo=UTC)
+    deadline_at = now - timedelta(microseconds=1)
+    async with session_factory() as session:
+        run = await _seed_run(
+            session,
+            status="queued",
+            created_at=deadline_at - timedelta(seconds=60),
+            deadline_at=deadline_at,
+        )
+        await session.commit()
+
+        result = await AgentRunStateRepository(session, now=now).end_runs_past_deadline(
+            thread_id=run.thread_id, owner_id=uuid4()
+        )
+        await session.commit()
+
+    persisted = await _persisted_run(session_factory, run.id)
+    assert (result, persisted.status) == ((), "queued")
 
 
 @pytest.mark.asyncio
@@ -659,11 +677,13 @@ async def test_sweep_preserves_existing_terminal_runs(
         assistant_message_id = original.assistant_message_id
         await session.commit()
 
-        result = await sweep_deadline_exceeded_runs_at(session, at=now)
+        result = await AgentRunStateRepository(
+            session, now=now
+        ).end_runs_past_deadline()
         await session.commit()
 
     persisted = await _persisted_run(session_factory, original.id)
-    assert result.total_count == 0
+    assert result == ()
     assert persisted.status == status
     assert persisted.assistant_message_id == assistant_message_id
     assert persisted.error_code == ("internal_error" if status == "failed" else None)
@@ -679,12 +699,6 @@ async def test_single_run_recovery_uses_shared_deadline_and_does_not_touch_neigh
     session_factory, generation_age, expected
 ):
     """単発確認は最新の生成開始時刻で判定し、別runを回収しない。"""
-    from sqlalchemy import literal
-
-    from app.agent.running.deadline.deadline_exceeded import (
-        _recover_deadline_exceeded_runs,
-    )
-
     at = datetime(2026, 9, 7, 12, tzinfo=UTC)
     async with session_factory() as session:
         async with session.begin():
@@ -702,8 +716,8 @@ async def test_single_run_recovery_uses_shared_deadline_and_does_not_touch_neigh
             )
         for _ in range(2):
             async with session.begin():
-                await _recover_deadline_exceeded_runs(
-                    session, thread_id=None, run_id=target.id, clock=literal(at)
+                await AgentRunStateRepository(session, now=at).end_runs_past_deadline(
+                    run_id=target.id
                 )
     assert (await _persisted_run(session_factory, target.id)).status == expected
     assert (await _persisted_run(session_factory, neighbor.id)).status == "queued"

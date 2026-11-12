@@ -19,9 +19,7 @@ async def read_owned_thread_detail(
     state_service: AgentRunStateService,
 ) -> ResearchThreadDetail | None:
     # 期限を過ぎたRunを先に閉じ、閉じた後の状態を詳細として返す。
-    await state_service.sweep_deadline_exceeded_runs_for_thread(
-        thread_id=thread_id, user_id=user_id
-    )
+    await state_service.end_runs_past_deadline(thread_id=thread_id, user_id=user_id)
     return await AgentThreadRepository(session).read_thread_detail_for_user(
         thread_id=thread_id,
         user_id=user_id,

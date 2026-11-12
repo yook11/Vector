@@ -6,7 +6,6 @@ from dataclasses import dataclass
 from datetime import datetime
 from uuid import UUID
 
-from app.agent.answering import timing as answer_timing
 from app.agent.running.types import AgentRunStatus, RunAttempt
 
 __all__ = [
@@ -19,7 +18,6 @@ __all__ = [
     "RunFailed",
     "RunCompleted",
     "RunNotFound",
-    "RunState",
     "has_attempt_started",
     "is_finished",
 ]
@@ -75,27 +73,3 @@ class RunCompleted:
 @dataclass(frozen=True, slots=True)
 class RunFailed:
     """Runを失敗で終了させた。"""
-
-
-@dataclass(frozen=True, slots=True)
-class RunState:
-    """期限の回収がロックして読んだ、動いているRun(待機中・実行中)の状態。"""
-
-    status: AgentRunStatus
-    attempt_epoch: int
-    deadline_at: datetime
-    answer_started_at: datetime | None
-
-    def __post_init__(self) -> None:
-        if is_finished(self.status):
-            raise ValueError("run state requires an active run")
-
-    def is_due_for_deadline_recovery(self, *, now: datetime) -> bool:
-        return now >= self._recovery_deadline()
-
-    def _recovery_deadline(self) -> datetime:
-        if self.answer_started_at is None:
-            return self.deadline_at
-        return (
-            self.answer_started_at + answer_timing.answer_generation_recovery_window()
-        )
