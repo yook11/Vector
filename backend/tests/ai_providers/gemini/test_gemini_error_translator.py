@@ -325,6 +325,19 @@ def test_legacy_api_error_unauthenticated_is_classified() -> None:
     assert translated.reason is AIProviderResponseReason.AUTH
 
 
+# HTTP 402 → 残高不足
+
+
+def test_http_402_is_insufficient_balance() -> None:
+    """HTTP 402 は残高不足に分類する。"""
+    exc = _client_error(code=402, status="RESOURCE_EXHAUSTED")
+
+    translated = translate_gemini_error(exc)
+
+    assert isinstance(translated, AIProviderResponseError)
+    assert translated.reason is AIProviderResponseReason.INSUFFICIENT_BALANCE
+
+
 # RESOURCE_EXHAUSTED / code=429 → 流量制限か利用枠の枯渇か
 #
 # Gemini の 429 は per-minute バーストでも per-day 枯渇でも message が同一文言

@@ -122,8 +122,7 @@ resource "aws_iam_role_policy" "chatbot" {
 # 残高チャージ式運用のため、枯渇 (残高切れ・per-day quota 切れ) は運用者対応が
 # 必須の事象。退避機構 (stage hold 6h) は対応時間を稼ぐだけで回復させない。
 # kind の全系列を FILL で 0 埋めして合算する (平常時は全系列が存在しないのが
-# 正常。provider は gemini だけで、残高切れを生成する翻訳層は今は無いが、
-# 将来の組を黙って見逃さないよう両方の kind を監視する)。
+# 正常。provider は gemini だけ)。
 #
 # ok_actions を意図的に付けない: metric は枯渇発生時にしか存在せず、退避機構が
 # 再試行自体を止めるため、チャージしなくても alarm は OK へ戻る = OK 復帰は

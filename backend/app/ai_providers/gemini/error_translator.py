@@ -195,6 +195,14 @@ def translate_gemini_error(exc: Exception) -> Exception:
             http_error=http_error,
         )
 
+    # 前払いの残高が尽きると、HTTP 402 と RESOURCE_EXHAUSTED が枠の詳細なしで返る。
+    if status_code == 402:
+        return AIProviderResponseError(
+            "AIプロバイダーの残高が不足しています",
+            reason=AIProviderResponseReason.INSUFFICIENT_BALANCE,
+            http_error=http_error,
+        )
+
     # 日あたりの枯渇を確認できたときだけ枯渇とし、枯渇アラームの誤発火を避ける。
     if status_code == 429 or status == "RESOURCE_EXHAUSTED":
         response_details = read_response_error_details(exc)
