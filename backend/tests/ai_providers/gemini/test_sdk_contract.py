@@ -326,6 +326,30 @@ async def test_http_429_daily_quota_details_reach_classifier(exchange):
 
 
 @pytest.mark.asyncio
+async def test_http_402_reaches_classifier_as_insufficient_balance(exchange):
+    """実SDKを通しても、Geminiの残高不足の応答(HTTP 402)は残高不足に変換される。"""
+    exchange.status = 402
+    exchange.respond_json(
+        {
+            "error": {
+                # 本文のcodeがHTTPの数字と食い違っても、HTTPの数字で判定される。
+                "code": 429,
+                "status": "RESOURCE_EXHAUSTED",
+                "message": "synthetic depleted credits",
+            }
+        }
+    )
+    async with _open_client() as client:
+        with pytest.raises(errors.ClientError) as caught:
+            await _generate(client)
+    error = caught.value
+    assert error.response.status_code == error.code == 402
+    translated = translate_gemini_error(error)
+    assert isinstance(translated, AIProviderResponseError)
+    assert translated.reason == AIProviderResponseReason.INSUFFICIENT_BALANCE
+
+
+@pytest.mark.asyncio
 async def test_non_json_503_remains_server_failure_without_retry(exchange):
     """JSON以外の503応答も実SDKのServerErrorとして分類できる。"""
     exchange.status = 503
