@@ -11,6 +11,7 @@ from app.agent.contract import (
     ExternalUrlSource,
 )
 from app.agent.running.state import CannotContinue, RunCompleted
+from app.agent.running.types import RunAttempt
 from local_tests.agent.deadline_race_support import (
     pending_answer_completion,
     pending_deadline_recovery,
@@ -79,7 +80,7 @@ async def test_answer_completion_wins_race_and_preserves_saved_result(
     )
 
     assert completion == RunCompleted()
-    assert recovery.total_count == 0
+    assert recovery == ()
     assert result_after_recovery.run["status"] == "completed"
     assert result_after_recovery.run["answer_started_at"] == run.answer_started_at
     assert result_after_recovery == result_before_recovery
@@ -141,7 +142,7 @@ async def test_deadline_recovery_wins_race_and_rejects_answer(
         system_database, run_id=run.run_id, thread_id=run.thread_id
     )
 
-    assert recovery.total_count == 1
+    assert recovery == (RunAttempt(run_id=run.run_id, epoch=run.attempt_epoch),)
     assert completion == CannotContinue()
     assert {
         "status": result_after_save_attempt.run["status"],

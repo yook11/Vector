@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import uuid as uuid_mod
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import date, datetime
 from typing import Any
@@ -97,7 +98,11 @@ class AgentRunStateRepository:
             .returning(AgentRun.attempt_epoch)
             .execution_options(synchronize_session=False)
         )
-        return None if epoch is None else RunAttempt(run_id=run_id, epoch=epoch)
+
+        if epoch is None:
+            return None
+
+        return RunAttempt(run_id=run_id, epoch=epoch)
 
     async def can_continue(self, attempt: RunAttempt) -> bool:
         """回答以外の工程を始める前と、回答を再生成する前に、この試行が続けてよいかを確かめる。
@@ -256,6 +261,49 @@ class AgentRunStateRepository:
         )
         return True
 
+    async def end_runs_past_deadline(
+        self,
+        *,
+        run_id: uuid_mod.UUID | None = None,
+        thread_id: uuid_mod.UUID | None = None,
+        owner_id: uuid_mod.UUID | None = None,
+    ) -> tuple[RunAttempt, ...]:
+        """回収期限に達したRunを、期限切れで終了させる。
+
+        次をすべて満たすRunが対象で、run_id・thread_id・owner_idを渡すとその範囲のRunに絞る。
+        - まだ終わっていない(待機中か実行中)。
+        - 回収期限(回答前は受理期限、回答中は回答開始から数えた期限)に達している。
+
+        期限切れで終了させたRunのうち、実行中だった試行を返す。
+        """
+        scope: list[ColumnElement[bool]] = []
+        if run_id is not None:
+            scope.append(AgentRun.id == run_id)
+        if thread_id is not None:
+            scope.append(AgentRun.thread_id == thread_id)
+        if owner_id is not None:
+            scope.append(AgentThread.user_id == owner_id)
+        ended_runs = await self._end_runs(
+            AgentRun.status.in_(ACTIVE_STATUSES),
+            _recovery_deadline() <= self._now,
+            *scope,
+        )
+        running_attempts: list[RunAttempt] = []
+        for ended_run in ended_runs:
+            if ended_run.status == AgentRunStatus.QUEUED.value:
+                # 処理が始まらないまま終了したので、ユーザーに利用枠を返却する。
+                await release_daily_quota(
+                    self._session,
+                    user_id=ended_run.user_id,
+                    usage_date=ended_run.quota_usage_date,
+                )
+            else:
+                # 実行中だった場合は、画面へ終了を通知するために、返す必要がある。
+                running_attempts.append(
+                    RunAttempt(run_id=ended_run.id, epoch=ended_run.attempt_epoch)
+                )
+        return tuple(running_attempts)
+
     async def exists_for_owner(
         self, run_id: uuid_mod.UUID, *, owner_id: uuid_mod.UUID
     ) -> bool:
@@ -304,6 +352,45 @@ class AgentRunStateRepository:
                 .execution_options(synchronize_session=False)
             )
         ).one_or_none()
+
+    async def _end_runs(
+        self, *conditions: ColumnElement[bool]
+    ) -> Sequence[Row[tuple[uuid_mod.UUID, str, int, uuid_mod.UUID, date | None]]]:
+        """条件に合うRunをまとめて期限切れで終了させ、終了させたRunごとに、id・終了させる前の状態・世代と、ユーザーID・利用枠を使った日付を返す。"""
+
+        await self._limit_lock_wait()
+        # 複数の処理が同じRunを違う順でロックして待ち合わないよう、idの順にロックする。
+        before = (
+            select(
+                AgentRun.id,
+                AgentRun.status,
+                AgentRun.attempt_epoch,
+                AgentThread.user_id,
+                AgentRun.quota_usage_date,
+            )
+            .join(AgentThread, AgentRun.thread_id == AgentThread.id)
+            .where(*conditions)
+            .order_by(AgentRun.id)
+            .with_for_update(of=AgentRun)
+            .cte("before")
+        )
+
+        return (
+            await self._session.execute(
+                update(AgentRun)
+                .where(AgentRun.id == before.c.id)
+                # 期限切れはerror_codeを持たないので、statusだけを書く。
+                .values(status=AgentRunStatus.DEADLINE_EXCEEDED.value)
+                .returning(
+                    before.c.id,
+                    before.c.status,
+                    before.c.attempt_epoch,
+                    before.c.user_id,
+                    before.c.quota_usage_date,
+                )
+                .execution_options(synchronize_session=False)
+            )
+        ).all()
 
     async def _limit_lock_wait(self) -> None:
         """他の処理が同じ行を書き換え中のときに待つ時間を、このトランザクションだけ3秒までにする。"""

@@ -84,7 +84,7 @@ async def test_expired_queued_run_is_left_by_cancel_and_closed_by_deadline_check
         await _read_run(session_factory, run.id),
         await _read_counter(session_factory),
     )
-    await service.check_run_deadline(run.id)
+    await service.end_runs_past_deadline(run_id=run.id)
 
     assert (
         cancelled,
@@ -119,7 +119,7 @@ async def test_expired_running_run_is_left_by_failure_and_closed_by_deadline_che
         error_code=AgentRunErrorCode.GENERATION_UNAVAILABLE,
     )
     after_failure = (await _read_run(session_factory, run.id), notices.closed_runs[:])
-    await service.check_run_deadline(run.id)
+    await service.end_runs_past_deadline(run_id=run.id)
 
     assert (
         recorded,

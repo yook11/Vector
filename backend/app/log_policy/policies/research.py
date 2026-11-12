@@ -27,13 +27,7 @@ RESEARCH_LOG_RULES = RESEARCH_POLICY.extend(
             "usage_date",
             "used_count",
             "limit",
-            "queued_count",
-            "running_count",
-            "quota_released_count",
-            "quota_not_eligible_count",
-            "quota_inconsistent_count",
             "count",
-            "run_count",
             "query_count",
             "model",
         }
