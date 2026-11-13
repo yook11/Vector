@@ -1,4 +1,4 @@
-"""AgentRunCreationRepository の日次quota admission契約。"""
+"""Runを作る口(AgentRunStateRepository.create_run)の、利用枠の予約と断るときの結果(実DB)。"""
 
 from __future__ import annotations
 
@@ -12,14 +12,14 @@ from sqlalchemy import DateTime, func, literal, select, text
 from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-import app.agent.running.daily_quota.reservation as daily_quota_reservation_module
-from app.agent.running.creation import (
-    ActiveRunConflictError,
-    AgentRunCreationRepository,
-    CreatedAgentRun,
-    ThreadNotFoundError,
+import app.agent.running.daily_quota.acquire as daily_quota_acquire_module
+from app.agent.running.state import (
+    ActiveRunExists,
+    DailyLimitReached,
+    RunCreated,
+    ThreadNotFound,
 )
-from app.agent.running.daily_quota.reservation import DailyRequestLimitExceededError
+from app.agent.running.state_repository import AgentRunStateRepository
 from app.models.agent_message import AgentMessage
 from app.models.agent_run import AgentRun
 from app.models.agent_thread import AgentThread
@@ -37,7 +37,7 @@ pytestmark = pytest.mark.integration
 
 def _reservation_statement_builder() -> Callable[..., object]:
     """monkeypatch後の値を拾うため、呼び出しのたびに現在のmodule属性を読む。"""
-    return daily_quota_reservation_module._build_daily_quota_reservation_statement
+    return daily_quota_acquire_module._build_acquire_daily_usage_statement
 
 
 def _fixed_timestamptz_expression(value: datetime) -> object:
@@ -73,8 +73,8 @@ def _patch_reservation_clock(
     )
 
     monkeypatch.setattr(
-        daily_quota_reservation_module,
-        "_build_daily_quota_reservation_statement",
+        daily_quota_acquire_module,
+        "_build_acquire_daily_usage_statement",
         build_with_fixed_clock,
     )
 
@@ -85,15 +85,14 @@ async def _admit_new_thread(
     user_id: uuid.UUID,
     question: str,
     now: datetime | None = None,
-) -> CreatedAgentRun:
+) -> RunCreated | DailyLimitReached:
     async with session_factory() as session:
         async with session.begin():
-            return await AgentRunCreationRepository(session).create_user_run(
-                user_id=user_id,
-                question=question,
-                thread_id=None,
-                now=now,
+            created = await AgentRunStateRepository(session, now=now).create_run(
+                owner_id=user_id, question=question, thread_id=None
             )
+    assert isinstance(created, RunCreated | DailyLimitReached)
+    return created
 
 
 async def _admission_state(
@@ -165,13 +164,8 @@ async def _seed_active_thread(
         return thread.id
 
 
-def _quota_rejection_fields(exc: Exception) -> tuple[date, datetime, datetime, int]:
-    assert isinstance(exc, DailyRequestLimitExceededError)
-    return exc.usage_date, exc.observed_at, exc.decided_at, exc.limit
-
-
 @pytest.mark.asyncio
-async def test_create_user_run_reserves_quota_and_persists_same_usage_date(
+async def test_create_run_reserves_quota_and_persists_same_usage_date(
     session_factory: async_sessionmaker[AsyncSession],
     db_session: AsyncSession,
     monkeypatch: pytest.MonkeyPatch,
@@ -183,6 +177,7 @@ async def test_create_user_run_reserves_quota_and_persists_same_usage_date(
         question="JST usage date",
         now=datetime(2001, 1, 1, tzinfo=UTC),
     )
+    assert isinstance(created, RunCreated)
     run_id = created.run_id
     usage_date = created.usage_date
     used_count = created.used_count
@@ -333,11 +328,12 @@ async def test_quota_statement_preserves_observed_at_while_waiting_for_row_lock(
 
 
 @pytest.mark.asyncio
-async def test_tenth_admission_succeeds_and_eleventh_is_typed_rejection_without_writes(
+async def test_tenth_admission_succeeds_and_eleventh_is_rejected_without_writes(
     session_factory: async_sessionmaker[AsyncSession],
     db_session: AsyncSession,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """10件目までは作れ、11件目は上限に達した結果を返し、commitしても新しいthreadを含め何も残さない。"""
     _patch_reservation_clock(monkeypatch, observed_at=_BEFORE_MIDNIGHT_UTC)
     user_id = uuid.UUID(TEST_USER_ID)
     accepted = [
@@ -349,19 +345,19 @@ async def test_tenth_admission_succeeds_and_eleventh_is_typed_rejection_without_
         for index in range(_DAILY_LIMIT)
     ]
 
-    with pytest.raises(Exception) as exc_info:
-        await _admit_new_thread(
-            session_factory,
-            user_id=user_id,
-            question="rejected-eleventh",
-        )
+    rejected = await _admit_new_thread(
+        session_factory,
+        user_id=user_id,
+        question="rejected-eleventh",
+    )
 
-    usage_date, observed_at, decided_at, limit = _quota_rejection_fields(exc_info.value)
-    assert len(accepted) == _DAILY_LIMIT
-    assert usage_date == _JST_DAY_BEFORE_MIDNIGHT
-    assert observed_at.tzinfo is not None
-    assert decided_at.tzinfo is not None
-    assert limit == _DAILY_LIMIT
+    assert [type(created) for created in accepted] == [RunCreated] * _DAILY_LIMIT
+    assert isinstance(rejected, DailyLimitReached)
+    assert (rejected.limit, rejected.usage_date) == (
+        _DAILY_LIMIT,
+        _JST_DAY_BEFORE_MIDNIGHT,
+    )
+    assert rejected.decided_at.tzinfo is not None
     assert await _admission_state(
         db_session,
         user_id=user_id,
@@ -375,6 +371,7 @@ async def test_missing_or_active_existing_thread_does_not_reserve_quota(
     db_session: AsyncSession,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """他のユーザーのthreadは見つからない結果、動いているRunがあるthreadはその結果を返し、どちらも利用枠を使わない。"""
     _patch_reservation_clock(monkeypatch, observed_at=_BEFORE_MIDNIGHT_UTC)
     user_id = uuid.UUID(TEST_USER_ID)
     foreign_thread_id = await _seed_active_thread(
@@ -384,21 +381,16 @@ async def test_missing_or_active_existing_thread_does_not_reserve_quota(
     active_thread_id = await _seed_active_thread(session_factory, user_id=user_id)
 
     async with session_factory() as session:
-        with pytest.raises(ThreadNotFoundError):
-            async with session.begin():
-                await AgentRunCreationRepository(session).create_user_run(
-                    user_id=user_id,
-                    question="not owned",
-                    thread_id=foreign_thread_id,
-                )
-        with pytest.raises(ActiveRunConflictError):
-            async with session.begin():
-                await AgentRunCreationRepository(session).create_user_run(
-                    user_id=user_id,
-                    question="conflicts",
-                    thread_id=active_thread_id,
-                )
+        async with session.begin():
+            not_owned = await AgentRunStateRepository(session).create_run(
+                owner_id=user_id, question="not owned", thread_id=foreign_thread_id
+            )
+        async with session.begin():
+            conflicting = await AgentRunStateRepository(session).create_run(
+                owner_id=user_id, question="conflicts", thread_id=active_thread_id
+            )
 
+    assert (not_owned, conflicting) == (ThreadNotFound(), ActiveRunExists())
     assert await _admission_state(
         db_session,
         user_id=user_id,
@@ -421,11 +413,10 @@ async def test_caller_rollback_removes_quota_thread_message_and_run(
     with pytest.raises(RollBackAdmission):
         async with session_factory() as session:
             async with session.begin():
-                created = await AgentRunCreationRepository(session).create_user_run(
-                    user_id=user_id,
-                    question="rollback all writes",
-                    thread_id=None,
+                created = await AgentRunStateRepository(session).create_run(
+                    owner_id=user_id, question="rollback all writes", thread_id=None
                 )
+                assert isinstance(created, RunCreated)
                 assert created.usage_date == _JST_DAY_BEFORE_MIDNIGHT
                 raise RollBackAdmission()
 
@@ -437,7 +428,7 @@ async def test_caller_rollback_removes_quota_thread_message_and_run(
 
 
 @pytest.mark.asyncio
-async def test_quota_database_error_rolls_back_preflushed_new_thread(
+async def test_quota_database_error_leaves_no_writes(
     session_factory: async_sessionmaker[AsyncSession],
     db_session: AsyncSession,
     monkeypatch: pytest.MonkeyPatch,
@@ -448,8 +439,8 @@ async def test_quota_database_error_rolls_back_preflushed_new_thread(
         return select(literal(1) / literal(0))
 
     monkeypatch.setattr(
-        daily_quota_reservation_module,
-        "_build_daily_quota_reservation_statement",
+        daily_quota_acquire_module,
+        "_build_acquire_daily_usage_statement",
         failing_builder,
         raising=False,
     )
@@ -457,10 +448,8 @@ async def test_quota_database_error_rolls_back_preflushed_new_thread(
     with pytest.raises(DBAPIError):
         async with session_factory() as session:
             async with session.begin():
-                await AgentRunCreationRepository(session).create_user_run(
-                    user_id=user_id,
-                    question="quota database failure",
-                    thread_id=None,
+                await AgentRunStateRepository(session).create_run(
+                    owner_id=user_id, question="quota database failure", thread_id=None
                 )
 
     assert await _admission_state(
@@ -505,8 +494,8 @@ async def test_run_persistence_failure_rolls_back_reservation_and_all_writes(
         with pytest.raises(DBAPIError):
             async with session_factory() as session:
                 async with session.begin():
-                    await AgentRunCreationRepository(session).create_user_run(
-                        user_id=user_id,
+                    await AgentRunStateRepository(session).create_run(
+                        owner_id=user_id,
                         question="run persistence failure",
                         thread_id=None,
                     )
@@ -550,9 +539,11 @@ async def test_different_users_and_jst_dates_reserve_independent_counters(
         question="first user next day",
     )
 
-    assert first.used_count == 1
-    assert second.used_count == 1
-    assert next_day.used_count == 1
+    assert [
+        created.used_count
+        for created in (first, second, next_day)
+        if isinstance(created, RunCreated)
+    ] == [1, 1, 1]
     assert await _admission_state(
         db_session,
         user_id=first_user_id,
@@ -592,22 +583,20 @@ async def test_eleven_concurrent_admissions_accept_exactly_ten(
         async with session_factory() as session:
             async with session.begin():
                 await barrier.wait()
-                return await AgentRunCreationRepository(session).create_user_run(
-                    user_id=user_id,
-                    question=f"concurrent-{index}",
-                    thread_id=None,
+                return await AgentRunStateRepository(session).create_run(
+                    owner_id=user_id, question=f"concurrent-{index}", thread_id=None
                 )
 
     outcomes = await asyncio.gather(
-        *(admit(index) for index in range(_DAILY_LIMIT + 1)),
-        return_exceptions=True,
+        *(admit(index) for index in range(_DAILY_LIMIT + 1))
     )
-    accepted = [outcome for outcome in outcomes if not isinstance(outcome, Exception)]
-    rejected = [outcome for outcome in outcomes if isinstance(outcome, Exception)]
+    accepted = [outcome for outcome in outcomes if isinstance(outcome, RunCreated)]
+    rejected = [
+        outcome for outcome in outcomes if isinstance(outcome, DailyLimitReached)
+    ]
 
     assert len(accepted) == _DAILY_LIMIT
-    assert len(rejected) == 1
-    assert _quota_rejection_fields(rejected[0])[3] == _DAILY_LIMIT
+    assert [outcome.limit for outcome in rejected] == [_DAILY_LIMIT]
     assert await _admission_state(
         db_session,
         user_id=user_id,

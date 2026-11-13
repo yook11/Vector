@@ -5,7 +5,7 @@ from datetime import timedelta
 import pytest
 from sqlalchemy import func, select
 
-from app.agent.running.creation import AgentRunCreationRepository
+from app.agent.running.state_repository import AgentRunStateRepository
 from app.queue.tasks.agent_run import sweep_deadline_exceeded_agent_runs
 from local_tests.agent.support import (
     fetch_saved_run_result,
@@ -24,11 +24,12 @@ async def test_sweep_returns_quota_of_queued_run_past_deadline(
     async with owner_session_factory() as session:
         async with session.begin():
             database_time = await session.scalar(select(func.clock_timestamp()))
-            created = await AgentRunCreationRepository(session).create_user_run(
-                user_id=agent_user_id,
+            created = await AgentRunStateRepository(
+                session, now=database_time - timedelta(minutes=2)
+            ).create_run(
+                owner_id=agent_user_id,
                 question="売上動向を調べてください",
                 thread_id=None,
-                now=database_time - timedelta(minutes=2),
             )
     assert await read_daily_quota_used_counts(
         system_database, user_id=agent_user_id
