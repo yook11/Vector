@@ -29,11 +29,13 @@ from app.agent.live_updates.transport import (
 )
 from app.agent.router import get_agent_run_state_service
 from app.agent.run_enqueuer import get_agent_run_enqueuer
-from app.agent.running.creation import AgentRunCreationRepository
-from app.agent.running.daily_quota import observability as daily_quota_observability
-from app.agent.running.daily_quota.reservation import DailyRequestLimitExceededError
 from app.agent.running.deadline.scheduling import get_agent_deadline_scheduler
-from app.agent.running.state import CancelledByUser, CannotContinue, RunNotFound
+from app.agent.running.state import (
+    CancelledByUser,
+    CannotContinue,
+    DailyLimitReached,
+    RunNotFound,
+)
 from app.agent.running.state_service import AgentRunStateService
 from app.agent.running.types import RunAttempt
 from app.config import settings
@@ -563,18 +565,18 @@ class TestCreateResearchResponse:
         """投入失敗の記録が途中で失敗すると、Run も利用枠も元のまま 503 を返す。"""
         client, fake_enqueue = quota_research_client
         fake_enqueue.exc = RuntimeError("queue unavailable")
-        original_release_daily_quota = state_repository_module.release_daily_quota
+        original_release_daily_usage = state_repository_module.release_daily_usage
         release_count = 0
 
         async def release_then_fail(session: AsyncSession, **kwargs: Any) -> None:
             nonlocal release_count
-            await original_release_daily_quota(session, **kwargs)
+            await original_release_daily_usage(session, **kwargs)
             release_count += 1
             raise RuntimeError("mark failed transaction aborted")
 
         monkeypatch.setattr(
             state_repository_module,
-            "release_daily_quota",
+            "release_daily_usage",
             release_then_fail,
         )
 
@@ -695,58 +697,35 @@ class TestCreateResearchResponse:
             (datetime(2026, 7, 20, 15, 0, 0, 100_000, tzinfo=UTC), "0"),
         ],
     )
-    async def test_daily_limit_error_is_flat_typed_429_after_transaction_rollback(
+    async def test_daily_limit_is_flat_typed_429_with_retry_after(
         self,
         quota_research_client: tuple[AsyncClient, FakeEnqueue],
-        db_session: AsyncSession,
         monkeypatch: pytest.MonkeyPatch,
         decided_at: datetime,
         expected_retry_after: str,
     ) -> None:
+        """上限に達した結果は、解除時刻とRetry-Afterを付けた429になり、キューへ投入しない。"""
         client, fake_enqueue = quota_research_client
-        db_session.add(
-            AgentUserDailyQuota(
-                user_id=UUID(TEST_USER_ID),
-                usage_date=_QUOTA_USAGE_DATE,
-                used_count=10,
-            )
-        )
-        await db_session.commit()
 
         async def reject_with_fixed_clock(
-            _repository: AgentRunCreationRepository,
+            _repository: state_repository_module.AgentRunStateRepository,
             *,
-            user_id: UUID,
+            owner_id: UUID,
             question: str,
             thread_id: UUID | None,
-            now: datetime | None = None,
         ) -> object:
-            assert (user_id, question, thread_id, now) == (
+            assert (owner_id, question, thread_id) == (
                 UUID(TEST_USER_ID),
                 "quota rejected",
                 None,
-                None,
             )
-            await db_session.execute(
-                update(AgentUserDailyQuota)
-                .where(
-                    AgentUserDailyQuota.user_id == user_id,
-                    AgentUserDailyQuota.usage_date == _QUOTA_USAGE_DATE,
-                )
-                .values(used_count=9)
-            )
-            db_session.add(AgentThread(user_id=user_id, title="must roll back"))
-            await db_session.flush()
-            raise DailyRequestLimitExceededError(
-                usage_date=_QUOTA_USAGE_DATE,
-                observed_at=decided_at - timedelta(seconds=5),
-                decided_at=decided_at,
-                limit=10,
+            return DailyLimitReached(
+                limit=10, usage_date=_QUOTA_USAGE_DATE, decided_at=decided_at
             )
 
         monkeypatch.setattr(
-            AgentRunCreationRepository,
-            "create_user_run",
+            state_repository_module.AgentRunStateRepository,
+            "create_run",
             reject_with_fixed_clock,
         )
 
@@ -755,20 +734,6 @@ class TestCreateResearchResponse:
             json={"question": "quota rejected"},
         )
 
-        counter = await db_session.scalar(
-            select(AgentUserDailyQuota.used_count).where(
-                AgentUserDailyQuota.user_id == UUID(TEST_USER_ID),
-                AgentUserDailyQuota.usage_date == _QUOTA_USAGE_DATE,
-            )
-        )
-        assert counter == 10
-        assert (
-            await db_session.scalar(select(func.count()).select_from(AgentThread)) == 0
-        )
-        assert (
-            await db_session.scalar(select(func.count()).select_from(AgentMessage)) == 0
-        )
-        assert await db_session.scalar(select(func.count()).select_from(AgentRun)) == 0
         assert fake_enqueue.calls == []
         assert response.status_code == 429
         assert response.json() == {
@@ -816,96 +781,6 @@ class TestCreateResearchResponse:
 
 @pytest.mark.asyncio
 class TestQuotaRouterTelemetry:
-    @pytest.mark.parametrize("request_kind", ["accepted", "rejected"])
-    async def test_admission_observability_failure_keeps_response(
-        self,
-        quota_research_client: tuple[AsyncClient, FakeEnqueue],
-        db_session: AsyncSession,
-        monkeypatch: pytest.MonkeyPatch,
-        request_kind: str,
-    ) -> None:
-        client, fake_enqueue = quota_research_client
-        observed: list[dict[str, object]] = []
-        if request_kind == "rejected":
-
-            async def reject_with_fixed_clock(
-                _repository: AgentRunCreationRepository,
-                **_kwargs: object,
-            ) -> object:
-                raise DailyRequestLimitExceededError(
-                    usage_date=_QUOTA_USAGE_DATE,
-                    observed_at=datetime(2026, 7, 20, 14, 59, tzinfo=UTC),
-                    decided_at=datetime(2026, 7, 20, 14, 59, 59, tzinfo=UTC),
-                    limit=10,
-                )
-
-            monkeypatch.setattr(
-                AgentRunCreationRepository,
-                "create_user_run",
-                reject_with_fixed_clock,
-            )
-
-            def fail_observation(*, usage_date: date) -> None:
-                observed.append({"usage_date": usage_date})
-                raise RuntimeError("quota observability unavailable")
-
-            monkeypatch.setattr(
-                daily_quota_observability,
-                "observe_admission_rejected",
-                fail_observation,
-            )
-        else:
-
-            def fail_observation(
-                *,
-                run_id: UUID,
-                usage_date: date,
-                used_count: int,
-            ) -> None:
-                observed.append(
-                    {
-                        "run_id": run_id,
-                        "usage_date": usage_date,
-                        "used_count": used_count,
-                    }
-                )
-                raise RuntimeError("quota observability unavailable")
-
-            monkeypatch.setattr(
-                daily_quota_observability,
-                "observe_admission_accepted",
-                fail_observation,
-            )
-
-        response = await client.post(
-            _RESPONSES_URL,
-            json={"question": f"{request_kind} telemetry failure"},
-        )
-
-        if request_kind == "accepted":
-            assert response.status_code == 202
-            run_id = UUID(response.json()["runId"])
-            assert fake_enqueue.calls == [run_id]
-            db_session.expire_all()
-            run = await _fetch_run(db_session, run_id)
-            assert observed == [
-                {
-                    "run_id": run_id,
-                    "usage_date": run.quota_usage_date,
-                    "used_count": 1,
-                }
-            ]
-        else:
-            assert response.status_code == 429
-            assert observed == [{"usage_date": _QUOTA_USAGE_DATE}]
-            assert response.json() == {
-                "detail": "Daily research request limit exceeded",
-                "code": "research_daily_request_limit_exceeded",
-                "limit": 10,
-                "resetAt": "2026-07-21T00:00:00+09:00",
-            }
-            assert response.headers["retry-after"] == "1"
-
     async def test_running_cancel_publishes_terminal_and_keeps_quota(
         self,
         quota_research_client: tuple[AsyncClient, FakeEnqueue],
@@ -978,37 +853,10 @@ class TestQuotaRouterTelemetry:
         read_logs,
         quota_research_client: tuple[AsyncClient, FakeEnqueue],
         db_session: AsyncSession,
-        monkeypatch: pytest.MonkeyPatch,
     ) -> None:
+        """受け付けたRunのログは、Runのidと利用枠の日付・回数だけを持つ。"""
         client, _fake_enqueue = quota_research_client
-        calls: list[dict[str, object]] = []
         sensitive_question = "quota telemetry secret question"
-        original_observer = daily_quota_observability.observe_admission_accepted
-
-        def observe_admission(
-            *,
-            run_id: UUID,
-            usage_date: date,
-            used_count: int,
-        ) -> None:
-            calls.append(
-                {
-                    "run_id": run_id,
-                    "usage_date": usage_date,
-                    "used_count": used_count,
-                }
-            )
-            original_observer(
-                run_id=run_id,
-                usage_date=usage_date,
-                used_count=used_count,
-            )
-
-        monkeypatch.setattr(
-            daily_quota_observability,
-            "observe_admission_accepted",
-            observe_admission,
-        )
 
         response = await client.post(
             _RESPONSES_URL,
@@ -1018,26 +866,16 @@ class TestQuotaRouterTelemetry:
 
         run_id = UUID(response.json()["runId"])
         run = await _fetch_run(db_session, run_id)
-        reserved = [
-            entry
-            for entry in logs
-            if entry.get("event") == "agent_user_daily_quota_reserved"
+        accepted = [
+            entry for entry in logs if entry.get("event") == "agent_run_accepted"
         ]
         assert response.status_code == 202
-        assert calls == [
-            {
-                "run_id": run_id,
-                "usage_date": run.quota_usage_date,
-                "used_count": 1,
-            }
-        ]
-        assert reserved == [
+        assert accepted == [
             {
                 "run_id": str(run_id),
                 "usage_date": run.quota_usage_date.isoformat(),
                 "used_count": 1,
-                "limit": 10,
-                "event": "agent_user_daily_quota_reserved",
+                "event": "agent_run_accepted",
                 "level": "info",
                 "log_policy": "research",
             }
@@ -1052,36 +890,24 @@ class TestQuotaRouterTelemetry:
         quota_research_client: tuple[AsyncClient, FakeEnqueue],
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
+        """上限で断ったログは、利用枠の日付だけを持つ。"""
         client, _fake_enqueue = quota_research_client
-        calls: list[dict[str, object]] = []
         sensitive_question = "quota rejection secret question"
 
         async def reject_with_fixed_clock(
-            _repository: AgentRunCreationRepository,
+            _repository: state_repository_module.AgentRunStateRepository,
             **_kwargs: object,
         ) -> object:
-            raise DailyRequestLimitExceededError(
-                usage_date=_QUOTA_USAGE_DATE,
-                observed_at=datetime(2026, 7, 20, 14, 59, tzinfo=UTC),
-                decided_at=datetime(2026, 7, 20, 14, 59, 59, tzinfo=UTC),
+            return DailyLimitReached(
                 limit=10,
+                usage_date=_QUOTA_USAGE_DATE,
+                decided_at=datetime(2026, 7, 20, 14, 59, 59, tzinfo=UTC),
             )
 
-        original_observer = daily_quota_observability.observe_admission_rejected
-
-        def observe_admission(*, usage_date: date) -> None:
-            calls.append({"usage_date": usage_date})
-            original_observer(usage_date=usage_date)
-
         monkeypatch.setattr(
-            AgentRunCreationRepository,
-            "create_user_run",
+            state_repository_module.AgentRunStateRepository,
+            "create_run",
             reject_with_fixed_clock,
-        )
-        monkeypatch.setattr(
-            daily_quota_observability,
-            "observe_admission_rejected",
-            observe_admission,
         )
 
         response = await client.post(
@@ -1093,15 +919,13 @@ class TestQuotaRouterTelemetry:
         rejected = [
             entry
             for entry in logs
-            if entry.get("event") == "agent_user_daily_quota_rejected"
+            if entry.get("event") == "agent_run_daily_limit_reached"
         ]
         assert response.status_code == 429
-        assert calls == [{"usage_date": _QUOTA_USAGE_DATE}]
         assert rejected == [
             {
                 "usage_date": _QUOTA_USAGE_DATE.isoformat(),
-                "limit": 10,
-                "event": "agent_user_daily_quota_rejected",
+                "event": "agent_run_daily_limit_reached",
                 "level": "info",
                 "log_policy": "research",
             }
@@ -1115,11 +939,10 @@ class TestQuotaRouterTelemetry:
         read_logs,
         quota_research_client: tuple[AsyncClient, FakeEnqueue],
         db_session: AsyncSession,
-        monkeypatch: pytest.MonkeyPatch,
         deadline_scheduler,
     ) -> None:
+        """Runを作るcommitが失敗すると500を返し、受付のログもRunも利用回数も残らない。"""
         client, _fake_enqueue = quota_research_client
-        calls: list[dict[str, object]] = []
         commit_attempted = False
 
         def fail_commit(_session: object) -> None:
@@ -1127,37 +950,27 @@ class TestQuotaRouterTelemetry:
             commit_attempted = True
             raise RuntimeError("database commit failure")
 
-        def observe_admission(**kwargs: object) -> None:
-            calls.append(kwargs)
-
-        monkeypatch.setattr(
-            daily_quota_observability,
-            "observe_admission_accepted",
-            observe_admission,
-        )
-        sa_event.listen(
-            db_session.sync_session, "before_commit", fail_commit, once=True
-        )
-
-        response = await client.post(
-            _RESPONSES_URL,
-            json={"question": "transaction failure"},
-        )
+        # 受付は操作が自分のセッションでcommitするので、Session全体で待ち受ける。
+        sa_event.listen(Session, "before_commit", fail_commit, once=True)
+        try:
+            response = await client.post(
+                _RESPONSES_URL,
+                json={"question": "transaction failure"},
+            )
+        finally:
+            if not commit_attempted:
+                sa_event.remove(Session, "before_commit", fail_commit)
         logs = read_logs()
 
         assert deadline_scheduler.calls == []
         assert _fake_enqueue.calls == []
         assert response.status_code == 500
         assert commit_attempted is True
-        assert calls == []
         assert not [
             entry
             for entry in logs
             if entry.get("event")
-            in {
-                "agent_user_daily_quota_reserved",
-                "agent_user_daily_quota_rejected",
-            }
+            in {"agent_run_accepted", "agent_run_daily_limit_reached"}
         ]
         if db_session.in_transaction():
             await db_session.rollback()

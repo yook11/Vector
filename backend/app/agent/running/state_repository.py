@@ -14,8 +14,16 @@ from sqlalchemy.sql.elements import ColumnElement
 
 from app.agent.answering import timing as answer_timing
 from app.agent.contract import AnswerQuestionResult
-from app.agent.running.daily_quota.release import release_daily_quota
-from app.agent.running.state import ACTIVE_STATUSES
+from app.agent.running.daily_quota.acquire import acquire_daily_usage
+from app.agent.running.daily_quota.release import release_daily_usage
+from app.agent.running.deadline.policy import deadline_for_run
+from app.agent.running.state import (
+    ACTIVE_STATUSES,
+    ActiveRunExists,
+    DailyLimitReached,
+    RunCreated,
+    ThreadNotFound,
+)
 from app.agent.running.types import AgentRunErrorCode, AgentRunStatus, RunAttempt
 from app.agent.threads.result_mapper import (
     build_assistant_message_for_result,
@@ -73,6 +81,72 @@ class AgentRunStateRepository:
         # ロックを待った時間は判定に入らないことがある。
         self._now: ColumnElement[datetime] = (
             literal(now) if now is not None else func.clock_timestamp()
+        )
+
+    async def create_run(
+        self,
+        *,
+        owner_id: uuid_mod.UUID,
+        question: str,
+        thread_id: uuid_mod.UUID | None,
+    ) -> RunCreated | ThreadNotFound | ActiveRunExists | DailyLimitReached:
+        """ユーザーの質問からRunを作り、待機中にする。thread_idが無ければ新しいthreadを作る。
+
+        次のどれかに当たれば、何も書かずにその結果を返す。
+        - thread_idのthreadが、ユーザーのthreadとして見つからない。
+        - そのthreadに、動いているRun(待機中か実行中)がある。
+        - ユーザーの1日の利用枠が上限に達している。
+        """
+        thread: AgentThread | None = None
+        if thread_id is not None:
+            # 同じthreadへの同時の受付を1つずつ通すため、threadの行をロックする。
+            thread = (
+                await self._session.execute(
+                    select(AgentThread)
+                    .where(AgentThread.id == thread_id, AgentThread.user_id == owner_id)
+                    .with_for_update()
+                )
+            ).scalar_one_or_none()
+            if thread is None:
+                return ThreadNotFound()
+            if await self._has_active_run(thread_id):
+                return ActiveRunExists()
+        acquired = await acquire_daily_usage(self._session, user_id=owner_id)
+        if isinstance(acquired, DailyLimitReached):
+            return acquired
+
+        created_at = (await self._session.execute(select(self._now))).scalar_one()
+        if thread is None:
+            thread = AgentThread(user_id=owner_id, title=question[:50])
+            self._session.add(thread)
+            await self._session.flush()
+        thread.updated_at = created_at
+        user_message = AgentMessage(
+            thread_id=thread.id,
+            seq=await self._next_message_seq(thread.id),
+            role="user",
+            content=question,
+            missing_aspects=[],
+        )
+        self._session.add(user_message)
+        await self._session.flush()
+        deadline_at = deadline_for_run(created_at)
+        run = AgentRun(
+            thread_id=thread.id,
+            user_message_id=user_message.id,
+            status=AgentRunStatus.QUEUED.value,
+            created_at=created_at,
+            deadline_at=deadline_at,
+            quota_usage_date=acquired.usage_date,
+        )
+        self._session.add(run)
+        await self._session.flush()
+        return RunCreated(
+            thread_id=thread.id,
+            run_id=run.id,
+            deadline_at=deadline_at,
+            usage_date=acquired.usage_date,
+            used_count=acquired.used_count,
         )
 
     async def start_attempt(self, run_id: uuid_mod.UUID) -> RunAttempt | None:
@@ -228,7 +302,7 @@ class AgentRunStateRepository:
             return None
         if ended_run.status == AgentRunStatus.QUEUED.value:
             # 処理が始まらないまま終了したので、ユーザーに利用枠を返却する。
-            await release_daily_quota(
+            await release_daily_usage(
                 self._session,
                 user_id=ended_run.user_id,
                 usage_date=ended_run.quota_usage_date,
@@ -254,7 +328,7 @@ class AgentRunStateRepository:
         if ended_run is None:
             return False
         # 処理が始まらないまま終了したので、ユーザーに利用枠を返却する。
-        await release_daily_quota(
+        await release_daily_usage(
             self._session,
             user_id=ended_run.user_id,
             usage_date=ended_run.quota_usage_date,
@@ -292,7 +366,7 @@ class AgentRunStateRepository:
         for ended_run in ended_runs:
             if ended_run.status == AgentRunStatus.QUEUED.value:
                 # 処理が始まらないまま終了したので、ユーザーに利用枠を返却する。
-                await release_daily_quota(
+                await release_daily_usage(
                     self._session,
                     user_id=ended_run.user_id,
                     usage_date=ended_run.quota_usage_date,
@@ -391,6 +465,17 @@ class AgentRunStateRepository:
                 .execution_options(synchronize_session=False)
             )
         ).all()
+
+    async def _has_active_run(self, thread_id: uuid_mod.UUID) -> bool:
+        found_run_id = await self._session.scalar(
+            select(AgentRun.id)
+            .where(
+                AgentRun.thread_id == thread_id,
+                AgentRun.status.in_(ACTIVE_STATUSES),
+            )
+            .limit(1)
+        )
+        return found_run_id is not None
 
     async def _limit_lock_wait(self) -> None:
         """他の処理が同じ行を書き換え中のときに待つ時間を、このトランザクションだけ3秒までにする。"""

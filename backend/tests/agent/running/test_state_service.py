@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import uuid
 from dataclasses import dataclass, field
+from datetime import datetime
 
 import pytest
 from sqlalchemy import select
@@ -11,7 +12,7 @@ from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.agent.live_updates.stream import AgentRunLiveStreamTerminalEvent
-from app.agent.running.state import CancelledByUser
+from app.agent.running.state import CancelledByUser, RunCreated
 from app.agent.running.state_service import AgentRunStateService
 from app.agent.running.types import AgentRunErrorCode, RunAttempt
 from app.db.errors import (
@@ -251,3 +252,47 @@ async def test_closing_operation_notifies_the_attempt_after_commit(
             status_at_publish="failed",
         )
     ]
+
+
+class _RecordingEnqueuer:
+    def __init__(self) -> None:
+        self.run_ids: list[uuid.UUID] = []
+
+    async def enqueue(self, run_id: uuid.UUID) -> None:
+        self.run_ids.append(run_id)
+
+
+@pytest.mark.asyncio
+async def test_create_run_retries_only_the_write_and_enqueues_once(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    """Runを作る書き込みが一時的な失敗(deadlock)で落ちても、書き込みだけをやり直し、キューへの投入と期限の予約は1回だけ行う。"""
+    failing = _FailingSessionFactory(
+        session_factory, execute_failures=(_db_failure("40P01"),)
+    )
+    service = AgentRunStateService(
+        session_factory=failing,  # type: ignore[arg-type]
+        publisher_for=_RecordingPublishers(session_factory),  # type: ignore[arg-type]
+    )
+    enqueuer = _RecordingEnqueuer()
+    scheduled: list[tuple[uuid.UUID, datetime]] = []
+
+    created = await service.create_run(
+        user_id=_USER_ID,
+        question="やり直しの質問",
+        thread_id=None,
+        enqueuer=enqueuer,  # type: ignore[arg-type]
+        schedule_deadline_check=lambda run_id, deadline_at: scheduled.append(
+            (run_id, deadline_at)
+        ),
+    )
+
+    async with session_factory() as session:
+        saved_run_ids = (await session.execute(select(AgentRun.id))).scalars().all()
+    assert isinstance(created, RunCreated)
+    assert (enqueuer.run_ids, scheduled, saved_run_ids, failing.opened) == (
+        [created.run_id],
+        [(created.run_id, created.deadline_at)],
+        [created.run_id],
+        2,
+    )

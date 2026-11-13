@@ -16,12 +16,13 @@ from app.agent.evidence_collection.external_search.contract import (
 from app.agent.evidence_collection.internal_search.query_embedding import (
     InternalQueryEmbedding,
 )
-from app.agent.running.creation import AgentRunCreationRepository
 from app.agent.running.state import (
     AnswerGenerationStarted,
     AttemptStarted,
     CannotContinue,
+    RunCreated,
 )
+from app.agent.running.state_repository import AgentRunStateRepository
 from app.agent.running.state_service import AgentRunStateService
 from app.agent.running.types import RunAttempt
 from app.ai_providers.errors import AIProviderError
@@ -136,9 +137,11 @@ class PreparedAnsweringRun:
 async def create_user_run(session_factory, *, user_id, question):
     async with session_factory() as session:
         async with session.begin():
-            created = await AgentRunCreationRepository(session).create_user_run(
-                user_id=user_id, question=question, thread_id=None
+            created = await AgentRunStateRepository(session).create_run(
+                owner_id=user_id, question=question, thread_id=None
             )
+    if not isinstance(created, RunCreated):
+        raise RuntimeError(f"テスト用ランを作成できませんでした: {created}")
     return created
 
 
