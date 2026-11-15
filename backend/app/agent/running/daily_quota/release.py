@@ -9,14 +9,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.agent_user_daily_quota import AgentUserDailyQuota
 
 
-async def release_daily_quota(
+async def release_daily_usage(
     session: AsyncSession,
     *,
     user_id: uuid.UUID,
     usage_date: date | None,
 ) -> None:
-    """処理が始まらないまま終了したRunについて、ユーザーに利用枠を1回分返却する。"""
-    # 利用枠を使わずに作られた古いRunは、返却するものが無い。
+    """処理が始まらないまま終了したRunについて、確保したRun1回分の利用枠を解放する。"""
+    # 利用枠を確保せずに作られた古いRunは、解放するものが無い。
     if usage_date is None:
         return
     await session.execute(

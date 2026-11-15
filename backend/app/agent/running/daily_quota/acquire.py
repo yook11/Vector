@@ -24,29 +24,12 @@ from app.agent.running.daily_quota.policy import (
     DAILY_QUOTA_TIMEZONE_NAME,
     DAILY_REQUEST_LIMIT,
 )
+from app.agent.running.state import DailyLimitReached
 from app.models.agent_user_daily_quota import AgentUserDailyQuota
 
 
-class DailyRequestLimitExceededError(Exception):
-    """ユーザーの日次research request予約枠が上限に達した。"""
-
-    def __init__(
-        self,
-        *,
-        usage_date: date,
-        observed_at: datetime,
-        decided_at: datetime,
-        limit: int,
-    ) -> None:
-        super().__init__("Daily research request limit exceeded")
-        self.usage_date = usage_date
-        self.observed_at = observed_at
-        self.decided_at = decided_at
-        self.limit = limit
-
-
 @dataclass(frozen=True, slots=True)
-class DailyQuotaReservation:
+class DailyUsageAcquired:
     usage_date: date
     used_count: int
 
@@ -56,10 +39,10 @@ class DailyQuotaReservation:
             or isinstance(self.used_count, bool)
             or self.used_count < 1
         ):
-            raise ValueError("daily quota reservation requires a positive used count")
+            raise ValueError("acquired daily usage requires a positive used count")
 
 
-def _build_daily_quota_reservation_statement(
+def _build_acquire_daily_usage_statement(
     *,
     user_id: uuid.UUID,
     clock_expression: ColumnElement[datetime] | None = None,
@@ -84,7 +67,7 @@ def _build_daily_quota_reservation_statement(
         .cte("quota_day")
         .prefix_with("MATERIALIZED", dialect="postgresql")
     )
-    reservation = (
+    acquired = (
         pg_insert(AgentUserDailyQuota)
         .from_select(
             ["user_id", "usage_date", "used_count"],
@@ -103,39 +86,35 @@ def _build_daily_quota_reservation_statement(
             where=(AgentUserDailyQuota.used_count < DAILY_REQUEST_LIMIT),
         )
         .returning(AgentUserDailyQuota.used_count)
-        .cte("reservation")
+        .cte("acquired")
     )
     return select(
         quota_day.c.observed_at,
         quota_day.c.usage_date,
         func.clock_timestamp().label("decided_at"),
-        reservation.c.used_count,
-    ).select_from(quota_day.outerjoin(reservation, true()))
+        acquired.c.used_count,
+    ).select_from(quota_day.outerjoin(acquired, true()))
 
 
-async def reserve_daily_quota(
+async def acquire_daily_usage(
     session: AsyncSession,
     *,
     user_id: uuid.UUID,
-) -> DailyQuotaReservation:
+) -> DailyUsageAcquired | DailyLimitReached:
+    """Run1回分の利用枠を確保し、1日の上限に達していれば、上限に達していたことを伝える。"""
     row = (
-        (
-            await session.execute(
-                _build_daily_quota_reservation_statement(user_id=user_id)
-            )
-        )
+        (await session.execute(_build_acquire_daily_usage_statement(user_id=user_id)))
         .mappings()
         .one()
     )
     used_count = row["used_count"]
     if used_count is None:
-        raise DailyRequestLimitExceededError(
-            usage_date=row["usage_date"],
-            observed_at=row["observed_at"],
-            decided_at=row["decided_at"],
+        return DailyLimitReached(
             limit=DAILY_REQUEST_LIMIT,
+            usage_date=row["usage_date"],
+            decided_at=row["decided_at"],
         )
-    return DailyQuotaReservation(
+    return DailyUsageAcquired(
         usage_date=row["usage_date"],
         used_count=used_count,
     )

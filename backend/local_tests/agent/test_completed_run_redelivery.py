@@ -11,8 +11,8 @@ from app.agent.contract import (
     ExternalUrlSource,
 )
 from app.agent.run_enqueuer import AgentRunTrigger
-from app.agent.running.creation import AgentRunCreationRepository
 from app.agent.running.state import CannotContinue
+from app.agent.running.state_repository import AgentRunStateRepository
 from app.agent.running.types import RunAttempt
 from app.queue.tasks.agent_run import run_agent_answer
 from local_tests.agent.support import fetch_saved_run_result, state_service_for
@@ -29,8 +29,8 @@ async def test_completed_run_is_not_reexecuted_on_redelivery(
     """完了済みランは再配送されても再実行しない"""
     async with owner_session_factory() as session:
         async with session.begin():
-            created = await AgentRunCreationRepository(session).create_user_run(
-                user_id=agent_user_id,
+            created = await AgentRunStateRepository(session).create_run(
+                owner_id=agent_user_id,
                 question="売上動向を調べてください",
                 thread_id=None,
             )
@@ -65,8 +65,8 @@ async def test_reexecution_of_completed_run_preserves_saved_result(
     """完了済みランが再実行された場合、保存結果が変わらない"""
     async with owner_session_factory() as session:
         async with session.begin():
-            created = await AgentRunCreationRepository(session).create_user_run(
-                user_id=agent_user_id,
+            created = await AgentRunStateRepository(session).create_run(
+                owner_id=agent_user_id,
                 question="売上動向を調べてください",
                 thread_id=None,
             )

@@ -26,7 +26,6 @@ RESEARCH_LOG_RULES = RESEARCH_POLICY.extend(
             "event_type",
             "usage_date",
             "used_count",
-            "limit",
             "count",
             "query_count",
             "model",

@@ -6,8 +6,8 @@ from datetime import datetime, timedelta
 
 from sqlalchemy import func, select
 
-from app.agent.running.creation import AgentRunCreationRepository
 from app.agent.running.deadline.scheduling import AgentDeadlineScheduler
+from app.agent.running.state_repository import AgentRunStateRepository
 from app.queue.deadline_schedule import create_deadline_schedule_source
 
 RECOVERY_WAIT_SECONDS = 120
@@ -29,12 +29,9 @@ class WorkerDeadlineRecovery:
         async with self.workers.owner_session_factory() as session:
             async with session.begin():
                 database_time = await session.scalar(select(func.clock_timestamp()))
-                created = await AgentRunCreationRepository(session).create_user_run(
-                    user_id=user_id,
-                    question=question,
-                    thread_id=None,
-                    now=database_time - accepted_ago,
-                )
+                created = await AgentRunStateRepository(
+                    session, now=database_time - accepted_ago
+                ).create_run(owner_id=user_id, question=question, thread_id=None)
         source = create_deadline_schedule_source(self.workers.settings)
         try:
             await source.startup()

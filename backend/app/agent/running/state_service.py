@@ -18,15 +18,21 @@ from app.agent.live_updates.stream import (
     AgentRunLiveStreamPublisher,
     AgentRunLiveStreamTerminalEvent,
 )
+from app.agent.run_enqueuer import AgentRunEnqueuer
 from app.agent.running.state import (
+    ActiveRunExists,
     AnswerGenerationStarted,
     AttemptStarted,
     CancelledByUser,
     CanContinue,
     CannotContinue,
+    DailyLimitReached,
     RunCompleted,
+    RunCreated,
     RunFailed,
+    RunLeftQueuedError,
     RunNotFound,
+    ThreadNotFound,
 )
 from app.agent.running.state_repository import AgentRunStateRepository
 from app.agent.running.types import AgentRunErrorCode, AgentRunStatus, RunAttempt
@@ -77,6 +83,66 @@ class AgentRunStateService:
         self._publisher_for = publisher_for
         # テストでDBの時刻の代わりに使う。
         self._now = now
+
+    async def create_run(
+        self,
+        *,
+        user_id: UUID,
+        question: str,
+        thread_id: UUID | None,
+        enqueuer: AgentRunEnqueuer,
+        schedule_deadline_check: Callable[[UUID, datetime], None],
+    ) -> RunCreated | ThreadNotFound | ActiveRunExists | DailyLimitReached:
+        """ユーザーの質問からRunを作り、キューへ投入して、期限の確認を予約する。"""
+        result = await self._create_queued_run(
+            user_id=user_id, question=question, thread_id=thread_id
+        )
+        match result:
+            case ThreadNotFound() | ActiveRunExists():
+                return result
+            case DailyLimitReached(usage_date=usage_date):
+                logger.info(
+                    "agent_run_daily_limit_reached",
+                    usage_date=usage_date.isoformat(),
+                )
+                return result
+            case RunCreated(
+                run_id=run_id,
+                deadline_at=deadline_at,
+                usage_date=usage_date,
+                used_count=used_count,
+            ):
+                logger.info(
+                    "agent_run_accepted",
+                    run_id=str(run_id),
+                    usage_date=usage_date.isoformat(),
+                    used_count=used_count,
+                )
+                try:
+                    await enqueuer.enqueue(run_id)
+                except Exception:
+                    logger.exception("agent_run_enqueue_failed", run_id=str(run_id))
+                    try:
+                        await self.end_run_after_enqueue_failure(run_id)
+                    except Exception as exc:
+                        logger.exception(
+                            "agent_run_enqueue_failed_mark_failed_failed",
+                            run_id=str(run_id),
+                        )
+                        raise RunLeftQueuedError from exc
+                schedule_deadline_check(run_id, deadline_at)
+                return result
+
+    @_retry_transient_database_failure
+    async def _create_queued_run(
+        self, *, user_id: UUID, question: str, thread_id: UUID | None
+    ) -> RunCreated | ThreadNotFound | ActiveRunExists | DailyLimitReached:
+        """やり直すのはRunを作る書き込みまでで、キューへの投入はやり直さない。"""
+        async with self._transaction() as session:
+            result = await self._repository(session).create_run(
+                owner_id=user_id, question=question, thread_id=thread_id
+            )
+        return result
 
     @_retry_transient_database_failure
     async def start_attempt(self, run_id: UUID) -> AttemptStarted | CannotContinue:

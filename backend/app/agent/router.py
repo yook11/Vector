@@ -5,7 +5,6 @@ from __future__ import annotations
 import asyncio
 import math
 import time
-from contextlib import suppress
 from datetime import datetime, timedelta
 from typing import Annotated
 from uuid import UUID
@@ -43,23 +42,20 @@ from app.agent.live_updates.transport import (
     get_agent_live_transport,
 )
 from app.agent.run_enqueuer import AgentRunEnqueuer, get_agent_run_enqueuer
-from app.agent.running.creation import (
-    ActiveRunConflictError,
-    AgentRunCreationRepository,
-    ThreadNotFoundError,
-)
-from app.agent.running.daily_quota import observability as daily_quota_observability
 from app.agent.running.daily_quota.policy import DAILY_QUOTA_TIMEZONE
-from app.agent.running.daily_quota.reservation import DailyRequestLimitExceededError
 from app.agent.running.deadline.scheduling import (
     AgentDeadlineScheduler,
     get_agent_deadline_scheduler,
 )
 from app.agent.running.state import (
+    ActiveRunExists,
     CancelledByUser,
     CannotContinue,
-    RunFailed,
+    DailyLimitReached,
+    RunCreated,
+    RunLeftQueuedError,
     RunNotFound,
+    ThreadNotFound,
     has_attempt_started,
     is_finished,
 )
@@ -161,95 +157,61 @@ async def create_research_response(
         AgentDeadlineScheduler, Depends(get_agent_deadline_scheduler)
     ],
     user: Annotated[AuthenticatedUser, Depends(require_authenticated_user)],
-    # commit→kiq→failed の 2 tx を切るため、入口管理の UoW は使わない。
-    session: Annotated[AsyncSession, Depends(get_caller_managed_session)],
     enqueuer: Annotated[AgentRunEnqueuer, Depends(get_agent_run_enqueuer)],
     state_service: Annotated[
         AgentRunStateService, Depends(get_agent_run_state_service)
     ],
 ) -> ResearchRunStartResponse | JSONResponse:
-    repo = AgentRunCreationRepository(session)
+    def schedule_deadline_check(run_id: UUID, deadline_at: datetime) -> None:
+        # 応答を待たせないよう、期限の確認の予約は応答を送った後に行う。
+        background_tasks.add_task(deadline_scheduler.reserve, run_id, deadline_at)
+
     try:
-        async with session.begin():
-            created = await repo.create_user_run(
-                user_id=user.id,
-                question=body.question,
-                thread_id=body.thread_id,
-            )
-    except ThreadNotFoundError as exc:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND) from exc
-    except ActiveRunConflictError as exc:
+        result = await state_service.create_run(
+            user_id=user.id,
+            question=body.question,
+            thread_id=body.thread_id,
+            enqueuer=enqueuer,
+            schedule_deadline_check=schedule_deadline_check,
+        )
+    except RunLeftQueuedError as exc:
         raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail=_ACTIVE_RUN_DETAIL,
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Failed to enqueue research run",
         ) from exc
-    except DailyRequestLimitExceededError as exc:
-        with suppress(Exception):
-            daily_quota_observability.observe_admission_rejected(
-                usage_date=exc.usage_date,
-            )
-        reset_at = datetime.combine(
-            exc.usage_date + timedelta(days=1),
-            datetime.min.time(),
-            tzinfo=DAILY_QUOTA_TIMEZONE,
-        )
-        retry_after = max(
-            0,
-            math.ceil((reset_at - exc.decided_at).total_seconds()),
-        )
-        response = ResearchDailyRequestLimitExceededResponse(
-            detail="Daily research request limit exceeded",
-            code="research_daily_request_limit_exceeded",
-            limit=exc.limit,
-            reset_at=reset_at,
-        )
-        return JSONResponse(
-            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-            content=response.model_dump(mode="json", by_alias=True),
-            headers={
-                "Retry-After": str(retry_after),
-                "Cache-Control": "no-store",
-            },
-        )
-
-    with suppress(Exception):
-        daily_quota_observability.observe_admission_accepted(
-            run_id=created.run_id,
-            usage_date=created.usage_date,
-            used_count=created.used_count,
-        )
-
-    try:
-        await enqueuer.enqueue(created.run_id)
-    except Exception:
-        logger.exception(
-            "agent_run_enqueue_failed",
-            run_id=str(created.run_id),
-        )
-        try:
-            recorded = await state_service.end_run_after_enqueue_failure(created.run_id)
-        except Exception as update_exc:
-            logger.exception(
-                "agent_run_enqueue_failed_mark_failed_failed",
-                run_id=str(created.run_id),
-            )
+    match result:
+        case RunCreated(thread_id=thread_id, run_id=run_id):
+            return ResearchRunStartResponse(thread_id=thread_id, run_id=run_id)
+        case ThreadNotFound():
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
+        case ActiveRunExists():
             raise HTTPException(
-                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                detail="Failed to enqueue research run",
-            ) from update_exc
-        match recorded:
-            case RunFailed():
-                pass
-            case CannotContinue():
-                logger.info(
-                    "agent_run_enqueue_failed_mark_failed_skipped",
-                    run_id=str(created.run_id),
-                )
-
-    background_tasks.add_task(
-        deadline_scheduler.reserve, created.run_id, created.deadline_at
-    )
-    return ResearchRunStartResponse(thread_id=created.thread_id, run_id=created.run_id)
+                status_code=status.HTTP_409_CONFLICT,
+                detail=_ACTIVE_RUN_DETAIL,
+            )
+        case DailyLimitReached(
+            limit=limit, usage_date=usage_date, decided_at=decided_at
+        ):
+            reset_at = datetime.combine(
+                usage_date + timedelta(days=1),
+                datetime.min.time(),
+                tzinfo=DAILY_QUOTA_TIMEZONE,
+            )
+            retry_after = max(0, math.ceil((reset_at - decided_at).total_seconds()))
+            response = ResearchDailyRequestLimitExceededResponse(
+                detail="Daily research request limit exceeded",
+                code="research_daily_request_limit_exceeded",
+                limit=limit,
+                reset_at=reset_at,
+            )
+            return JSONResponse(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                content=response.model_dump(mode="json", by_alias=True),
+                headers={
+                    "Retry-After": str(retry_after),
+                    "Cache-Control": "no-store",
+                },
+            )
 
 
 @router.get(

@@ -7,8 +7,8 @@ from app.agent.contract import (
     AnswerQuestionResult,
     ExternalUrlSource,
 )
-from app.agent.running.creation import AgentRunCreationRepository
 from app.agent.running.state import CannotContinue, RunCompleted
+from app.agent.running.state_repository import AgentRunStateRepository
 from app.agent.running.types import RunAttempt
 from local_tests.agent.support import (
     fetch_saved_run_result,
@@ -28,8 +28,8 @@ async def test_only_latest_attempt_can_complete_run(
     session_factory = agent_context.state.session_factory
     async with owner_session_factory() as session:
         async with session.begin():
-            created = await AgentRunCreationRepository(session).create_user_run(
-                user_id=agent_user_id,
+            created = await AgentRunStateRepository(session).create_run(
+                owner_id=agent_user_id,
                 question="売上動向を調べてください",
                 thread_id=None,
             )

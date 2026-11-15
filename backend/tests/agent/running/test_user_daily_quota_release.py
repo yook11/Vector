@@ -16,8 +16,8 @@ from sqlalchemy import DateTime, Select, literal, select, text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.agent.contract import AnswerPlanSummary, AnswerQuestionResult
-from app.agent.running.daily_quota.reservation import (
-    _build_daily_quota_reservation_statement,
+from app.agent.running.daily_quota.acquire import (
+    _build_acquire_daily_usage_statement,
 )
 from app.agent.running.deadline.policy import RUN_DEADLINE_SECONDS
 from app.agent.running.state import (
@@ -223,7 +223,7 @@ async def _wait_until_blocked(observer: AsyncSession, backend_pid: int) -> None:
 def _reservation_statement(
     user_id: uuid.UUID,
 ) -> Select[tuple[datetime, date, datetime, int | None]]:
-    return _build_daily_quota_reservation_statement(
+    return _build_acquire_daily_usage_statement(
         user_id=user_id,
         clock_expression=literal(_USAGE_CLOCK, type_=DateTime(timezone=True)),
     )
